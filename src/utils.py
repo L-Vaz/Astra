@@ -913,7 +913,7 @@ def read_case_foamfiles(case_dir: str, dir_structure: Optional[Dict[str, List[st
     
     return FoamPydantic(list_foamfile=foamfile_list)
 
-def run_command(script_path: str, out_file: str, err_file: str, working_dir: str, max_time_limit: int) -> None:
+def run_command(script_path: str, out_file: str, err_file: str, working_dir: str, max_time_limit: int) -> int:
     print(f"Executing script {script_path} in {working_dir}")
     os.chmod(script_path, 0o777)
     openfoam_dir = os.getenv("WM_PROJECT_DIR")
@@ -927,11 +927,33 @@ def run_command(script_path: str, out_file: str, err_file: str, working_dir: str
     if not os.path.exists(bashrc_path):
         raise RuntimeError(f"OpenFOAM bashrc not found at: {bashrc_path}")
 
-    command = f"source {bashrc_path} && bash {os.path.abspath(script_path)}"
+    script_path = os.path.abspath(script_path)
+    working_dir = os.path.abspath(working_dir)
+
+    if os.path.realpath(os.path.dirname(script_path)) != os.path.realpath(working_dir):
+        raise ValueError(
+            f"Script must be located directly in the working directory: {script_path}"
+        )
+
+    # Allrun scripts commonly use `${0%/*}` to change into their own directory.
+    # Launching as ./Allrun keeps $0 relative to the already-controlled cwd, so
+    # even an unquoted self-cd remains safe when the case path contains spaces.
+    script_argument = f"./{os.path.basename(script_path)}"
+
+    # Keep the shell expression static and pass paths as positional arguments.
+    # Quoting $1 and $2 preserves spaces and other shell-sensitive characters.
+    command = 'source "$1" && exec bash "$2"'
 
     with open(out_file, 'w') as out, open(err_file, 'w') as err:
         process = subprocess.Popen(
-            ['bash', "-c", command],
+            [
+                'bash',
+                '-c',
+                command,
+                'foamagent',
+                bashrc_path,
+                script_argument,
+            ],
             cwd=working_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -958,7 +980,8 @@ def run_command(script_path: str, out_file: str, err_file: str, working_dir: str
 
     
 
-    print(f"Executed script {script_path}")
+    print(f"Executed script {script_path} with exit code {process.returncode}")
+    return process.returncode
 
 def check_foam_errors(directory: str) -> list:
     """Check OpenFOAM log files for errors.

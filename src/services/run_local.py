@@ -1,10 +1,12 @@
 import os
 import re
+import shutil
+import tempfile
 from typing import List, Any
 from models import RunIn, RunOut
 from utils import remove_files, remove_file, remove_numeric_folders, run_command, check_foam_errors
 
-def run_allrun_and_collect_errors(
+def _run_allrun_in_directory(
     case_dir: str,
     timeout: int = 3600,
     max_retries: int = 1
@@ -59,10 +61,104 @@ def run_allrun_and_collect_errors(
     # Run with retries
     for attempt in range(1, max_retries + 1):
         print(f"Running Allrun (attempt {attempt}/{max_retries})")
-        run_command(allrun_file_path, out_file, err_file, case_dir, timeout)
+        return_code = run_command(
+            allrun_file_path,
+            out_file,
+            err_file,
+            case_dir,
+            timeout,
+        )
 
-        # Inspect
-        error_logs = check_foam_errors(case_dir)
+        # A nonzero process status is authoritative. OpenFOAM may never have
+        # started, so log-file scanning alone cannot detect this failure.
+        if return_code != 0:
+            try:
+                with open(err_file, 'r', encoding='utf-8', errors='replace') as f:
+                    error_content = f.read().strip()
+            except OSError as exc:
+                error_content = f"Could not read Allrun.err: {exc}"
+
+            if not error_content:
+                error_content = "Allrun failed without producing stderr output."
+
+            error_logs = [{
+                "file": "Allrun.err",
+                "error_type": "execution_failure",
+                "return_code": return_code,
+                "error_content": error_content,
+            }]
+        else:
+            error_logs = check_foam_errors(case_dir)
+
+        # A zero return code is not sufficient if no CFD outputs exist.
+        if not error_logs:
+            mesh_dir = os.path.join(case_dir, "constant", "polyMesh")
+            if not os.path.isdir(mesh_dir):
+                error_logs = [{
+                    "file": "constant/polyMesh",
+                    "error_type": "missing_mesh",
+                    "error_content": (
+                        "Allrun returned exit code 0, but no OpenFOAM mesh "
+                        "directory was generated."
+                    ),
+                }]
+
+        if not error_logs:
+            result_times = []
+            for name in os.listdir(case_dir):
+                path = os.path.join(case_dir, name)
+                if not os.path.isdir(path):
+                    continue
+                try:
+                    time_value = float(name)
+                except ValueError:
+                    continue
+                if time_value > 0:
+                    result_times.append(time_value)
+
+            if not result_times:
+                error_logs = [{
+                    "file": case_dir,
+                    "error_type": "missing_results",
+                    "error_content": (
+                        "Allrun returned exit code 0, but no simulation "
+                        "timestep greater than zero was generated."
+                    ),
+                }]
+            else:
+                control_dict = os.path.join(case_dir, "system", "controlDict")
+                if os.path.isfile(control_dict):
+                    with open(
+                        control_dict,
+                        'r',
+                        encoding='utf-8',
+                        errors='replace',
+                    ) as f:
+                        control_content = f.read()
+
+                    end_time_match = re.search(
+                        r"^\s*endTime\s+"
+                        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+                        r"\s*;",
+                        control_content,
+                        re.MULTILINE,
+                    )
+                    if end_time_match:
+                        expected_end_time = float(end_time_match.group(1))
+                        latest_time = max(result_times)
+                        tolerance = max(1e-9, abs(expected_end_time) * 1e-9)
+                        if latest_time + tolerance < expected_end_time:
+                            error_logs = [{
+                                "file": "system/controlDict",
+                                "error_type": "incomplete_results",
+                                "expected_end_time": expected_end_time,
+                                "latest_time": latest_time,
+                                "error_content": (
+                                    f"Latest result time {latest_time} did not "
+                                    f"reach requested endTime {expected_end_time}."
+                                ),
+                            }]
+
         if len(error_logs) == 0:
             return []
 
@@ -75,6 +171,48 @@ def run_allrun_and_collect_errors(
             remove_numeric_folders(case_dir)
 
     return last_error_logs
+
+
+def run_allrun_and_collect_errors(
+    case_dir: str,
+    timeout: int = 3600,
+    max_retries: int = 1,
+) -> List[str]:
+    """Run a case, staging it when OpenFOAM cannot accept its path.
+
+    Foundation OpenFOAM rejects case directory names containing whitespace.
+    Foam-Agent still accepts those user-facing paths: it runs a temporary copy
+    from a safe generated directory and copies all logs and results back.
+    """
+    case_dir = os.path.abspath(case_dir)
+    allrun_file_path = os.path.join(case_dir, "Allrun")
+    if not os.path.isfile(allrun_file_path):
+        return [f"Allrun script not found at {allrun_file_path}"]
+
+    if not any(character.isspace() for character in case_dir):
+        return _run_allrun_in_directory(case_dir, timeout, max_retries)
+
+    # Remove stale run products before creating the staged input copy.
+    remove_files(case_dir, prefix="log")
+    remove_file(os.path.join(case_dir, "Allrun.err"))
+    remove_file(os.path.join(case_dir, "Allrun.out"))
+    remove_numeric_folders(case_dir)
+
+    staging_root = tempfile.mkdtemp(prefix="foamagent_case_")
+    staged_case_dir = os.path.join(staging_root, "case")
+    shutil.copytree(case_dir, staged_case_dir)
+    print(f"Staging OpenFOAM case at {staged_case_dir}")
+
+    try:
+        return _run_allrun_in_directory(
+            staged_case_dir,
+            timeout,
+            max_retries,
+        )
+    finally:
+        # Preserve both successful results and failure evidence for review.
+        shutil.copytree(staged_case_dir, case_dir, dirs_exist_ok=True)
+        shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def run_simulation_local(
