@@ -6,7 +6,7 @@ from pathlib import Path
 
 @dataclass
 class Config:
-    max_loop: int = 8
+    max_loop: int = 10  # paper experiments used M=10 reviewer loops
     batchsize: int = 10
     searchdocs: int = 10 # max(10, searchdocs)
     run_times: int = 1   # current run number (for directory naming)

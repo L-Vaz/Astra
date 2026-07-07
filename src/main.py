@@ -116,15 +116,26 @@ def main(user_requirement: str, config: Config, custom_mesh_path: Optional[str] 
     try:
         result = app.invoke(initial_state, config={"recursion_limit": config.recursion_limit})
 
+        # The run only counts as a success if the last runner pass ended with
+        # zero unresolved errors. termination_reason alone is unreliable: it is
+        # set by mutating state inside a router function, which LangGraph does
+        # not always propagate into the final result.
+        unresolved_errors = result.get("error_logs") or []
         termination_reason = result.get("termination_reason")
-        if termination_reason == "max_review_loop_reached":
-            print("<workflow_end>Workflow finished after reaching the maximum review loop limit.</workflow_end>")
+        workflow_failed = bool(unresolved_errors) or termination_reason == "max_review_loop_reached"
+
+        if workflow_failed:
+            reason = termination_reason or "unresolved_errors"
+            print(f"<workflow_failed reason=\"{reason}\" unresolved_error_count=\"{len(unresolved_errors)}\">"
+                  "Workflow ended with unresolved errors.</workflow_failed>")
         else:
             print("<workflow_end>Workflow completed successfully!</workflow_end>")
 
         # Print final statistics
         if result.get("llm_service"):
             result["llm_service"].print_statistics()
+
+        return not workflow_failed
 
     except Exception as e:
         print(f"<workflow_error>{e}</workflow_error>")
@@ -181,5 +192,7 @@ if __name__ == "__main__":
     
     with open(args.prompt_path, 'r') as f:
         user_requirement = f.read()
-    
-    main(user_requirement, config, args.custom_mesh_path)
+
+    import sys
+    succeeded = main(user_requirement, config, args.custom_mesh_path)
+    sys.exit(0 if succeeded else 1)

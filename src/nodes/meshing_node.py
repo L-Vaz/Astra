@@ -41,7 +41,7 @@ def meshing_node(state):
         result = copy_custom_mesh(state.get("custom_mesh_path"), user_requirement, case_dir)  # service
     elif mesh_type == "gmsh_mesh":
         print("<mesh_routing>GMSH mesh requested.</mesh_routing>")
-        result = service_handle_gmsh_mesh(state, case_dir)  # service
+        result = service_handle_gmsh_mesh(user_requirement, case_dir)  # service
     else:
         print("<mesh_routing>Standard mesh generation.</mesh_routing>")
         result = prepare_standard_mesh(user_requirement, case_dir)  # service

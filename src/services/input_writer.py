@@ -6,6 +6,45 @@ from utils import save_file, parse_context, retrieve_faiss, FoamPydantic, Foamfi
 from . import global_llm_service
 
 
+def read_mesh_boundary_summary(case_dir: str) -> str:
+    """Summarize the patches of an already-generated mesh for prompt context.
+
+    Returns e.g. "inlet (type patch), outlet (type patch), cylinder (type wall)"
+    or "" when no converted mesh exists yet.
+    """
+    boundary_file = os.path.join(case_dir, "constant", "polyMesh", "boundary")
+    if not os.path.exists(boundary_file):
+        return ""
+    try:
+        with open(boundary_file, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return ""
+    patches = re.findall(r"(\w+)\s*\{[^{}]*?\btype\s+(\w+)\s*;", content)
+    patches = [(name, ptype) for name, ptype in patches if name != "FoamFile"]
+    if not patches:
+        return ""
+    return ", ".join(f"{name} (type {ptype})" for name, ptype in patches)
+
+
+PREMESHED_FIELD_CONSTRAINT = (
+    "CRITICAL MESH CONTEXT: The computational mesh has ALREADY been generated and converted to "
+    "OpenFOAM format; constant/polyMesh exists and is final. Its boundary patches are EXACTLY: "
+    "{mesh_boundary_info}. "
+    "Every boundaryField in a 0/ field file must contain an entry for each of these patch names, "
+    "spelled exactly as listed, and must not contain entries for any other patch names. "
+    "Do not invent patch names from the wording of the requirement; the list above is the ground truth."
+)
+
+PREMESHED_ALLRUN_CONSTRAINT = (
+    "CRITICAL: The mesh has already been generated and converted; constant/polyMesh exists and is final. "
+    "The Allrun script must NOT run blockMesh, snappyHexMesh, gmsh, or ANY mesh conversion utility "
+    "(gmshToFoam, fluentMeshToFoam, fluent3DMeshToFoam, ideasUnvToFoam, cfx4ToFoam, starToFoam, "
+    "plot3dToFoam, or similar). The Allrun script should only run checkMesh (optionally) followed by "
+    "the solver."
+)
+
+
 def compute_priority(subtask):
     if subtask["folder_name"] == "system":
         return 0
@@ -33,6 +72,7 @@ def initial_write(
     similar_case_advice: Optional[Any] = None,
     reuse_generated_dir: str = "",
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    mesh_boundary_info: str = "",
 ) -> Dict[str, Any]:
     """
     Generate OpenFOAM files from scratch based on user requirements and subtasks.
@@ -146,6 +186,9 @@ def initial_write(
             "Additionally, apply your domain expertise to verify that all numerical values are consistent with the user's requirements, maintaining accuracy and coherence."
             "When generating controlDict, do not include anything to preform post processing. Just include the necessary settings to run the simulation."
         )
+
+        if mesh_boundary_info:
+            code_user_prompt += "\n" + PREMESHED_FIELD_CONSTRAINT.format(mesh_boundary_info=mesh_boundary_info)
 
         if generation_mode == "sequential_dependency" and written_files_ctx:
             code_user_prompt += (
@@ -266,6 +309,7 @@ def build_allrun(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     progress_offset: int = 0,
     total_steps: int = 0,
+    mesh_boundary_info: str = "",
 ) -> Dict[str, Any]:
     """
     Build an Allrun script for automated OpenFOAM simulation execution.
@@ -330,6 +374,10 @@ def build_allrun(
     except (FileNotFoundError, IOError) as e:
         raise ValueError(f"Could not read commands file {command_path}: {e}")
 
+    # A custom or gmsh-generated mesh is already converted to polyMesh by the
+    # meshing node; the Allrun must never regenerate or re-convert it.
+    premeshed = mesh_type in ("custom_mesh", "gmsh_mesh")
+
     # Handle mesh commands info
     mesh_commands_info = ""
     if mesh_type == "custom_mesh" and mesh_commands:
@@ -343,9 +391,9 @@ def build_allrun(
         "Return only the list of commands—no explanations, comments, or additional text."
     )
 
-    if mesh_type == "custom_mesh":
-        command_system_prompt += "If custom mesh commands are provided, include them in the appropriate order (typically after blockMesh or instead of blockMesh if custom mesh is used). "
-    
+    if premeshed:
+        command_system_prompt += PREMESHED_ALLRUN_CONSTRAINT
+
     command_user_prompt = (
         f"Available OpenFOAM commands for the Allrun script: {commands}\n"
         f"Case directory structure: {dir_structure}\n"
@@ -354,9 +402,9 @@ def build_allrun(
         "Generate only the required OpenFOAM command list—no extra text."
     )
 
-    if mesh_type == "custom_mesh":
-        command_user_prompt += f"{mesh_commands_info}\n"
-    
+    if premeshed:
+        command_user_prompt += f"\n{PREMESHED_ALLRUN_CONSTRAINT}\n{mesh_commands_info}\n"
+
     command_response = global_llm_service.invoke(command_user_prompt, command_system_prompt, pydantic_obj=CommandsPydantic)
 
     if progress_callback:
@@ -388,10 +436,9 @@ def build_allrun(
         "CRITICAL: Do not include any commands to convert mesh to foam format like gmshToFoam or others."
     )
 
-    if mesh_type == "custom_mesh":
-        allrun_system_prompt += "CRITICAL: Do not include any other mesh commands other than the custom mesh commands.\n"
-        allrun_system_prompt += "CRITICAL: Do not include any gmshToFoam commands in the Allrun script."
-    
+    if premeshed:
+        allrun_system_prompt += PREMESHED_ALLRUN_CONSTRAINT
+
     allrun_user_prompt = (
         f"User requirement: {user_requirement}\n"
         f"Case directory structure: {dir_structure}\n"
@@ -406,9 +453,10 @@ def build_allrun(
         "Generate the Allrun script strictly based on the above information. Do not include explanations, comments, or additional text. Put the code in ``` tags."
     )
 
-    if mesh_type == "custom_mesh":
-        allrun_user_prompt += "CRITICAL: Do not include any other mesh commands other than the custom mesh commands.\n"
-        allrun_user_prompt += "CRITICAL: Do not include any gmshToFoam commands in the Allrun script."
+    if premeshed:
+        allrun_user_prompt += f"\n{PREMESHED_ALLRUN_CONSTRAINT}"
+        if mesh_boundary_info:
+            allrun_user_prompt += f"\nThe existing mesh boundary patches are: {mesh_boundary_info}."
 
     allrun_response = global_llm_service.invoke(allrun_user_prompt, allrun_system_prompt)
 
@@ -433,7 +481,9 @@ def rewrite_files(
     rewrite_plan: Optional[Dict[str, Any]],
     user_requirement: str,
     foamfiles: Optional[Any] = None,
-    dir_structure: Optional[Dict[str, List[str]]] = None
+    dir_structure: Optional[Dict[str, List[str]]] = None,
+    mesh_locked: bool = False,
+    mesh_boundary_info: str = ""
 ) -> Dict[str, Any]:
     """
     Rewrite OpenFOAM files based on error analysis and reviewer suggestions.
@@ -507,6 +557,16 @@ def rewrite_files(
         "list of foamfile: [{file_name: 'file_name', folder_name: 'folder_name', content: 'content'}]. "
         "Ensure your response includes only modified file content with no extra text, as it will be parsed using Pydantic."
     )
+
+    if mesh_locked:
+        rewrite_system_prompt += (
+            " " + PREMESHED_ALLRUN_CONSTRAINT +
+            " Never rewrite Allrun to regenerate or re-convert the mesh."
+        )
+        if mesh_boundary_info:
+            rewrite_system_prompt += (
+                " " + PREMESHED_FIELD_CONSTRAINT.format(mesh_boundary_info=mesh_boundary_info)
+            )
 
     rewrite_user_prompt = (
         f"<foamfiles>{str(foamfiles)}</foamfiles>\n"

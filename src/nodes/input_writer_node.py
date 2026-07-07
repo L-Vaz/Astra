@@ -1,7 +1,18 @@
 # input_writer_node.py
 import os
 from utils import save_file, parse_context, retrieve_faiss, FoamPydantic, FoamfilePydantic
-from services.input_writer import initial_write, build_allrun, rewrite_files
+from services.input_writer import initial_write, build_allrun, rewrite_files, read_mesh_boundary_summary
+
+
+def _premeshed_boundary_info(state):
+    """Actual patch names of a mesh generated before the input writer runs.
+
+    Returns "" for standard-mesh cases, where blockMesh runs inside Allrun and
+    the mesh (and thus its patch list) does not exist yet.
+    """
+    if state.get("mesh_type") not in ("custom_mesh", "gmsh_mesh"):
+        return ""
+    return read_mesh_boundary_summary(state["case_dir"])
 import re
 from typing import List
 from pydantic import BaseModel, Field
@@ -56,6 +67,7 @@ def _rewrite_mode(state):
         print("No review analysis available for rewrite mode.")
         print("</input_writer>")
         return state
+    mesh_boundary_info = _premeshed_boundary_info(state)
     out = rewrite_files(
         case_dir=state["case_dir"],
         error_logs=state.get("error_logs", []),
@@ -64,6 +76,8 @@ def _rewrite_mode(state):
         user_requirement=state.get("user_requirement", ""),
         foamfiles=state.get("foamfiles"),
         dir_structure=state.get("dir_structure", {}),
+        mesh_locked=state.get("mesh_type") in ("custom_mesh", "gmsh_mesh"),
+        mesh_boundary_info=mesh_boundary_info,
     )
     print("</input_writer>")
     return out
@@ -75,6 +89,9 @@ def _initial_write_mode(state):
     print("<input_writer mode=\"initial\">")
     
     config = state["config"]
+    mesh_boundary_info = _premeshed_boundary_info(state)
+    if mesh_boundary_info:
+        print(f"<premeshed_boundaries>{mesh_boundary_info}</premeshed_boundaries>")
     write_out = initial_write(
         case_dir=state["case_dir"],
         subtasks=state["subtasks"],
@@ -84,6 +101,7 @@ def _initial_write_mode(state):
         generation_mode=getattr(config, "input_writer_generation_mode", "sequential_dependency"),
         similar_case_advice=state.get("similar_case_advice"),
         reuse_generated_dir=getattr(config, "reuse_generated_dir", ""),
+        mesh_boundary_info=mesh_boundary_info,
     )
 
     dir_structure = write_out["dir_structure"]
@@ -101,6 +119,7 @@ def _initial_write_mode(state):
         allrun_reference=state["allrun_reference"],
         mesh_type=mesh_type,
         mesh_commands=mesh_commands,
+        mesh_boundary_info=mesh_boundary_info,
     )
 
     print("</input_writer>")

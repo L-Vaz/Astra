@@ -157,11 +157,9 @@ def route_after_reviewer(state: GraphState):
     if loop_count >= max_loop:
         print(f"<router>Maximum loop count ({max_loop}) reached. Ending workflow.</router>")
         state["termination_reason"] = "max_review_loop_reached"
-        requires_visualization = state.get("requires_visualization")
-        if requires_visualization is None:
-            requires_visualization = llm_requires_visualization(state)
-            state["requires_visualization"] = requires_visualization
-        return "visualization" if requires_visualization else END
+        # The case is still broken at this point: there are no valid results to
+        # render, so visualization would only burn LLM attempts on a dead case.
+        return END
 
     print(f"<router>Loop {loop_count}: Continuing to fix errors.</router>")
     return "input_writer"
