@@ -31,9 +31,12 @@ def review_error_logs(
     user_requirement: str,
     similar_case_advice: Optional[Any] = None,
     history_text: Optional[List[str]] = None,
+    mesh_context: str = "",
 ) -> Tuple[str, List[str]]:
     """Stateless reviewer: returns (review_analysis, updated_history)."""
     advice_text = ""
+    if mesh_context:
+        advice_text += f"<mesh_context>{mesh_context}</mesh_context>\n"
     if isinstance(similar_case_advice, dict):
         advice_text = (
             f"<similar_case_advice>\n"

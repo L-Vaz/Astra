@@ -87,6 +87,23 @@ def _run_allrun_in_directory(
                 "return_code": return_code,
                 "error_content": error_content,
             }]
+
+            # OpenFOAM writes fatal errors to per-command log files and
+            # stdout, not stderr; the exit code alone gives the reviewer
+            # nothing actionable. Forward the real failure detail too.
+            error_logs.extend(check_foam_errors(case_dir))
+            if len(error_logs) == 1:
+                try:
+                    with open(out_file, 'r', encoding='utf-8', errors='replace') as f:
+                        out_tail = f.read()[-3000:].strip()
+                except OSError:
+                    out_tail = ""
+                if out_tail:
+                    error_logs.append({
+                        "file": "Allrun.out",
+                        "error_type": "execution_failure_context",
+                        "error_content": f"Tail of Allrun.out:\n{out_tail}",
+                    })
         else:
             error_logs = check_foam_errors(case_dir)
 

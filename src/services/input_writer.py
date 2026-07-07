@@ -36,6 +36,12 @@ PREMESHED_FIELD_CONSTRAINT = (
     "Do not invent patch names from the wording of the requirement; the list above is the ground truth."
 )
 
+# Commands that regenerate or re-convert a mesh. When the meshing node owns
+# the mesh, an Allrun containing any of these would clobber the good polyMesh
+# (observed: a reviewer rewrite re-converted a Gmsh mesh with fluentMeshToFoam
+# into an empty mesh, and another re-ran gmsh with broken physical surfaces).
+BANNED_MESH_COMMAND_RE = re.compile(r"\b(gmsh|blockMesh|snappyHexMesh|\w+ToFoam)\b")
+
 PREMESHED_ALLRUN_CONSTRAINT = (
     "CRITICAL: The mesh has already been generated and converted; constant/polyMesh exists and is final. "
     "The Allrun script must NOT run blockMesh, snappyHexMesh, gmsh, or ANY mesh conversion utility "
@@ -597,6 +603,22 @@ def rewrite_files(
         rel_path = os.path.join(foamfile.folder_name, foamfile.file_name).replace('\\', '/').lstrip('./')
         if allowed_files and rel_path not in allowed_files:
             print(f"Warning: Skipping unplanned rewrite file: {rel_path}")
+            continue
+
+        # Hard guard: the prompt-level ban is not always obeyed, and a single
+        # re-meshing Allrun destroys the meshing node's polyMesh for every
+        # subsequent loop.
+        if (
+            mesh_locked
+            and foamfile.file_name == "Allrun"
+            and BANNED_MESH_COMMAND_RE.search(foamfile.content)
+        ):
+            banned = sorted(set(BANNED_MESH_COMMAND_RE.findall(foamfile.content)))
+            print(
+                "Warning: Rejecting Allrun rewrite containing mesh "
+                f"regeneration/conversion commands {banned}: the mesh is "
+                "pre-generated and locked."
+            )
             continue
 
         file_path = os.path.join(case_dir, foamfile.folder_name, foamfile.file_name)
