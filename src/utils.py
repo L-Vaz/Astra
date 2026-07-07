@@ -482,8 +482,9 @@ class LLMService:
             )
         elif self.model_provider.lower() == "anthropic":
             self.llm = ChatAnthropic(
-                model=self.model_version, 
-                temperature=self.temperature
+                model=self.model_version,
+                temperature=self.temperature,
+                max_tokens=16000
             )
         elif self.model_provider.lower() == "openai":
             # Usage-based API access (requires OPENAI_API_KEY or equivalent OpenAI SDK config)
@@ -626,11 +627,33 @@ class LLMService:
             prompt_tokens += self.llm.get_num_tokens(message["content"])
         
         retry_count = 0
+        structured_attempts = 0
+        max_structured_attempts = 3
         while True:
             try:
                 if pydantic_obj:
-                    structured_llm = self.llm.with_structured_output(pydantic_obj)
-                    response = structured_llm.invoke(messages)
+                    try:
+                        structured_llm = self.llm.with_structured_output(pydantic_obj)
+                        response = structured_llm.invoke(messages)
+                        if response is None:
+                            raise ValueError("structured output returned None")
+                    except Exception as struct_err:
+                        if self._is_throttling_error(struct_err):
+                            raise
+                        structured_attempts += 1
+                        if structured_attempts < max_structured_attempts:
+                            print(f"Structured output invalid (attempt {structured_attempts}/{max_structured_attempts}): {struct_err}. Retrying.")
+                            continue
+                        print(f"Structured output failed {structured_attempts}x; using JSON-prompt fallback.")
+                        import json as _json, re as _re
+                        _schema = pydantic_obj.model_json_schema()
+                        _jm = list(messages) + [{"role": "user", "content": "Return ONLY valid JSON (no markdown, no commentary) matching this schema:\n" + _json.dumps(_schema)}]
+                        _raw = self.llm.invoke(_jm)
+                        _text = (_raw.content if hasattr(_raw, "content") else str(_raw)).strip()
+                        if _text.startswith("```"):
+                            _text = _re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", _text)
+                            _text = _re.sub(r"\n?```\s*$", "", _text).strip()
+                        response = pydantic_obj.model_validate_json(_text)
                 else:
                     if self.model_version.startswith("deepseek"):
                         structured_llm = self.llm.with_structured_output(ResponseWithThinkPydantic)

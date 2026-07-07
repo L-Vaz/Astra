@@ -6,7 +6,7 @@ from pathlib import Path
 
 @dataclass
 class Config:
-    max_loop: int = 25
+    max_loop: int = 8
     batchsize: int = 10
     searchdocs: int = 10 # max(10, searchdocs)
     run_times: int = 1   # current run number (for directory naming)
@@ -37,7 +37,7 @@ class Config:
     # - Bedrock: application inference profile ARN
     # - Anthropic: claude-3-5-sonnet-latest
     model_version: str = "gpt-5.3-codex"
-    temperature: float = 1
+    temperature: float = 0
 
     # Embedding Configuration
     embedding_provider: str = "huggingface"  # [openai, huggingface, ollama]
