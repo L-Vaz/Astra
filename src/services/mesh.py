@@ -70,18 +70,65 @@ def copy_custom_mesh(custom_mesh_path: str, user_requirement: str, case_dir: str
         "You are an expert in OpenFOAM simulation setup. "
         "Create a minimal controlDict for gmshToFoam."
     )).strip()
-    if controldict_content:
-        save_file(os.path.join(system_dir, "controlDict"), controldict_content)
+    # LLMs often wrap file content in markdown fences; a fenced or headerless
+    # controlDict makes gmshToFoam fail its dictionary parse.
+    fence = re.search(r"```(?:\w+)?\s*\n(.*?)```", controldict_content, re.DOTALL)
+    if fence:
+        controldict_content = fence.group(1).strip()
+    # stray/unmatched fences (e.g. only a trailing ```) survive the regex —
+    # drop any fence-only lines outright
+    controldict_content = "\n".join(
+        l for l in controldict_content.splitlines() if not l.strip().startswith("```"))
+    if "FoamFile" not in controldict_content:
+        controldict_content = (
+            "FoamFile\n{\n    format ascii;\n    class dictionary;\n"
+            "    object controlDict;\n}\n"
+            "application simpleFoam;\nstartFrom startTime;\nstartTime 0;\n"
+            "stopAt endTime;\nendTime 1;\ndeltaT 1;\n"
+            "writeControl timeStep;\nwriteInterval 1;\n")
+    save_file(os.path.join(system_dir, "controlDict"), controldict_content)
 
     # Convert mesh
     try:
         result = subprocess.run(["gmshToFoam", "geometry.msh"], cwd=case_dir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as e:
+        print(f"<meshing_error>gmshToFoam failed: {(e.stderr or e.stdout or '')[-500:]}</meshing_error>")
         return {"mesh_info": None, "mesh_commands": [], "error_logs": [f"gmshToFoam failed: {e.stderr}"]}
 
     polyMesh_dir = os.path.join(constant_dir, "polyMesh")
     if not os.path.exists(polyMesh_dir):
         return {"mesh_info": None, "mesh_commands": [], "error_logs": ["polyMesh directory not created"]}
+
+    # gmshToFoam creates every patch as generic type 'patch', but wall
+    # functions (nutkWallFunction etc.) abort unless solid surfaces are type
+    # 'wall'. Classify wall patches from the user requirement and fix the
+    # boundary file deterministically, BEFORE the input writer reads it.
+    try:
+        boundary_path = os.path.join(polyMesh_dir, "boundary")
+        with open(boundary_path) as bf:
+            btxt = bf.read()
+        patch_names = re.findall(r"^\s{4}(\w+)\s*$", btxt, re.MULTILINE)
+        if patch_names:
+            class WallPatchesPydantic(BaseModel):
+                wall_patches: List[str] = Field(
+                    description="Names of patches that are solid no-slip surfaces (walls)")
+            classification = global_llm_service.invoke(
+                f"<user_requirements>{user_requirement}</user_requirements>\n"
+                f"Mesh patches: {patch_names}\n"
+                "Which of these patches are solid no-slip surfaces (walls) of the "
+                "body being simulated (not inlets, outlets, farfield or symmetry)?",
+                "You classify OpenFOAM mesh patches. Return only patch names from the given list.",
+                pydantic_obj=WallPatchesPydantic)
+            for wp in classification.wall_patches:
+                if wp in patch_names:
+                    subprocess.run(
+                        ["foamDictionary", "constant/polyMesh/boundary",
+                         "-entry", f"entry0/{wp}/type", "-set", "wall"],
+                        cwd=case_dir, check=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True)
+                    print(f"<patch_type_fix>{wp} -> wall</patch_type_fix>")
+    except Exception as e:
+        print(f"<patch_type_fix_warning>{e!r:.300}</patch_type_fix_warning>")
 
     foam_file = os.path.join(case_dir, f"{os.path.basename(case_dir)}.foam")
     with open(foam_file, 'w') as f:
