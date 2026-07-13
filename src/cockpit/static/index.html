@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astra Aero Design Cockpit</title>
+<link rel="stylesheet" href="cockpit.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="topbar">
+  <button id="btn-left" class="vb" title="Toggle controls sidebar">☰</button>
+  <div class="brand">ASTRA <span>Aero Design Cockpit</span></div>
+  <div id="session-chip" class="chip" title="Design session">session: —</div>
+  <div class="legend">
+    <span class="badge instant">instant preview</span>
+    <span class="badge fast">fast validated</span>
+    <span class="badge cfd">CFD verified</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="viewbtns">
+    <button data-view="iso" class="vb">Iso</button>
+    <button data-view="top" class="vb">Top</button>
+    <button data-view="front" class="vb">Front</button>
+    <button data-view="side" class="vb">Side</button>
+    <button id="btn-proj" class="vb" title="Perspective / orthographic">Persp</button>
+  </div>
+  <select id="render-mode" title="Render mode">
+    <option value="solid">Solid</option>
+    <option value="transparent">Transparent</option>
+    <option value="wireframe">Wireframe</option>
+  </select>
+  <button id="btn-half" class="vb" title="View-only half display — the CFD half export is an exact cut at the mesh stage">Half view</button>
+  <button id="btn-ghost" class="vb" title="Overlay previous geometry version">Ghost prev</button>
+  <button id="btn-apply" class="primary" disabled>Apply Revision</button>
+  <button id="btn-right" class="vb" title="Toggle results panel">☰</button>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div class="tabs">
+      <button class="tab active" data-tab="mission">Mission</button>
+      <button class="tab" data-tab="geometry">Geometry</button>
+      <button class="tab" data-tab="versions">Versions</button>
+    </div>
+    <div id="tab-mission" class="tabpane active"></div>
+    <div id="tab-geometry" class="tabpane"></div>
+    <div id="tab-versions" class="tabpane"></div>
+  </div>
+
+  <div id="viewport">
+    <canvas id="canvas3d"></canvas>
+    <div id="model-status" class="overlay-chip">parametric preview</div>
+    <div id="dim-overlay" class="overlay-box"></div>
+    <div id="busy" class="hidden"><div class="spinner"></div><span id="busy-msg">working…</span></div>
+  </div>
+
+  <div id="rightpanel">
+    <section id="derived-panel">
+      <h3>Aerodynamic reference values <span class="badge instant">instant preview</span></h3>
+      <div id="derived-list" class="kv"></div>
+      <p class="note">Instant values are mathematical consequences of the mission and planform equations — not aerodynamic predictions.</p>
+    </section>
+    <section id="consequence-panel">
+      <h3>Consequences of pending changes</h3>
+      <div id="consequence-list" class="mono"></div>
+    </section>
+    <section id="issues-panel">
+      <h3>Validation</h3>
+      <div id="issues-list"></div>
+    </section>
+    <section id="fast-panel">
+      <h3>Fast aero (VSPAERO) <span class="badge fast">fast validated</span></h3>
+      <div id="fast-list" class="kv"><span class="dim">not run for this geometry</span></div>
+      <button id="btn-fastaero" class="secondary">Run fast aero</button>
+    </section>
+    <section id="cfd-panel">
+      <h3>CFD <span class="badge cfd">CFD verified</span></h3>
+      <div class="dim">No CFD results yet — approve a geometry and export a half-model from chat to run OpenFOAM.</div>
+    </section>
+  </div>
+</div>
+
+<div id="toast-stack"></div>
+
+<script type="module" src="cockpit.js"></script>
+<noscript>The cockpit needs JavaScript.</noscript>
+</body>
+</html>

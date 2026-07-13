@@ -607,6 +607,424 @@ async def visualization(
         raise
 
 
+# ============================================================================
+# Astra design-session tools: plan_design, build_geometry
+# ============================================================================
+
+from services import global_llm_service
+from services.intent import run_intent
+from services.geometry import GeometryRejected, apply_overrides, build_geometry as build_geometry_svc
+from services import design_session as ds
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from domain_packs.bwb.schema import BWBParams, MissionDerived
+
+
+class PlanDesignRequest(BaseModel):
+    """Turn a casual mission request into a reviewable design plan."""
+    prompt: str = Field(description="The user's mission request in plain language, e.g. "
+                                    "'drone that carries 2 kg at 25 m/s around 100 m altitude'")
+    session_id: Optional[str] = Field(default=None,
+                                      description="Existing design session to revise; omit to start a new one")
+    revision_note: Optional[str] = Field(default=None,
+                                         description="User feedback from reviewing a previous plan version")
+
+
+class PlanDesignResponse(BaseModel):
+    session_id: str
+    version: int
+    mission: Dict[str, Any] = Field(description="Parsed mission spec")
+    derived: Dict[str, Any] = Field(description="Derived physics: MTOW, S_ref, required CL, Re, targets")
+    geometry_params: Dict[str, Any] = Field(description="Proposed BWB parameters (editable via build_geometry overrides)")
+    assumptions: List[str] = Field(description="Every default/assumption made — review these")
+    plan_dir: str
+
+
+@mcp.tool(name="plan_design")
+async def plan_design(request: PlanDesignRequest, ctx: Context) -> PlanDesignResponse:
+    """Stage 1 of the BWB design loop: parse a casual mission request into structured
+    mission numbers, derived aerodynamic targets (required CL, Reynolds number, wing area)
+    and a proposed parametric BWB geometry. Nothing is built yet — review the assumptions
+    and geometry parameters, then call build_geometry (optionally with overrides), or call
+    plan_design again with a revision_note to change the plan."""
+    try:
+        sid = request.session_id or ds.create_session(label=request.prompt[:60])
+        await ctx.info(f"Design session {sid}: deriving mission plan")
+
+        result = run_intent(request.prompt, global_llm_service, request.revision_note)
+        d = result.mission_derived
+
+        vdir = ds.new_version_dir(sid, "plan")
+        with open(os.path.join(vdir, "mission_derived.json"), "w") as f:
+            f.write(d.model_dump_json(indent=2))
+        with open(os.path.join(vdir, "enriched_requirement.txt"), "w") as f:
+            f.write(result.enriched_requirement)
+        version = ds.record_version(sid, "plan", {
+            "prompt": request.prompt, "revision_note": request.revision_note})
+
+        return PlanDesignResponse(
+            session_id=sid,
+            version=version,
+            mission=d.mission.model_dump(),
+            derived={
+                "mtow_kg": round(d.mtow_kg, 2),
+                "air_density_kgm3": round(d.air_density_kgm3, 4),
+                "s_ref_target_m2": round(d.s_ref_target_m2, 4),
+                "wing_loading_kgm2": round(d.wing_loading_kgm2, 2),
+                "required_cl": round(d.required_cl, 3),
+                "reynolds_mac": f"{d.reynolds_mac:.3g}",
+                "turbulence_model": d.turbulence_model,
+                "static_margin_target": d.static_margin_target,
+            },
+            geometry_params=d.params.model_dump(),
+            assumptions=d.assumptions,
+            plan_dir=vdir,
+        )
+    except Exception as e:
+        await ctx.error(f"plan_design failed: {e}")
+        raise
+
+
+class BuildGeometryRequest(BaseModel):
+    """Build (or rebuild) the parametric BWB geometry for a session."""
+    session_id: str
+    overrides: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Geometry parameter deltas from user review, e.g. {'span_m': 1.8, "
+                    "'sweep_outer_deg': 28}. Applied on top of the latest geometry version "
+                    "(or the plan's proposal if no geometry exists yet).")
+
+
+class BuildGeometryResponse(BaseModel):
+    session_id: str
+    version: int
+    passed: bool
+    gates: List[Dict[str, Any]]
+    summary: Dict[str, Any] = Field(description="S_ref, AR, MAC, span, facets, watertight")
+    params: Dict[str, Any]
+    renders: List[str] = Field(description="PNG paths (iso/top/front/side) — display these to the user")
+    artifacts: Dict[str, str] = Field(description="stl / vsp3 / degen_csv / report paths")
+    geometry_dir: str
+
+
+@mcp.tool(name="build_geometry")
+async def build_geometry(request: BuildGeometryRequest, ctx: Context) -> BuildGeometryResponse:
+    """Stage 2 of the BWB design loop: build the OpenVSP geometry from the session's
+    planned parameters (plus any user overrides), run geometry validation gates
+    (parameter ranges, watertight STL, bounding-box sanity), export STL/VSP3/degen-geom,
+    and render review images. Show the renders to the user for approval before meshing.
+    A new call creates a new geometry version and invalidates downstream stages."""
+    try:
+        # Parameter source: latest geometry version if present, else the plan
+        geo_dir = ds.latest_dir(request.session_id, "geometry")
+        if geo_dir and os.path.exists(os.path.join(geo_dir, "params.json")):
+            with open(os.path.join(geo_dir, "params.json")) as f:
+                params = BWBParams.model_validate_json(f.read())
+        else:
+            plan_dir = ds.latest_dir(request.session_id, "plan")
+            if not plan_dir:
+                raise ValueError("no plan in this session — call plan_design first")
+            with open(os.path.join(plan_dir, "mission_derived.json")) as f:
+                params = MissionDerived.model_validate_json(f.read()).params
+
+        if request.overrides:
+            await ctx.info(f"Applying geometry overrides: {request.overrides}")
+            params = apply_overrides(params, request.overrides)
+
+        vdir = ds.new_version_dir(request.session_id, "geometry")
+        await ctx.info(f"Building OpenVSP geometry in {vdir}")
+        report = build_geometry_svc(params, vdir)
+
+        version = ds.record_version(request.session_id, "geometry", {
+            "overrides": request.overrides or {},
+            "passed": report.all_gates_pass,
+        })
+        renders = [v for k, v in report.artifacts.items() if k.startswith("render_")]
+        return BuildGeometryResponse(
+            session_id=request.session_id,
+            version=version,
+            passed=report.all_gates_pass,
+            gates=[g.model_dump() for g in report.gates],
+            summary={
+                "s_ref_m2": round(report.s_ref_m2, 4),
+                "aspect_ratio": round(report.aspect_ratio, 2),
+                "mac_m": round(report.mean_aero_chord_m, 4),
+                "span_m": report.params.span_m,
+                "n_facets": report.n_facets,
+                "watertight": report.watertight,
+            },
+            params=report.params.model_dump(),
+            renders=renders,
+            artifacts={k: v for k, v in report.artifacts.items() if not k.startswith("render_")},
+            geometry_dir=vdir,
+        )
+    except GeometryRejected as e:
+        await ctx.error(f"geometry rejected: {e}")
+        raise
+    except Exception as e:
+        await ctx.error(f"build_geometry failed: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Astra stage tools: run_fast_aero, generate_mesh, run_simulation,
+# evaluate_results.  Session layout: runs/design_sessions/<sid>/<stage>/v<N>/
+# ---------------------------------------------------------------------------
+
+from services.vspaero import FastAeroRejected, run_fast_aero as fast_aero_svc
+from services.bwb_mesh import MeshRejected, generate_mesh as mesh_svc
+from services.simulate import SimulationFailed, compose_requirement, run_simulation as sim_svc
+from services.evaluate import evaluate_case
+from domain_packs.bwb.schema import GeometryReport
+
+
+def _load_json(path: str) -> Dict[str, Any]:
+    with open(path) as f:
+        return json.load(f)
+
+
+def _require_stage(session_id: str, stage: str) -> str:
+    d = ds.latest_dir(session_id, stage)
+    if not d:
+        raise ValueError(f"no valid '{stage}' stage in session {session_id} — run it first")
+    return d
+
+
+class FastAeroRequest(BaseModel):
+    session_id: str
+
+
+@mcp.tool(name="run_fast_aero")
+async def run_fast_aero(request: FastAeroRequest, ctx: Context) -> Dict[str, Any]:
+    """Stage 3: fast vortex-lattice aero (VSPAERO) on the approved geometry.
+    Seconds-fast alpha sweep -> CL_alpha, trim alpha for the mission CL, L/D,
+    neutral point. This is the tier-1 screen and the plausibility reference the
+    evaluator later checks OpenFOAM against. Review before meshing."""
+    try:
+        geo_dir = _require_stage(request.session_id, "geometry")
+        plan_dir = _require_stage(request.session_id, "plan")
+        report = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
+        derived = MissionDerived.model_validate(
+            _load_json(os.path.join(plan_dir, "mission_derived.json")))
+        vdir = ds.new_version_dir(request.session_id, "fast_aero")
+        await ctx.info(f"Running VSPAERO sweep in {vdir}")
+        result = fast_aero_svc(report, derived, vdir)
+        version = ds.record_version(request.session_id, "fast_aero", {"passed": True})
+        return {"session_id": request.session_id, "version": version,
+                "alpha_trim_deg": result["alpha_trim_deg"],
+                "ld_at_trim": result["ld_at_trim"],
+                "cl_alpha_per_deg": result["cl_alpha_per_deg"],
+                "x_np_m": result["x_np_m"], "gates": result["gates"],
+                "fast_aero_dir": vdir}
+    except FastAeroRejected as e:
+        await ctx.error(str(e))
+        raise
+    except Exception as e:
+        await ctx.error(f"run_fast_aero failed: {e}")
+        raise
+
+
+class GenerateMeshRequest(BaseModel):
+    session_id: str
+    level: str = Field(default="coarse", description="coarse | medium | fine")
+    max_cells: float = Field(default=3e6)
+
+
+@mcp.tool(name="generate_mesh")
+async def generate_mesh(request: GenerateMeshRequest, ctx: Context) -> Dict[str, Any]:
+    """Stage 4: deterministic farfield mesh (Gmsh) around the approved geometry,
+    validated with checkMesh and rendered for review (slice + surface images).
+    The resulting .msh is what the simulation stage hands to the Foam-Agent
+    graph. Show the renders and stats to the user for approval before solving."""
+    try:
+        geo_dir = _require_stage(request.session_id, "geometry")
+        report = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
+        vdir = ds.new_version_dir(request.session_id, "mesh")
+        await ctx.info(f"Meshing (level={request.level}) in {vdir}")
+        mesh_report = mesh_svc(
+            stl_path=report.artifacts["stl"], mac_m=report.mean_aero_chord_m,
+            span_m=report.params.span_m, outdir=vdir, level=request.level,
+            max_cells=request.max_cells)
+        version = ds.record_version(request.session_id, "mesh",
+                                    {"level": request.level, "passed": True})
+        renders = {k: v for k, v in mesh_report["artifacts"].items()
+                   if k.startswith("render_")}
+        return {"session_id": request.session_id, "version": version,
+                "stats": mesh_report["stats"], "gates": mesh_report["gates"],
+                "renders": list(renders.values()), "msh": mesh_report["artifacts"]["msh"],
+                "mesh_dir": vdir}
+    except MeshRejected as e:
+        await ctx.error(str(e))
+        raise
+    except Exception as e:
+        await ctx.error(f"generate_mesh failed: {e}")
+        raise
+
+
+class RunSimulationRequest(BaseModel):
+    session_id: str
+    iterations: int = Field(default=600, description="SIMPLE iterations")
+
+
+@mcp.tool(name="run_simulation")
+async def run_simulation(request: RunSimulationRequest, ctx: Context) -> Dict[str, Any]:
+    """Stage 5: OpenFOAM RANS via the EXISTING Foam-Agent graph (planner ->
+    input_writer -> runner -> reviewer), fed the approved mesh through the
+    custom-mesh path. Long-running (tens of minutes). The requirement is the
+    plan's enriched text pinned to the approved mesh patches and the VSPAERO
+    trim angle of attack."""
+    try:
+        plan_dir = _require_stage(request.session_id, "plan")
+        fa_dir = _require_stage(request.session_id, "fast_aero")
+        mesh_dir = _require_stage(request.session_id, "mesh")
+        derived = MissionDerived.model_validate(
+            _load_json(os.path.join(plan_dir, "mission_derived.json")))
+        fast = _load_json(os.path.join(fa_dir, "fast_aero.json"))
+        with open(os.path.join(plan_dir, "enriched_requirement.txt")) as f:
+            enriched = f.read()
+        requirement = compose_requirement(
+            enriched, derived.mission.cruise_speed_ms,
+            fast["alpha_trim_deg"], request.iterations)
+        vdir = ds.new_version_dir(request.session_id, "simulation")
+        await ctx.info(f"Running Foam-Agent graph in {vdir} (this takes a while)")
+        result = sim_svc(requirement, os.path.join(mesh_dir, "bwb.msh"), vdir)
+        version = ds.record_version(request.session_id, "simulation",
+                                    {"iterations": request.iterations, "passed": True})
+        return {"session_id": request.session_id, "version": version,
+                "case_dir": result["case_dir"], "log_path": result["log_path"],
+                "simulation_dir": vdir}
+    except SimulationFailed as e:
+        await ctx.error(f"{e}\n...{e.log_tail[-800:]}")
+        raise
+    except Exception as e:
+        await ctx.error(f"run_simulation failed: {e}")
+        raise
+
+
+class EvaluateRequest(BaseModel):
+    session_id: str
+    extra_slices: Optional[List[str]] = Field(
+        default=None, description="Additional slice normals for renders, e.g. ['z']")
+
+
+@mcp.tool(name="evaluate_results")
+async def evaluate_results(request: EvaluateRequest, ctx: Context) -> Dict[str, Any]:
+    """Stage 6: judge the finished CFD run — convergence, plausibility vs the
+    VSPAERO tier, mission-target check — and produce the visual report (force
+    coefficient history, residuals, velocity slice, surface pressure). Returns
+    a verdict: pass | revise-numerics | revise-design | reject. Show the
+    verdict, metrics and renders to the user."""
+    try:
+        plan_dir = _require_stage(request.session_id, "plan")
+        sim_dir = _require_stage(request.session_id, "simulation")
+        fa_dir = _require_stage(request.session_id, "fast_aero")
+        derived = MissionDerived.model_validate(
+            _load_json(os.path.join(plan_dir, "mission_derived.json")))
+        fast = _load_json(os.path.join(fa_dir, "fast_aero.json"))
+        geo_dir = _require_stage(request.session_id, "geometry")
+        geo = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
+        ref = {"sref": geo.s_ref_m2, "cref": geo.mean_aero_chord_m,
+               "magUInf": derived.mission.cruise_speed_ms,
+               "rho": derived.air_density_kgm3,
+               "alpha_deg": fast["alpha_trim_deg"],
+               "cofr_x": fast["x_np_m"] - 0.08 * geo.mean_aero_chord_m}
+        vdir = ds.new_version_dir(request.session_id, "results")
+        report = evaluate_case(
+            case_dir=os.path.join(sim_dir, "case"), outdir=vdir,
+            required_cl=derived.required_cl, vlm_cl=derived.required_cl,
+            extra_slices=request.extra_slices, ref=ref)
+        version = ds.record_version(request.session_id, "results",
+                                    {"verdict": report["verdict"]})
+        return {"session_id": request.session_id, "version": version,
+                "verdict": report["verdict"], "metrics": report["metrics"],
+                "gates": report["gates"], "warnings": report["warnings"],
+                "renders": [v for k, v in report["artifacts"].items()
+                            if k.startswith("render_")],
+                "results_dir": vdir}
+    except Exception as e:
+        await ctx.error(f"evaluate_results failed: {e}")
+        raise
+
+
+# ============================================================================
+# Astra tool: open_cockpit — browser design workspace over the same session
+# store. The cockpit applies revisions deterministically (no LLM); its queued
+# explanations live in <sessions_root>/<sid>/cockpit/explanations.jsonl.
+# ============================================================================
+
+import subprocess
+import urllib.request
+
+
+class OpenCockpitRequest(BaseModel):
+    """Open (starting if needed) the Aero Design Cockpit web UI."""
+    session_id: Optional[str] = Field(
+        default=None, description="Design session to open; omit for the most recent one")
+    port: int = Field(default=8765, description="Cockpit server port")
+
+
+class OpenCockpitResponse(BaseModel):
+    url: str = Field(description="Give this link to the user — it opens the 3D cockpit")
+    started: bool = Field(description="True if this call started the server")
+    log_path: str
+    note: str
+
+
+def _cockpit_alive(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+@mcp.tool(name="open_cockpit")
+async def open_cockpit(request: OpenCockpitRequest, ctx: Context) -> OpenCockpitResponse:
+    """Open the interactive Aero Design Cockpit: a browser-based 3D workspace over the
+    SAME design session used by plan_design/build_geometry. The user can inspect the
+    BWB, move mission/geometry sliders with instant equation-based preview, apply
+    OpenVSP rebuilds, run VSPAERO, and compare versions. Starts the server on demand
+    and returns a localhost URL — show it to the user as a clickable link. After the
+    user works in the cockpit, read <sessions_root>/<sid>/cockpit/explanations.jsonl
+    and narrate the queued changes in plain language."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    log_path = os.path.join(os.path.dirname(ds.sessions_root()), "cockpit.log")
+    started = False
+
+    if not _cockpit_alive(request.port):
+        await ctx.info(f"Starting cockpit server on port {request.port}")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a") as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "src.cockpit.server", "--port", str(request.port)],
+                cwd=repo_root, stdout=log, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        # startup includes the heavy services/config import chain (FAISS index
+        # load), which can take well over a minute on first start
+        for _ in range(120):
+            await asyncio.sleep(1.0)
+            if _cockpit_alive(request.port):
+                started = True
+                break
+        else:
+            tail = ""
+            if os.path.exists(log_path):
+                with open(log_path) as f:
+                    tail = f.read()[-800:]
+            raise RuntimeError(f"cockpit server did not become healthy on port "
+                               f"{request.port}; log tail:\n{tail}")
+
+    url = f"http://localhost:{request.port}/"
+    if request.session_id:
+        url += f"?session={request.session_id}"
+    return OpenCockpitResponse(
+        url=url, started=started, log_path=log_path,
+        note="Cockpit changes are applied deterministically (OpenVSP + gates, no LLM) "
+             "and queued for chat narration in the session's cockpit/explanations.jsonl.")
+
 
 if __name__ == "__main__":
     import argparse
