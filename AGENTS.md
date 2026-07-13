@@ -1,133 +1,86 @@
-# AGENTS.md
+# Astra agent guidance
 
-> This file helps AI agents (Codex, Cursor, Claude Code, Copilot, etc.) understand and work with this codebase.
+Astra extends Foam-Agent into a conversational, reviewable blended-wing-body drone design loop: mission intent → parametric geometry → fast aero → mesh → OpenFOAM CFD → physical-quality verdict.
 
-## What is Foam-Agent?
+Live code is authoritative. When sources disagree, trust live code, then this file, then linked guidance, then the inherited Foam-Agent paper. Verify configuration claims in `src/config.py` and tool claims in `src/mcp/fastmcp_server.py`.
 
-Foam-Agent is a multi-agent framework that automates CFD (Computational Fluid Dynamics) simulations in **Foundation OpenFOAM v10** ([openfoam.org](https://openfoam.org)) from natural language prompts. It uses LangChain/LangGraph for orchestration, FAISS for RAG-based tutorial retrieval, and supports multiple LLM providers (OpenAI, Anthropic, Bedrock, Ollama).
+## MUST preserve
 
-> **Important:** All generated case files, dictionary names, and solver binaries follow Foundation OpenFOAM v10 conventions. ESI OpenFOAM (openfoam.com, e.g., v2312, v2406, v2512) is **not compatible**.
+- The inherited Foam-Agent LangGraph graph is the CFD spine. Astra attaches before and around it; do not redesign graph orchestration for Astra stages.
+- No LLM step may be load-bearing for correctness. Back probabilistic routing and generated configuration with deterministic validation, fallbacks, and gates.
+- Domain knowledge belongs in `domain_packs/<domain>/`. Add a domain pack rather than a domain-specific agent.
+- Keep the scope aerodynamics-first and parametric. Structures are reserved; general text-to-CAD is out of scope.
+- Cite physics and numerical choices to official sources or label them explicitly as engineering judgment.
 
-## Build and Run
+## Daily commands
+
+Run from the repository root in the configured WSL environment:
 
 ```bash
-# Environment setup
-conda env create -n FoamAgent -f environment.yml
-conda activate FoamAgent
-
-# Run a simulation
 python foambench_main.py --output ./output --prompt_path ./user_requirement.txt
-
-# Run with custom mesh
-python foambench_main.py --output ./output --prompt_path ./user_requirement.txt --custom_mesh_path ./mesh.msh
-
-# Run tests
-pytest tests/ -v
-
-# Start MCP server
-python -m src.mcp.fastmcp_server --transport http --host 0.0.0.0 --port 7860
+python verification/verify_golden.py --no-llm
+python verification/verify_golden.py
+python verification/verify_revisions.py
+python verification/verify_gates.py
 ```
 
-Requires **Foundation OpenFOAM v10** ([openfoam.org](https://openfoam.org)) at runtime (`$WM_PROJECT_DIR` must be set). ESI OpenFOAM (openfoam.com) is not compatible. Python 3.12.9 via Conda.
+The last two verification scripts require a completed golden case. Full CFD verification can use API credentials and take substantial time; use the deterministic `--no-llm` golden run for a quick pipeline check.
 
-## Architecture
+## Code map
 
-### Workflow Pipeline (LangGraph StateGraph)
+- `src/main.py`: inherited LangGraph workflow.
+- `src/router_func.py`: LLM-driven routing.
+- `src/utils.py`: mutable, by-reference `GraphState`.
+- `src/nodes/`: thin graph wrappers; keep business logic out.
+- `src/services/`: inherited CFD services and Astra stage logic.
+- `src/mcp/fastmcp_server.py`: inherited and Astra MCP tools.
+- `domain_packs/bwb/`: BWB schema, assumptions, OpenVSP/VSPAERO, and Gmsh knowledge.
+- `verification/`: golden-path, revision, and adversarial-gate checks.
+- `reports/`: verification results and source accounting.
+- `database/faiss/`: prebuilt RAG indices; do not regenerate without a specific reason.
 
-Defined in `src/main.py`:
+For a new graph stage: service → thin node → required `GraphState` fields → wiring in `src/main.py`. For external stage-level orchestration, expose the service through the MCP server.
 
-```
-PLANNER -> [mesh routing] -> MESHING (if needed) -> INPUT_WRITER -> [HPC/local routing]
--> RUNNER -> [error check] -> REVIEWER -> INPUT_WRITER (retry loop, max 25 iterations)
--> VISUALIZATION (if requested) -> END
-```
+## Task → files (start here; skip repo-wide search)
 
-All routing decisions (mesh type, HPC vs local, visualization) are LLM calls in `src/router_func.py`.
+Detailed maps with roles, wiring, and caveats per task: [`docs/agent-guidance/task-maps.md`](docs/agent-guidance/task-maps.md). For planning, read that file's relevant section first and open only the listed files; fan out into other guidance docs only if the plan requires it.
 
-### Directory Structure
+| Task | Go straight to |
+| --- | --- |
+| Mission intent / requirement parsing | `src/services/intent.py`, `domain_packs/bwb/defaults.py`, `domain_packs/bwb/schema.py` |
+| Drone geometry / parametric changes | `domain_packs/bwb/schema.py`, `domain_packs/bwb/vsp_builder.py`, `src/services/geometry.py` |
+| Fast aero (VSPAERO) | `domain_packs/bwb/vsp_aero.py`, `src/services/vspaero.py` |
+| Farfield meshing (Astra, deterministic) | `domain_packs/bwb/gmsh_farfield.py`, `src/services/bwb_mesh.py` |
+| Graph mesh conversion (in-sim) | `src/nodes/meshing_node.py`, `src/services/mesh.py` |
+| Simulation bridge / add a graph stage | `src/services/simulate.py`, `src/main.py`, `src/utils.py`, `src/router_func.py` |
+| CFD case planning / input writing | `src/services/plan.py`, `src/services/input_writer.py`, their nodes |
+| Solver runs (local/HPC) | `src/services/run_local.py`, `src/services/run_hpc.py` |
+| Review / error-correction loop | `src/services/review.py`, `src/nodes/reviewer_node.py`, `src/router_func.py` |
+| Evaluation / verdict / visualization | `src/services/evaluate.py`, `src/services/visualization.py` |
+| MCP tools | `src/mcp/fastmcp_server.py` |
+| Cockpit UI | `src/cockpit/server.py`, `src/cockpit/static/cockpit.js` |
+| Sessions / revisions / rollback | `src/services/design_session.py` |
+| Verification & gates | `verification/`, `reports/` |
+| RAG / FAISS | `src/utils.py`, `database/`, `init_database.py` |
+| Config / env knobs | `src/config.py`, task-maps §15 |
 
-```
-src/
-  main.py              # LangGraph workflow definition and entry point
-  config.py            # Config dataclass with env var overrides
-  utils.py             # GraphState (TypedDict), LLMService (unified LLM interface)
-  models.py            # Pydantic models for generated files and plans
-  router_func.py       # LLM-based routing decisions
-  logger.py            # Structured XML-tagged logging
-  nodes/               # LangGraph node functions (thin wrappers calling services)
-    planner_node.py
-    input_writer_node.py
-    meshing_node.py
-    local_runner_node.py
-    hpc_runner_node.py
-    reviewer_node.py
-    visualization_node.py
-  services/            # Business logic (where the real work happens)
-    plan.py            # Case planning and analysis
-    input_writer.py    # OpenFOAM file generation via LLM + RAG
-    mesh.py            # Mesh generation (blockMesh / Gmsh conversion)
-    run_local.py       # Local OpenFOAM execution
-    run_hpc.py         # HPC job submission
-    review.py          # Error diagnosis and fix planning
-    visualization.py   # PyVista-based post-processing
-  mcp/                 # FastMCP server exposing workflow as tools
-database/
-  faiss/               # Pre-built FAISS vector indices (do NOT regenerate unless necessary)
-  raw/                 # Raw OpenFOAM tutorial data
-tests/                 # pytest tests (service layer + MCP integration)
-docker/                # Dockerfile for containerized deployment
-```
+## Critical caveats
 
-### Key Abstractions
+- Put all OpenFOAM-touched runtime artifacts under `~/astra_runs`, never the space-containing repository path. Override with `ASTRA_RUNS_DIR`.
+- In requirements say “a custom mesh file is provided—use it as-is.” Calling it a “Gmsh mesh” can select the wrong LLM route.
+- OpenVSP bindings require Python 3.10. Invoke `/opt/vsp-venv/bin/python` as a subprocess; do not import them into the Python 3.12 FoamAgent environment.
+- Preserve deterministic custom-mesh conversion, wall-patch classification, Netgen optimization, bounded schemes, and post-hoc evaluator fallbacks.
+- `GraphState` is mutable and passed by reference; check for unintended side effects.
+- A clean solver exit is not proof of valid physics. Keep result-level convergence, plausibility, mission, and visualization checks.
 
-- **`GraphState`** (`src/utils.py`): TypedDict threaded through all workflow nodes. Contains user requirement, case metadata, generated files, error logs, loop count.
-- **`LLMService`** (`src/utils.py`): Unified LLM interface supporting OpenAI, Anthropic, Bedrock, Ollama. Provides `invoke()` and `structure_output()` (Pydantic-validated).
-- **`Config`** (`src/config.py`): Global config dataclass. Every field can be overridden via `FOAMAGENT_*` env vars.
-- **Pydantic models** (`src/models.py`): `FoamPydantic`/`FoamfilePydantic` for generated files, `RewritePlan` for error fixes, `CaseSummaryModel` for case metadata.
+## Read only when relevant
 
-### Design Patterns
+- BWB stages, MCP orchestration, evaluation, rollback, or verification: [`docs/agent-guidance/bwb-design-loop.md`](docs/agent-guidance/bwb-design-loop.md)
+- Inherited graph, agents, routing, RAG, or shared state: [`docs/agent-guidance/cfd-core.md`](docs/agent-guidance/cfd-core.md)
+- WSL/OpenFOAM/OpenVSP setup, meshing, numerics, or thresholds: [`docs/agent-guidance/environment-and-numerics.md`](docs/agent-guidance/environment-and-numerics.md)
+- Feature scope and phase sequencing: [`docs/agent-guidance/roadmap.md`](docs/agent-guidance/roadmap.md)
+- Verification evidence and citations: `reports/verification-2026-07-10/`
 
-1. **Service-oriented**: Nodes in `src/nodes/` are thin orchestration wrappers. All logic lives in `src/services/`.
-2. **Error correction loop**: Runner detects errors -> Reviewer diagnoses via LLM -> Input Writer rewrites targeted files -> re-run (up to `max_loop` iterations).
-3. **RAG retrieval**: FAISS indices built from OpenFOAM tutorials provide reference cases to the input writer.
-4. **Two generation modes** (`config.input_writer_generation_mode`):
-   - `sequential_dependency` (default): Files generated in order with cross-file context.
-   - `parallel_no_context`: All files generated independently (faster, relies on retry loop).
+## Maintain this file
 
-## Environment Variables
-
-| Variable | Purpose |
-|----------|---------|
-| `FOAMAGENT_MODEL_PROVIDER` | LLM provider: `openai`, `openai-codex`, `anthropic`, `bedrock`, `ollama` |
-| `FOAMAGENT_MODEL_VERSION` | Model identifier (e.g., `claude-opus-4-6`, `gpt-5.3-codex`) |
-| `FOAMAGENT_EMBEDDING_PROVIDER` | Embedding backend: `openai`, `huggingface`, `ollama` |
-| `FOAMAGENT_EMBEDDING_MODEL` | Embedding model (default: `Qwen/Qwen3-Embedding-0.6B`) |
-| `OPENAI_API_KEY` | Required for `openai` provider |
-| `ANTHROPIC_API_KEY` | Required for `anthropic` provider |
-| `WM_PROJECT_DIR` | OpenFOAM installation path (required at runtime) |
-
-## Common Tasks
-
-### Adding a new LLM provider
-Extend `LLMService` in `src/utils.py`. Follow the pattern of existing providers (each has an `if` branch in the constructor).
-
-### Adding a new workflow node
-1. Create service logic in `src/services/`.
-2. Create a thin node wrapper in `src/nodes/`.
-3. Wire it into the StateGraph in `src/main.py`.
-
-### Modifying file generation
-The input writer logic is in `src/services/input_writer.py`. It uses RAG context from FAISS indices and LLM calls to generate OpenFOAM configuration files.
-
-### Rebuilding FAISS indices
-Only needed if OpenFOAM tutorials change:
-```bash
-python init_database.py --openfoam_path $WM_PROJECT_DIR --force
-```
-
-## Things to Watch Out For
-
-- **Do not regenerate FAISS indices** unless you have a specific reason. The pre-built indices in `database/faiss/` are correct and ready to use.
-- **Foundation OpenFOAM v10 must be sourced** for any simulation execution. Without `$WM_PROJECT_DIR`, the runner nodes will fail. ESI OpenFOAM is not compatible.
-- **The error correction loop** can run up to 25 iterations. When modifying the reviewer or input writer, consider the impact on convergence.
-- **`GraphState` is mutable** and passed by reference through the entire pipeline. Be careful about unintended side effects when modifying state fields.
+Keep this file at or below 150 lines. Include only guidance useful to most tasks; move specialized detail into a descriptive linked document. Do not add manual formatting rules—use project formatters and linters. After user approval, keep `CLAUDE.md` and `AGENTS.md` byte-for-byte identical.
