@@ -148,7 +148,14 @@ details.advanced summary { cursor: pointer; color: var(--accent); margin: 12px 0
 #cand-next { right: 14px; }
 .cand-nav.hidden, #cand-hud.hidden { display: none; }
 #cand-hud { position: absolute; top: 46px; left: 70px;  /* clear of the ‹ arrow column */
-  z-index: 6; width: min(330px, 40%); max-height: calc(100% - 200px); overflow-y: auto; }
+  z-index: 6; width: min(330px, 40%); max-height: min(560px, calc(100% - 120px));
+  overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) var(--panel2); }
+#cand-hud:has(.cand-dd[open]) { overflow-y: scroll; }  /* expanded: scrollbar always visible */
+#cand-hud::-webkit-scrollbar { width: 10px; }
+#cand-hud::-webkit-scrollbar-track { background: var(--panel2); border-radius: 6px; }
+#cand-hud::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px;
+  border: 2px solid var(--panel2); }
+#cand-hud::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 .cand-dd > summary { display: flex; align-items: center; gap: 8px; cursor: pointer;
   list-style-position: outside; }
 .cand-dd > summary::-webkit-details-marker { display: revert; }
