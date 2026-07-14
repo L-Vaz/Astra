@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import * as AERO from './aero_mirror.js?v=c1';
 
 const MU_AIR = 1.81e-5;
 const PAYLOAD_FRACTION = 0.30;
@@ -44,18 +45,30 @@ const S = {
 };
 
 const PARAM_META = {
-  span_m:               { label: 'Wingspan', unit: 'm', dp: 3, info: 'Tip-to-tip span. Drives aspect ratio and induced drag.' },
-  root_chord_m:         { label: 'Root chord', unit: 'm', dp: 3, info: 'Centre-body root chord. Sets Reynolds number and internal volume.' },
-  centre_body_fraction: { label: 'Centre-body fraction', unit: 'of span', dp: 3, info: 'Centre-body width / span. Bigger = more payload volume, less efficient span.' },
-  mid_chord_frac:       { label: 'Mid-chord fraction', unit: 'of root', dp: 3, info: 'Chord at the body/wing blend as a fraction of root chord.' },
-  taper_outer:          { label: 'Outer taper ratio', unit: 'tip/blend', dp: 3, info: 'Tip chord / blend chord. Too low makes an unmanufacturable, stall-prone tip.' },
-  sweep_inner_deg:      { label: 'Inner LE sweep', unit: 'deg', dp: 1, info: 'Centre-body leading-edge sweep. Moves the aerodynamic centre aft.' },
-  sweep_outer_deg:      { label: 'Outer LE sweep', unit: 'deg', dp: 1, info: 'Outer panel sweep. With washout, provides pitch stability for a tailless BWB.' },
-  root_thickness_pct:   { label: 'Root thickness', unit: '% t/c', dp: 1, info: 'Root airfoil thickness ratio. Structure/volume vs drag.' },
-  tip_thickness_pct:    { label: 'Tip thickness', unit: '% t/c', dp: 1, info: 'Tip airfoil thickness ratio. Must not exceed root thickness.' },
-  root_twist_deg:       { label: 'Root incidence', unit: 'deg', dp: 1, info: 'Root setting angle relative to the body datum.' },
-  tip_twist_deg:        { label: 'Tip twist (washout)', unit: 'deg', dp: 1, info: 'Negative = washout. A tailless BWB needs washout, never wash-in.' },
-  dihedral_deg:         { label: 'Dihedral', unit: 'deg', dp: 1, info: 'Spanwise upward angle. Adds roll stability.' },
+  span_m:               { label: 'Wingspan', unit: 'm', dp: 3, info: 'Tip-to-tip span. Drives aspect ratio and induced drag.',
+                          aero: 'wider ⇒ induced drag ↓ (L/D ↑) in exchange for root bending ↑' },
+  root_chord_m:         { label: 'Root chord', unit: 'm', dp: 3, info: 'Centre-body root chord. Sets Reynolds number and internal volume.',
+                          aero: 'bigger ⇒ wing loading ↓ ⇒ stall ↓, but wetted area ↑ (L/D ↓ at cruise)' },
+  centre_body_fraction: { label: 'Centre-body fraction', unit: 'of span', dp: 3, info: 'Centre-body width / span. Bigger = more payload volume, less efficient span.',
+                          aero: 'wider body ⇒ volume ↑ in exchange for span efficiency ↓' },
+  mid_chord_frac:       { label: 'Mid-chord fraction', unit: 'of root', dp: 3, info: 'Chord at the body/wing blend as a fraction of root chord.',
+                          aero: 'bigger ⇒ inner wing carries more lift; blends body↔wing loading' },
+  taper_outer:          { label: 'Outer taper ratio', unit: 'tip/blend', dp: 3, info: 'Tip chord / blend chord. Too low makes an unmanufacturable, stall-prone tip.',
+                          aero: 'lower taper ⇒ lighter tip, but tip Re ↓ (separation risk) and sharper stall' },
+  sweep_inner_deg:      { label: 'Inner LE sweep', unit: 'deg', dp: 1, info: 'Centre-body leading-edge sweep. Moves the aerodynamic centre aft.',
+                          aero: 'more sweep ⇒ neutral point aft (stability ↑) in exchange for CLmax ↓ (stall speed ↑)' },
+  sweep_outer_deg:      { label: 'Outer LE sweep', unit: 'deg', dp: 1, info: 'Outer panel sweep. With washout, provides pitch stability for a tailless BWB.',
+                          aero: 'more sweep ⇒ neutral point aft (stability ↑) in exchange for CLmax ↓ (stall speed ↑)' },
+  root_thickness_pct:   { label: 'Root thickness', unit: '% t/c', dp: 1, info: 'Root airfoil thickness ratio. Structure/volume vs drag.',
+                          aero: 'thicker ⇒ CD0 ↑ (L/D ↓) in exchange for spar depth & volume ↑' },
+  tip_thickness_pct:    { label: 'Tip thickness', unit: '% t/c', dp: 1, info: 'Tip airfoil thickness ratio. Must not exceed root thickness.',
+                          aero: 'thicker ⇒ CD0 ↑ slightly; stiffer tip' },
+  root_twist_deg:       { label: 'Root incidence', unit: 'deg', dp: 1, info: 'Root setting angle relative to the body datum.',
+                          aero: 'sets cruise trim attitude; more incidence ⇒ body flies flatter' },
+  tip_twist_deg:        { label: 'Tip twist (washout)', unit: 'deg', dp: 1, info: 'Negative = washout. A tailless BWB needs washout, never wash-in.',
+                          aero: 'more washout ⇒ docile stall + tailless trim, in exchange for twist drag at cruise' },
+  dihedral_deg:         { label: 'Dihedral', unit: 'deg', dp: 1, info: 'Spanwise upward angle. Adds roll stability.',
+                          aero: 'more dihedral ⇒ roll stability ↑; negligible drag cost at these angles' },
 };
 const PRIMARY_REAL = ['span_m', 'sweep_outer_deg', 'root_thickness_pct'];
 const ADVANCED = ['root_chord_m', 'centre_body_fraction', 'mid_chord_frac', 'taper_outer',
@@ -406,7 +419,8 @@ function controlRow(key, opts = {}) {
     </div>
     <div class="ctl-sub"><span class="cur"></span><span class="orig"></span></div>
     <div class="ctl-msg hidden"></div>
-    <div class="ctl-info">${meta.info}</div>`;
+    <div class="ctl-info">${meta.info}</div>
+    ${meta.aero ? `<div class="ctl-aero">≈ ${meta.aero}</div>` : ''}`;
   const range = div.querySelector('input[type=range]');
   const num = div.querySelector('input[type=number]');
 
@@ -916,6 +930,50 @@ function renderDerived() {
   document.getElementById('dim-overlay').textContent = dims;
 }
 
+function aeroCtx(mission) {
+  const rho = isaDensity(+mission.cruise_altitude_m);
+  const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
+  const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
+  return { rho, v: +mission.cruise_speed_ms, w: mtow * 9.81, launch: mission.launch || 'hand' };
+}
+
+function renderAeroEst() {
+  const el = document.getElementById('aeroest-list');
+  if (!el) return;
+  let est;
+  try { est = AERO.estimate(S.params, aeroCtx(S.mission)); }
+  catch { el.innerHTML = '<span class="dim">geometry invalid — no estimate</span>'; return; }
+  let base = null;
+  if (S.applied) {
+    try { base = AERO.estimate(S.applied, aeroCtx(S.savedMission || S.mission)); } catch {}
+  }
+  const row = (label, val, baseVal, dp, unit = '', warn = '') => {
+    let delta = '';
+    if (baseVal != null && Math.abs(val - baseVal) > Math.abs(baseVal) * 1e-4 + 1e-9) {
+      const d = val - baseVal;
+      delta = ` <span class="aer-delta">(${d > 0 ? '+' : ''}${d.toFixed(dp)})</span>`;
+    }
+    return `<span class="k">${label}</span><span class="v${delta ? ' changed' : ''}">` +
+      `${val.toFixed(dp)}${unit}${warn}${delta}</span>`;
+  };
+  el.innerHTML =
+    row('L/D at cruise CL', est.ldCruise, base?.ldCruise, 1) +
+    row(`best L/D (at CL* ${est.clStar.toFixed(2)})`, est.ldMax, base?.ldMax, 1) +
+    row('Stall speed', est.vStall, base?.vStall, 1, ' m/s',
+        est.launchOk === false ? ' ⚠' : '') +
+    row('Neutral point x', est.xNp, base?.xNp, 3, ' m') +
+    row('CG for 8% SM', est.xCgTarget, base?.xCgTarget, 3, ' m') +
+    row('Parasite CD0', est.cd0, base?.cd0, 4) +
+    row('Oswald e (est)', est.e, base?.e, 3) +
+    row('Root bending ~', est.bending, base?.bending, 1, ' N·m') +
+    `<span class="k">Tip Reynolds</span><span class="v">${est.tipRe.toExponential(2)}` +
+    `${est.tipRe < 1.5e5 ? ' ⚠ low' : ''}</span>` +
+    (est.launchOk === false
+      ? `<span class="k" style="color:var(--warn)">launch</span>` +
+        `<span class="v" style="color:var(--warn)">stall > ${est.launchLimit} m/s ${S.mission.launch} limit</span>`
+      : '');
+}
+
 function renderConsequences() {
   const el = document.getElementById('consequence-list');
   const gDirty = isDirty(), mDirty = missionDirty();
@@ -1086,6 +1144,7 @@ function syncAll(skipMesh) {
     document.querySelectorAll('.ctl').forEach(c => c._sync && c._sync());
     if (!skipMesh) refreshPreviewMesh();
     renderDerived();
+    renderAeroEst();
     renderConsequences();
     renderIssues();
     renderFast();

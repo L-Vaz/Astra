@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra Aero Design Cockpit</title>
-<link rel="stylesheet" href="cockpit.css?v=5">
+<link rel="stylesheet" href="cockpit.css?v=c1">
 <script type="importmap">
 {
   "imports": {
@@ -73,6 +73,13 @@
       <div id="derived-list" class="kv"></div>
       <p class="note">Instant values are mathematical consequences of the mission and planform equations — not aerodynamic predictions.</p>
     </section>
+    <section id="aeroest-panel">
+      <h3>Aero estimates <span class="badge instant">equation</span></h3>
+      <div id="aeroest-list" class="kv"></div>
+      <p class="note">Textbook estimates (drag buildup + lifting-line + planform
+      neutral point) recomputed live while you edit. VSPAERO and CFD results
+      supersede these — they are guidance, not validation.</p>
+    </section>
     <section id="consequence-panel">
       <h3>Consequences of pending changes</h3>
       <div id="consequence-list" class="mono"></div>
@@ -95,7 +102,7 @@
 
 <div id="toast-stack"></div>
 
-<script type="module" src="cockpit.js?v=4"></script>
+<script type="module" src="cockpit.js?v=c1"></script>
 <noscript>The cockpit needs JavaScript.</noscript>
 </body>
 </html>

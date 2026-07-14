@@ -83,6 +83,8 @@ select { background: var(--panel2); color: var(--text); border: 1px solid var(--
 .ctl-msg.err { color: var(--err); }
 .ctl-info { margin-top: 3px; font-size: 10.5px; color: var(--dim); font-style: italic; }
 .ctl.derived-ctl { border-style: dashed; }
+.ctl-aero { margin-top: 3px; font-size: 10.5px; color: var(--instant); }
+.aer-delta { color: var(--warn); font-size: 10.5px; }
 .derived-tag { font-size: 9.5px; color: var(--accent); border: 1px solid var(--accent);
   border-radius: 8px; padding: 0 5px; }
 
