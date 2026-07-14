@@ -197,6 +197,31 @@ details.advanced summary { cursor: pointer; color: var(--accent); margin: 12px 0
 .goal-val { font-family: Consolas, monospace; font-size: 11px; min-width: 58px;
   text-align: right; }
 
+/* ---- analysis overlay ---- */
+#analysis-overlay { position: absolute; inset: 0; z-index: 9;
+  background: rgba(8, 11, 15, .78); display: flex; align-items: center;
+  justify-content: center; padding: 24px; }
+#analysis-overlay.hidden { display: none; }
+.anlz-sheet { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; width: min(1060px, 96%); max-height: 94%;
+  display: flex; flex-direction: column; box-shadow: 0 12px 48px rgba(0,0,0,.6); }
+.anlz-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); }
+.anlz-title { font-weight: 700; font-size: 14px; }
+.anlz-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  padding: 12px 14px 16px; overflow-y: auto; }
+.anlz-col { background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 11px; min-width: 0; }
+.anlz-col-head { display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px; }
+.anlz-status { font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--dim); }
+.anlz-status.done { color: var(--ok); }
+.anlz-status.fail { color: var(--err); }
+.anlz-delta { color: var(--warn); font-size: 10.5px; }
+.anlz-gates { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+@media (max-width: 900px) { .anlz-grid { grid-template-columns: 1fr; } }
+
 /* ---- toasts ---- */
 #toast-stack { position: fixed; bottom: 16px; right: 16px; z-index: 50; display: flex;
   flex-direction: column; gap: 8px; max-width: 420px; }
