@@ -186,6 +186,15 @@ details.advanced summary { cursor: pointer; color: var(--accent); margin: 12px 0
 .cand-why ul { margin: 5px 0 0; padding-left: 16px; font-size: 10.5px; color: var(--dim); }
 .cand-screen { border-top: 1px dashed var(--border); margin-top: 7px; padding-top: 2px; }
 
+/* ---- goal-based resize ---- */
+.goal-dd { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.goal-dd > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.goal-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.goal-row label { flex: 0 0 108px; font-size: 11px; color: var(--dim); }
+.goal-row input[type=range] { flex: 1; accent-color: var(--instant); }
+.goal-val { font-family: Consolas, monospace; font-size: 11px; min-width: 58px;
+  text-align: right; }
+
 /* ---- toasts ---- */
 #toast-stack { position: fixed; bottom: 16px; right: 16px; z-index: 50; display: flex;
   flex-direction: column; gap: 8px; max-width: 420px; }
