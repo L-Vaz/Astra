@@ -35,6 +35,12 @@ const S = {
   versions: {},
   ghostOn: false,
   halfOn: false,
+  candidates: [],
+  candGenerated: null,
+  browse: false,          // Designs tab: viewport carousel mode
+  candIdx: 0,
+  preBrowseParams: null,  // params to restore when leaving browse without adopting
+  hudOpen: false,         // design-details dropdown expanded?
 };
 
 const PARAM_META = {
@@ -643,6 +649,240 @@ function latestGeoVersion() {
   return geo.length ? Math.max(...geo.map(v => v.version)) : 0;
 }
 
+/* ------------------------------------------------------- design candidates
+ * Browsing happens in the CENTER: the viewport becomes a carousel (‹ › arrows
+ * or arrow keys), the 3D preview morphs to each design, and a HUD overlay
+ * shows that design's metric table, trade-offs, and actions. The sidebar
+ * collapses while browsing — no card list. */
+function buildDesignsTab() {
+  const pane = document.getElementById('tab-designs');
+  pane.innerHTML = `
+    <div class="group-title">Design candidates</div>
+    <div class="ctl-info">Browsing happens in the 3D viewport: flip through the
+    designs with the ‹ › arrows (or ←/→ keys). Metrics, trade-offs, and
+    screen/promote actions sit on the panel under the model.</div>`;
+}
+
+function setBrowseMode(on) {
+  if (on === S.browse) { if (on) showCandidate(S.candIdx); return; }
+  S.browse = on;
+  const main = document.getElementById('main');
+  if (on) {
+    S.preBrowseParams = { ...S.params };
+    main.classList.add('left-collapsed');
+    if (!S.candidates.length) fetchCandidates().then(() => showCandidate(S.candIdx));
+    else showCandidate(S.candIdx);
+  } else {
+    main.classList.remove('left-collapsed');
+    for (const id of ['cand-prev', 'cand-next', 'cand-hud'])
+      document.getElementById(id).classList.add('hidden');
+    if (S.preBrowseParams) {
+      S.params = { ...S.preBrowseParams };
+      S.preBrowseParams = null;
+      syncAll();
+    }
+  }
+}
+
+function showCandidate(i) {
+  if (!S.candidates.length) { renderCandHud(); return; }
+  S.candIdx = ((i % S.candidates.length) + S.candidates.length) % S.candidates.length;
+  S.params = { ...S.candidates[S.candIdx].params };
+  syncAll();
+  renderCandHud();
+}
+
+function evidenceBadges(c) {
+  let html = '<span class="badge instant">equation</span>';
+  const geo = c.evidence.geometry;
+  if (geo) html += ` <span class="badge ${geo.passed ? 'fast' : 'failedb'}">geometry ${geo.passed ? 'gated' : 'REJECTED'}</span>`;
+  const fa = c.evidence.fast_aero;
+  if (fa) html += ` <span class="badge ${fa.passed ? 'fast' : 'failedb'}">fast ${fa.passed ? 'screened' : 'REJECTED'}</span>`;
+  if (c.status === 'promoted') html += ` <span class="badge cfd">on main line v${c.promoted_geometry_version}</span>`;
+  return html;
+}
+
+function candMetrics(c) {
+  const p = c.panel;
+  const rows = [
+    ['L/D cruise', fmt(p.ld_cruise, 1)],
+    ['best L/D (at CL*)', `${fmt(p.ld_max, 1)}`],
+    ['stall', `${fmt(p.v_stall_ms, 1)} m/s${p.launch_ok === false ? ' ⚠' : ''}`],
+    ['span', `${fmt(p.span_m, 2)} m`],
+    ['AR', fmt(p.aspect_ratio, 2)],
+    ['wing loading', `${fmt(p.wing_loading_kgm2, 1)} kg/m²`],
+    ['cruise CL', `${fmt(p.cl_cruise, 3)} (CL* ${fmt(p.cl_star, 2)})`],
+    ['neutral pt x', `${fmt(p.x_np_m, 3)} m`],
+  ];
+  return rows.map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('');
+}
+
+function screenBlock(c) {
+  const fa = c.evidence.fast_aero;
+  if (!fa || !fa.passed) return '';
+  const h = fa.hybrid || {};
+  const p = c.panel;
+  const dLd = h.ld_hybrid != null ? h.ld_hybrid - p.ld_cruise : null;
+  const disagree = dLd != null && Math.abs(dLd) / p.ld_cruise > 0.15;
+  return `
+    <div class="cand-screen">
+      <div class="group-title" style="margin-top:8px">VSPAERO vs equations</div>
+      <div class="kv">
+        <span class="k">L/D hybrid (CD0 eq + CDi VLM)</span>
+        <span class="v">${fmt(h.ld_hybrid, 1)} <span class="dim">(predicted ${fmt(p.ld_cruise, 1)})</span></span>
+        <span class="k">Oswald e measured</span>
+        <span class="v">${fmt(h.oswald_e_measured, 3)} <span class="dim">(assumed ${fmt(p.oswald_e, 3)})</span></span>
+        <span class="k">Neutral point x</span>
+        <span class="v">${fmt(fa.x_np_m, 3)} m <span class="dim">(planform est ${fmt(p.x_np_m, 3)})</span></span>
+        <span class="k">Trim α</span><span class="v">${fmt(fa.alpha_trim_deg, 2)}°</span>
+      </div>
+      ${disagree ? '<div class="issue" style="margin-top:6px">equations and VSPAERO disagree by >15% on L/D — an Oswald/CD0 assumption is off for this shape; trust the screened number</div>' : ''}
+    </div>`;
+}
+
+function renderCandidates() {
+  if (S.browse) renderCandHud();
+}
+
+function renderCandHud() {
+  const hud = document.getElementById('cand-hud');
+  const prev = document.getElementById('cand-prev');
+  const next = document.getElementById('cand-next');
+  if (!S.browse) return;
+  hud.classList.remove('hidden');
+
+  if (!S.candidates.length) {
+    prev.classList.add('hidden'); next.classList.add('hidden');
+    hud.innerHTML = `<div class="cand-hud-inner">
+      <div class="cand-hud-title">No design candidates yet for the saved plan</div>
+      <div class="cand-obj">Each candidate solves the sizing equations under a
+      different objective (range, launch, span efficiency, control margin).</div>
+      <button id="hud-generate" class="primary" style="margin-top:8px">Generate candidates</button>
+    </div>`;
+    document.getElementById('hud-generate').addEventListener('click', () => generateCandidates(false));
+    return;
+  }
+
+  prev.classList.remove('hidden'); next.classList.remove('hidden');
+  const c = S.candidates[S.candIdx];
+  hud.innerHTML = `<div class="cand-hud-inner ${c.status}">
+    <details class="cand-dd" ${S.hudOpen ? 'open' : ''}>
+      <summary>
+        <span class="cand-hud-title">Design ${S.candIdx + 1} of ${S.candidates.length} — ${c.title}</span>
+        <span class="cand-sum-metric">L/D ${fmt(c.panel.ld_cruise, 1)}</span>
+        <span class="cand-status ${c.status}">${c.status}</span>
+      </summary>
+      <div class="cand-badges">${evidenceBadges(c)}</div>
+      <div class="cand-obj">${c.objective}</div>
+      <div class="kv cand-kv">${candMetrics(c)}</div>
+      ${c.constraint_notes.map(n => `<div class="cand-note">◈ ${n}</div>`).join('')}
+      <ul class="cand-trades">${c.tradeoffs.map(t => `<li>${t}</li>`).join('')}</ul>
+      ${screenBlock(c)}
+      <details class="cand-why"><summary>Why these numbers (derivation)</summary>
+        <ul>${c.provenance.map(x => `<li>${x}</li>`).join('')}</ul>
+        <div class="dim" style="margin-top:4px">Assumptions: ${c.panel.assumptions.join(' · ')}</div>
+      </details>
+      <div class="ver-actions">
+        <button data-act="screen" ${c.status === 'discarded' ? 'disabled' : ''}>Screen (VSPAERO)</button>
+        <button data-act="promote" ${c.status === 'discarded' ? 'disabled' : ''}>Promote to main</button>
+        <button data-act="edit">Edit this design</button>
+        <button data-act="discard" ${c.status === 'discarded' || c.status === 'promoted' ? 'disabled' : ''}>Discard</button>
+        <button data-act="regen" title="Replace the whole batch from the saved plan">Regenerate</button>
+      </div>
+    </details>
+  </div>`;
+  hud.querySelector('.cand-dd').addEventListener('toggle', (e) => {
+    S.hudOpen = e.target.open;   // remember across design flips
+  });
+  hud.querySelector('[data-act=screen]').addEventListener('click', () => screenCandidate(c.key));
+  hud.querySelector('[data-act=promote]').addEventListener('click', () => promoteCandidate(c.key));
+  hud.querySelector('[data-act=discard]').addEventListener('click', () => discardCandidate(c.key));
+  hud.querySelector('[data-act=regen]').addEventListener('click', () => generateCandidates(true));
+  hud.querySelector('[data-act=edit]').addEventListener('click', () => {
+    S.preBrowseParams = null;           // keep this design in the editor
+    switchTab('geometry');
+    toast('ok', `"${c.title}" kept in the editor — tweak it in Geometry, then Apply Revision to build it.`);
+  });
+}
+
+function switchTab(name) {
+  const btn = document.querySelector(`.tab[data-tab=${name}]`);
+  if (btn) btn.click();
+}
+
+async function fetchCandidates() {
+  const r = await fetch(`/api/candidates/${S.sid}`);
+  if (!r.ok) return;
+  const d = await r.json();
+  S.candidates = d.candidates || [];
+  S.candGenerated = d.generated;
+  renderCandidates();
+}
+
+async function generateCandidates(regen) {
+  busy(true, 'Solving sizing equations per objective…');
+  try {
+    const r = await fetch('/api/candidates/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: S.sid, regenerate: !!regen }) });
+    const d = await r.json();
+    if (!r.ok) { toast('err', `Candidate generation failed: ${d.detail || r.status}`); return; }
+    S.candidates = d.candidates; S.candGenerated = d.generated;
+    if (S.browse) showCandidate(0); else renderCandidates();
+    toast('ok', `${d.candidates.length} candidates generated from the saved plan. Equation-level numbers only — screen with VSPAERO before believing any ranking.`);
+  } finally { busy(false); }
+}
+
+async function screenCandidate(key) {
+  busy(true, 'Building candidate in OpenVSP + VSPAERO sweep (up to ~2 min)…');
+  try {
+    const r = await fetch('/api/candidates/screen', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: S.sid, key }) });
+    const d = await r.json();
+    if (!r.ok) { toast('err', `Screening failed: ${d.detail || r.status}`); await fetchCandidates(); return; }
+    S.candidates = S.candidates.map(c => (c.key === key ? d : c));
+    renderCandidates();
+    const h = (d.evidence.fast_aero || {}).hybrid || {};
+    toast('ok', `"${d.title}" screened: hybrid L/D ${fmt(h.ld_hybrid ?? 0, 1)} (equations predicted ${fmt(d.panel.ld_cruise, 1)}).`);
+  } finally { busy(false); }
+}
+
+async function promoteCandidate(key) {
+  const c = S.candidates.find(x => x.key === key);
+  if (!c) return;
+  busy(true, `Promoting "${c.title}" — authoritative OpenVSP build on the main line…`);
+  try {
+    const r = await fetch('/api/candidates/promote', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: S.sid, key }) });
+    const d = await r.json();
+    if (!r.ok) { toast('err', `Promotion failed: ${d.detail || r.status}`); return; }
+    const rep = d.report;
+    S.params = { ...rep.params }; S.applied = { ...rep.params };
+    if (S.browse) S.preBrowseParams = { ...rep.params };  // leaving browse keeps it
+    S.appliedIsBuilt = true; S.geomVersion = d.geometry_version;
+    S.fast = null; S.fastForVersion = null;
+    await loadStl(d.geometry_version);
+    await refreshVersions();
+    await fetchCandidates();
+    toast('ok', `"${c.title}" is now main geometry v${d.geometry_version} (watertight=${rep.watertight}). Downstream fast-aero/mesh/CFD invalidated — rerun them on the new design.`);
+    syncAll(true);
+  } finally { busy(false); }
+}
+
+async function discardCandidate(key) {
+  const r = await fetch('/api/candidates/discard', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: S.sid, key }) });
+  if (r.ok) {
+    const d = await r.json();
+    S.candidates = S.candidates.map(c => (c.key === key ? d : c));
+    renderCandidates();
+    toast('ok', `Candidate discarded — it stays on disk for the design history.`);
+  }
+}
+
 /* -------------------------------------------------------------- right panel */
 function isDirty() {
   if (!S.applied) return true;
@@ -878,9 +1118,11 @@ async function boot() {
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
 
   buildMissionTab();
+  buildDesignsTab();
   buildGeometryTab();
   buildVersionsTab();
   renderSizing();
+  fetchCandidates();
 
   // mission inputs initial values
   document.querySelectorAll('[data-mkey]').forEach(inp => {
@@ -936,7 +1178,15 @@ async function boot() {
     document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
     document.getElementById('tab-' + t.dataset.tab).classList.add('active');
+    setBrowseMode(t.dataset.tab === 'designs');
   }));
+  document.getElementById('cand-prev').addEventListener('click', () => showCandidate(S.candIdx - 1));
+  document.getElementById('cand-next').addEventListener('click', () => showCandidate(S.candIdx + 1));
+  window.addEventListener('keydown', (e) => {
+    if (!S.browse || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.key === 'ArrowLeft') showCandidate(S.candIdx - 1);
+    if (e.key === 'ArrowRight') showCandidate(S.candIdx + 1);
+  });
 }
 
 /* Debug/verification hook: lets tooling snapshot the WebGL canvas and inspect

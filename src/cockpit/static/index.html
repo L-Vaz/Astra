@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra Aero Design Cockpit</title>
-<link rel="stylesheet" href="cockpit.css">
+<link rel="stylesheet" href="cockpit.css?v=4">
 <script type="importmap">
 {
   "imports": {
@@ -47,10 +47,12 @@
   <div id="sidebar">
     <div class="tabs">
       <button class="tab active" data-tab="mission">Mission</button>
+      <button class="tab" data-tab="designs">Designs</button>
       <button class="tab" data-tab="geometry">Geometry</button>
       <button class="tab" data-tab="versions">Versions</button>
     </div>
     <div id="tab-mission" class="tabpane active"></div>
+    <div id="tab-designs" class="tabpane"></div>
     <div id="tab-geometry" class="tabpane"></div>
     <div id="tab-versions" class="tabpane"></div>
   </div>
@@ -59,6 +61,9 @@
     <canvas id="canvas3d"></canvas>
     <div id="model-status" class="overlay-chip">parametric preview</div>
     <div id="dim-overlay" class="overlay-box"></div>
+    <button id="cand-prev" class="cand-nav hidden" title="Previous design (←)">‹</button>
+    <button id="cand-next" class="cand-nav hidden" title="Next design (→)">›</button>
+    <div id="cand-hud" class="hidden"></div>
     <div id="busy" class="hidden"><div class="spinner"></div><span id="busy-msg">working…</span></div>
   </div>
 
@@ -90,7 +95,7 @@
 
 <div id="toast-stack"></div>
 
-<script type="module" src="cockpit.js"></script>
+<script type="module" src="cockpit.js?v=4"></script>
 <noscript>The cockpit needs JavaScript.</noscript>
 </body>
 </html>

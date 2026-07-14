@@ -31,6 +31,7 @@ from domain_packs.bwb.defaults import (  # noqa: E402
     MU_AIR, PAYLOAD_FRACTION, derive, isa_density)
 from domain_packs.bwb.schema import (  # noqa: E402
     BWBParams, GeometryReport, MissionDerived, MissionSpec)
+from services import candidates as cand_svc  # noqa: E402
 from services import design_session as ds  # noqa: E402
 from services.geometry import GeometryRejected, build_geometry as build_geometry_svc  # noqa: E402
 from services.intent import build_enriched_requirement  # noqa: E402
@@ -471,6 +472,99 @@ def fast_aero(req: FastAeroReq) -> Dict[str, Any]:
         {"version": version})
     result["version"] = version
     return result
+
+
+# ---------------------------------------------------------------------------
+# design candidates (tier-0 equations -> tier-1 VSPAERO -> promote to main line)
+# ---------------------------------------------------------------------------
+
+class CandidatesGenerate(BaseModel):
+    session_id: str
+    regenerate: bool = False
+
+
+@app.post("/api/candidates/generate")
+def candidates_generate(req: CandidatesGenerate) -> Dict[str, Any]:
+    try:
+        batch = cand_svc.generate(req.session_id, regenerate=req.regenerate)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(409, str(e))
+    _queue_explanation(
+        req.session_id, "candidates",
+        f"Design candidates generated (plan v{batch['plan_version']}): "
+        + ", ".join(c["title"] for c in batch["candidates"]) + ".",
+        {"plan_version": batch["plan_version"],
+         "keys": [c["key"] for c in batch["candidates"]]})
+    return batch
+
+
+@app.get("/api/candidates/{session_id}")
+def candidates_list(session_id: str) -> Dict[str, Any]:
+    return cand_svc.list_candidates(session_id)
+
+
+class CandidateAction(BaseModel):
+    session_id: str
+    key: str
+    note: str = ""
+
+
+@app.post("/api/candidates/build")
+def candidates_build(req: CandidateAction) -> Dict[str, Any]:
+    try:
+        return cand_svc.build(req.session_id, req.key)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/candidates/screen")
+def candidates_screen(req: CandidateAction) -> Dict[str, Any]:
+    try:
+        record = cand_svc.screen(req.session_id, req.key)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(422, str(e))
+    fa = record["evidence"].get("fast_aero", {})
+    hybrid = fa.get("hybrid") or {}
+    _queue_explanation(
+        req.session_id, "candidate_screen",
+        f"Candidate '{record['title']}' VSPAERO-screened: hybrid L/D "
+        f"{hybrid.get('ld_hybrid', 0):.1f} (equation predicted "
+        f"{record['panel']['ld_cruise']:.1f}), x_np {fa.get('x_np_m', 0):.3f} m.",
+        {"key": req.key})
+    return record
+
+
+@app.post("/api/candidates/promote")
+def candidates_promote(req: CandidateAction) -> Dict[str, Any]:
+    try:
+        result = cand_svc.promote(req.session_id, req.key, note=req.note)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(422, str(e))
+    version = result["geometry_version"]
+    _queue_explanation(
+        req.session_id, "candidate_promote",
+        f"Candidate '{result['record']['title']}' promoted to main geometry "
+        f"v{version}. Downstream fast-aero/mesh/CFD are invalidated.",
+        {"key": req.key, "geometry_version": version})
+    result["stl_url"] = f"/api/stl/{req.session_id}/{version}"
+    return result
+
+
+@app.post("/api/candidates/discard")
+def candidates_discard(req: CandidateAction) -> Dict[str, Any]:
+    try:
+        return cand_svc.discard(req.session_id, req.key, reason=req.note)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/candidates/stl/{session_id}/{key}")
+def candidates_stl(session_id: str, key: str):
+    path = cand_svc.stl_path(session_id, key)
+    if not os.path.exists(path):
+        raise HTTPException(404, f"candidate '{key}' has no built STL yet")
+    return FileResponse(path, media_type="model/stl",
+                        filename=f"candidate_{key}.stl")
 
 
 class LocksRequest(BaseModel):

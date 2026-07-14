@@ -131,6 +131,8 @@ def main() -> int:
     alpha = column("AoA")
     cl = column("CLtot", "CL")
     cd = column("CDtot")
+    cdo = column("CDo")   # VSPAERO's own skin-friction estimate
+    cdi = column("CDi")   # induced component alone (what the VLM actually solves)
     cm = column("CMytot", "CMy")
     if not alpha or not cl or len(cl) != len(alpha):
         print(f"FAST-AERO REJECT: polar missing AoA/CL columns (have {list(idx)[:12]}...)")
@@ -151,14 +153,20 @@ def main() -> int:
 
     # trim alpha for the CL target (linear interp/extrapolation on the fit)
     alpha_trim = ma + (args.cl_target - mcl) / cl_alpha_deg if cl_alpha_deg else None
-    cd_at_trim = None
-    if alpha_trim is not None and cd and len(cd) == n:
-        # quadratic-free: interp CD linearly between bracketing points
-        pts = sorted(zip(alpha, cd))
+
+    def interp_at_trim(vals):
+        # quadratic-free: interp linearly between bracketing sweep points
+        if alpha_trim is None or not vals or len(vals) != n:
+            return None
+        pts = sorted(zip(alpha, vals))
         lo = max((p for p in pts if p[0] <= alpha_trim), default=pts[0])
         hi = min((p for p in pts if p[0] >= alpha_trim), default=pts[-1])
-        cd_at_trim = lo[1] if hi[0] == lo[0] else \
+        return lo[1] if hi[0] == lo[0] else \
             lo[1] + (hi[1] - lo[1]) * (alpha_trim - lo[0]) / (hi[0] - lo[0])
+
+    cd_at_trim = interp_at_trim(cd)
+    cdo_at_trim = interp_at_trim(cdo)
+    cdi_at_trim = interp_at_trim(cdi)
 
     gates = []
     def gate(name, ok, reason=""):
@@ -180,6 +188,8 @@ def main() -> int:
         "x_np_m": x_np,
         "alpha_trim_deg": alpha_trim,
         "cd_at_trim": cd_at_trim,
+        "cdo_at_trim": cdo_at_trim,
+        "cdi_at_trim": cdi_at_trim,
         "ld_at_trim": (args.cl_target / cd_at_trim) if cd_at_trim else None,
         "cl_target": args.cl_target,
         "sref": args.sref, "cref": args.cref, "bref": args.bref,
