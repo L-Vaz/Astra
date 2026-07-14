@@ -41,6 +41,7 @@ const S = {
   candIdx: 0,
   preBrowseParams: null,  // params to restore when leaving browse without adopting
   hudOpen: false,         // design-details dropdown expanded?
+  analysisKey: null,      // candidate key shown in the Analysis overlay
 };
 
 const PARAM_META = {
@@ -742,6 +743,7 @@ function screenBlock(c) {
 
 function renderCandidates() {
   if (S.browse) renderCandHud();
+  if (S.analysisKey) renderAnalysis();
 }
 
 function renderCandHud() {
@@ -794,7 +796,7 @@ function renderCandHud() {
   hud.querySelector('.cand-dd').addEventListener('toggle', (e) => {
     S.hudOpen = e.target.open;   // remember across design flips
   });
-  hud.querySelector('[data-act=screen]').addEventListener('click', () => screenCandidate(c.key));
+  hud.querySelector('[data-act=screen]').addEventListener('click', () => openAnalysis(c.key));
   hud.querySelector('[data-act=promote]').addEventListener('click', () => promoteCandidate(c.key));
   hud.querySelector('[data-act=discard]').addEventListener('click', () => discardCandidate(c.key));
   hud.querySelector('[data-act=regen]').addEventListener('click', () => generateCandidates(true));
@@ -808,6 +810,120 @@ function renderCandHud() {
 function switchTab(name) {
   const btn = document.querySelector(`.tab[data-tab=${name}]`);
   if (btn) btn.click();
+}
+
+/* --------------------------------------------------------- analysis overlay
+ * One design, three fidelity levels side by side: what the equations say,
+ * what the fast solver measured, what CFD verified — with deltas, so the
+ * user sees where the cheap models were right and where they were not. */
+function openAnalysis(key) {
+  S.analysisKey = key;
+  renderAnalysis();
+}
+
+function closeAnalysis() {
+  S.analysisKey = null;
+  document.getElementById('analysis-overlay').classList.add('hidden');
+}
+
+function anlzRow(label, val, ref, note = '') {
+  const delta = (ref != null && val != null)
+    ? ` <span class="anlz-delta">(${val - ref > 0 ? '+' : ''}${(val - ref).toFixed(Math.abs(val - ref) < 0.05 ? 3 : 1)} vs eq)</span>` : '';
+  return `<span class="k">${label}</span><span class="v">${val == null ? '—' : typeof val === 'number' ? val.toFixed(Math.abs(val) < 1 ? 3 : 1) : val}${note}${delta}</span>`;
+}
+
+function renderAnalysis() {
+  const c = S.candidates.find(x => x.key === S.analysisKey);
+  const ov = document.getElementById('analysis-overlay');
+  if (!c) { ov.classList.add('hidden'); return; }
+  ov.classList.remove('hidden');
+  const p = c.panel;
+  const fa = c.evidence.fast_aero;
+  const h = (fa && fa.hybrid) || {};
+
+  const eqCol = `
+    <div class="anlz-col">
+      <div class="anlz-col-head"><span class="badge instant">equations</span>
+        <span class="anlz-status done">estimated</span></div>
+      <div class="kv">
+        ${anlzRow('L/D at cruise CL', p.ld_cruise)}
+        ${anlzRow('best L/D (CL* ' + p.cl_star.toFixed(2) + ')', p.ld_max)}
+        ${anlzRow('cruise CL', p.cl_cruise)}
+        ${anlzRow('parasite CD0', p.cd0)}
+        ${anlzRow('Oswald e', p.oswald_e)}
+        ${anlzRow('stall m/s', p.v_stall_ms, null, p.launch_ok === false ? ' ⚠' : '')}
+        ${anlzRow('neutral point m', p.x_np_m)}
+        ${anlzRow('wing loading kg/m²', p.wing_loading_kgm2)}
+      </div>
+      <details class="cand-why"><summary>assumptions</summary>
+        <ul>${p.assumptions.map(a => `<li>${a}</li>`).join('')}</ul></details>
+      <div class="note">Closed-form textbook methods — microseconds, no solver.
+      Everything to the right exists to check these numbers.</div>
+    </div>`;
+
+  let fastBody;
+  if (fa && fa.passed) {
+    const disagree = h.ld_hybrid != null && Math.abs(h.ld_hybrid - p.ld_cruise) / p.ld_cruise > 0.15;
+    fastBody = `
+      <div class="kv">
+        ${anlzRow('L/D hybrid (CD0eq+CDi)', h.ld_hybrid, p.ld_cruise)}
+        ${anlzRow('CDi (vortex lattice)', h.cd_induced_vlm)}
+        ${anlzRow('Oswald e measured', h.oswald_e_measured, p.oswald_e)}
+        ${anlzRow('neutral point m', fa.x_np_m, p.x_np_m)}
+        ${anlzRow('trim α deg', fa.alpha_trim_deg)}
+        ${anlzRow('CL_α /deg', fa.cl_alpha_per_deg)}
+      </div>
+      <div class="anlz-gates">${(fa.gates || []).map(g =>
+        `<div class="gate"><span class="${g.passed ? 'ok' : 'bad'}">${g.passed ? '✓' : '✗'}</span> ${g.gate}</div>`).join('')}</div>
+      ${disagree ? '<div class="cand-note">◈ >15% L/D disagreement with the equations — an Oswald/CD0 assumption is off for this shape; trust this column</div>'
+                 : '<div class="note" style="color:var(--ok)">agrees with the equation estimates</div>'}`;
+  } else if (fa && !fa.passed) {
+    fastBody = `<div class="cand-note">◈ rejected: ${fa.reason || 'gate failure'}</div>
+      <button class="secondary" id="anlz-run-fast">Re-run VSPAERO</button>`;
+  } else {
+    fastBody = `<div class="dim" style="margin:8px 0">not run for this design</div>
+      <button class="secondary" id="anlz-run-fast">Run VSPAERO now (~1–2 min)</button>
+      <div class="note" style="margin-top:6px">Builds the OpenVSP model, runs a
+      vortex-lattice α-sweep, and re-scores this design with measured induced
+      drag and neutral point.</div>`;
+  }
+  const fastCol = `
+    <div class="anlz-col">
+      <div class="anlz-col-head"><span class="badge fast">fast · VSPAERO</span>
+        <span class="anlz-status ${fa ? (fa.passed ? 'done' : 'fail') : ''}">${fa ? (fa.passed ? 'validated' : 'rejected') : 'not run'}</span></div>
+      ${fastBody}
+    </div>`;
+
+  const cfdCol = `
+    <div class="anlz-col">
+      <div class="anlz-col-head"><span class="badge cfd">CFD · OpenFOAM</span>
+        <span class="anlz-status">${c.promoted_geometry_version ? 'pipeline ready' : 'not run'}</span></div>
+      ${c.promoted_geometry_version
+        ? `<div class="dim" style="margin:8px 0">This design is main geometry
+           v${c.promoted_geometry_version}. Run the mesh → OpenFOAM pipeline from
+           chat; converged force coefficients and the physical-quality verdict
+           will attach to that version.</div>`
+        : `<div class="dim" style="margin:8px 0">CFD runs on the main design
+           line and takes hours per case — promote this design first, then run
+           the mesh/CFD pipeline from chat.</div>`}
+      <div class="note">Highest fidelity: viscous RANS with convergence,
+      plausibility, and mission-lift checks. The final word.</div>
+    </div>`;
+
+  ov.innerHTML = `
+    <div class="anlz-sheet">
+      <div class="anlz-head">
+        <span class="anlz-title">Analysis — ${c.title}</span>
+        <span class="cand-status ${c.status}">${c.status}</span>
+        <span class="spacer"></span>
+        <button id="anlz-close" class="vb" title="Close (Esc)">✕</button>
+      </div>
+      <div class="anlz-grid">${eqCol}${fastCol}${cfdCol}</div>
+    </div>`;
+  document.getElementById('anlz-close').addEventListener('click', closeAnalysis);
+  const run = document.getElementById('anlz-run-fast');
+  if (run) run.addEventListener('click', () => screenCandidate(c.key));
+  ov.addEventListener('click', (e) => { if (e.target === ov) closeAnalysis(); }, { once: true });
 }
 
 async function fetchCandidates() {
@@ -1183,6 +1299,7 @@ async function boot() {
   document.getElementById('cand-prev').addEventListener('click', () => showCandidate(S.candIdx - 1));
   document.getElementById('cand-next').addEventListener('click', () => showCandidate(S.candIdx + 1));
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && S.analysisKey) { closeAnalysis(); return; }
     if (!S.browse || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
     if (e.key === 'ArrowLeft') showCandidate(S.candIdx - 1);
     if (e.key === 'ArrowRight') showCandidate(S.candIdx + 1);
