@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import * as AERO from './aero_mirror.js?v=c1';
+import * as AERO from './aero_mirror.js?v=bcd1';
 
 const MU_AIR = 1.81e-5;
 const PAYLOAD_FRACTION = 0.30;
@@ -42,6 +42,8 @@ const S = {
   candIdx: 0,
   preBrowseParams: null,  // params to restore when leaving browse without adopting
   hudOpen: false,         // design-details dropdown expanded?
+  goalsOpen: false,       // goal-sliders dropdown expanded?
+  goalVals: null,         // {ld, stall, span} for the currently browsed design
 };
 
 const PARAM_META = {
@@ -702,8 +704,140 @@ function showCandidate(i) {
   if (!S.candidates.length) { renderCandHud(); return; }
   S.candIdx = ((i % S.candidates.length) + S.candidates.length) % S.candidates.length;
   S.params = { ...S.candidates[S.candIdx].params };
+  S.goalVals = null;   // goals are per-design; re-seed from this candidate
   syncAll();
   renderCandHud();
+}
+
+/* ------------------------------------------------ goal-based resize (tier 0)
+ * Inverse design at equation level: hold the candidate's shape fractions
+ * (taper, sweeps, twist, thickness, body fraction) and solve wing area +
+ * aspect ratio toward a target cruise L/D, subject to a stall-speed cap
+ * (launch method AND user goal) and a span cap. Reports which limit binds. */
+function solveGoals(p0, ctx, goals) {
+  const shape = { ...p0 };
+  const launchCap = AERO.LAUNCH_VSTALL_MAX[ctx.launch] ?? 99;
+  const stallCap = Math.min(goals.stall, launchCap);
+  const spanCap = Math.min(goals.span, 3.0);
+  const q = 0.5 * ctx.rho * ctx.v * ctx.v;
+
+  const build = (s, ar) => {
+    let span = Math.max(0.8, Math.min(Math.sqrt(ar * s), spanCap));
+    const b1 = shape.centre_body_fraction * span / 2, b2 = span / 2 - b1;
+    const kk = b1 * (1 + shape.mid_chord_frac)
+      + b2 * (shape.mid_chord_frac + shape.mid_chord_frac * shape.taper_outer);
+    return { ...shape, span_m: span, root_chord_m: Math.max(0.25, s / kk) };
+  };
+
+  let s = AERO.planformArea(p0);
+  let ar = p0.span_m * p0.span_m / s;
+  let params = build(s, ar);
+  let est = AERO.estimate(params, ctx);
+  for (let i = 0; i < 60; i++) {
+    if (est.ldCruise >= goals.ld - 0.05) break;
+    let changed = false;
+    // shrink/grow the wing toward CL*, bounded by the stall floor + CL cap
+    const sFloor = Math.max(
+      2 * ctx.w / (ctx.rho * stallCap * stallCap * est.clMax3d),  // stall
+      ctx.w / (q * 0.75));                                        // cruise-CL cap
+    const sNew = Math.max(ctx.w / (q * est.clStar), sFloor);
+    if (Math.abs(sNew - s) / s > 1e-3) { s = sNew; changed = true; }
+    // spend remaining span budget on aspect ratio
+    if (ar < 10 && Math.sqrt(ar * s) < spanCap - 1e-3) { ar = Math.min(10, ar + 0.25); changed = true; }
+    params = build(s, ar);
+    est = AERO.estimate(params, ctx);
+    if (!changed) break;
+  }
+
+  let binding = '';
+  if (est.ldCruise >= goals.ld - 0.05) {
+    binding = 'target met';
+  } else {
+    const sFloor = 2 * ctx.w / (ctx.rho * stallCap * stallCap * est.clMax3d);
+    if (s <= sFloor * 1.001 && est.cl < est.clStar * 0.98) {
+      binding = stallCap === launchCap
+        ? `stall floor binds: ${ctx.launch} launch tolerates ≤ ${launchCap} m/s — a faster launch method would unlock more`
+        : `your ${goals.stall.toFixed(1)} m/s stall goal binds — relax it for more L/D`;
+    } else if (Math.sqrt(ar * s) >= spanCap - 1e-3) {
+      binding = `span cap ${spanCap.toFixed(2)} m binds — allow more span for more L/D`;
+    } else if (ar >= 10) {
+      binding = 'aspect-ratio gate (10) reached';
+    } else {
+      binding = 'physics limit for this planform family';
+    }
+  }
+  return { params, est, binding };
+}
+
+function goalBoxHtml(c) {
+  const est0 = AERO.estimate(c.params, aeroCtx(S.mission));
+  if (!S.goalVals) S.goalVals = {
+    ld: Math.round(est0.ldCruise * 2) / 2,
+    stall: est0.launchLimit ?? 12,
+    span: 3.0,
+  };
+  const g = S.goalVals;
+  return `
+    <details class="goal-dd" ${S.goalsOpen ? 'open' : ''}>
+      <summary>🎯 Design to goals <span class="badge instant">equation</span></summary>
+      <div class="goal-row"><label>Target cruise L/D</label>
+        <input type="range" id="goal-ld" min="8" max="22" step="0.5" value="${g.ld}">
+        <span class="goal-val" id="goal-ld-v">${g.ld.toFixed(1)}</span></div>
+      <div class="goal-row"><label>Max stall speed</label>
+        <input type="range" id="goal-stall" min="7" max="16" step="0.5" value="${g.stall}">
+        <span class="goal-val" id="goal-stall-v">${g.stall.toFixed(1)} m/s</span></div>
+      <div class="goal-row"><label>Max span</label>
+        <input type="range" id="goal-span" min="1" max="3" step="0.05" value="${g.span}">
+        <span class="goal-val" id="goal-span-v">${g.span.toFixed(2)} m</span></div>
+      <div id="goal-result" class="cand-obj" style="margin-top:6px">move a slider —
+        the wing re-sizes live (shape proportions stay, area + aspect ratio solve)</div>
+      <div class="ver-actions" style="margin-top:6px">
+        <button id="goal-reset">Reset to candidate</button>
+      </div>
+    </details>`;
+}
+
+function wireGoalBox(c) {
+  const dd = document.querySelector('.goal-dd');
+  if (!dd) return;
+  dd.addEventListener('toggle', (e) => { S.goalsOpen = e.target.open; });
+  const solve = () => {
+    const g = S.goalVals = {
+      ld: +document.getElementById('goal-ld').value,
+      stall: +document.getElementById('goal-stall').value,
+      span: +document.getElementById('goal-span').value,
+    };
+    document.getElementById('goal-ld-v').textContent = g.ld.toFixed(1);
+    document.getElementById('goal-stall-v').textContent = `${g.stall.toFixed(1)} m/s`;
+    document.getElementById('goal-span-v').textContent = `${g.span.toFixed(2)} m`;
+    const { params, est, binding } = solveGoals(c.params, aeroCtx(S.mission), g);
+    S.params = { ...params };
+    syncAll();
+    const met = binding === 'target met';
+    document.getElementById('goal-result').innerHTML =
+      `achieved <b>L/D ${est.ldCruise.toFixed(1)}</b> · stall ${est.vStall.toFixed(1)} m/s · ` +
+      `span ${est.span.toFixed(2)} m · AR ${est.ar.toFixed(2)} · ` +
+      `wing loading ${est.wingLoading.toFixed(1)} kg/m²<br>` +
+      (met ? '<span style="color:var(--ok)">target met</span>'
+           : `<span style="color:var(--warn)">◈ ${binding}</span>`) +
+      '<br><span class="dim">use “Edit this design” to keep this shape, or Reset to discard</span>';
+  };
+  for (const id of ['goal-ld', 'goal-stall', 'goal-span'])
+    document.getElementById(id).addEventListener('input', solve);
+  document.getElementById('goal-reset').addEventListener('click', () => {
+    S.params = { ...c.params };
+    S.goalVals = null;
+    syncAll();
+    renderCandHud();
+    toast('ok', 'Geometry reset to the candidate — goal edits discarded.');
+  });
+}
+
+function aeroCtx(mission) {
+  const rho = isaDensity(+mission.cruise_altitude_m);
+  const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
+  const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
+  return { rho, v: +mission.cruise_speed_ms, w: mtow * 9.81, launch: mission.launch || 'hand' };
 }
 
 function evidenceBadges(c) {
@@ -796,6 +930,7 @@ function renderCandHud() {
         <ul>${c.provenance.map(x => `<li>${x}</li>`).join('')}</ul>
         <div class="dim" style="margin-top:4px">Assumptions: ${c.panel.assumptions.join(' · ')}</div>
       </details>
+      ${goalBoxHtml(c)}
       <div class="ver-actions">
         <button data-act="screen" ${c.status === 'discarded' ? 'disabled' : ''}>Screen (VSPAERO)</button>
         <button data-act="promote" ${c.status === 'discarded' ? 'disabled' : ''}>Promote to main</button>
@@ -808,6 +943,7 @@ function renderCandHud() {
   hud.querySelector('.cand-dd').addEventListener('toggle', (e) => {
     S.hudOpen = e.target.open;   // remember across design flips
   });
+  wireGoalBox(c);
   hud.querySelector('[data-act=screen]').addEventListener('click', () => screenCandidate(c.key));
   hud.querySelector('[data-act=promote]').addEventListener('click', () => promoteCandidate(c.key));
   hud.querySelector('[data-act=discard]').addEventListener('click', () => discardCandidate(c.key));
@@ -928,13 +1064,6 @@ function renderDerived() {
 
   const dims = `span   ${fmt(S.params.span_m, 3)} m\nroot c ${fmt(S.params.root_chord_m, 3)} m\nMAC    ${fmt(d.mac, 3)} m\nS      ${fmt(d.s, 3)} m²\nAR     ${fmt(d.ar, 2)}${S.halfOn ? '\n— half view (display only) —' : ''}`;
   document.getElementById('dim-overlay').textContent = dims;
-}
-
-function aeroCtx(mission) {
-  const rho = isaDensity(+mission.cruise_altitude_m);
-  const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
-  const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
-  return { rho, v: +mission.cruise_speed_ms, w: mtow * 9.81, launch: mission.launch || 'hand' };
 }
 
 function renderAeroEst() {
