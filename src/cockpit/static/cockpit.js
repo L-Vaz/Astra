@@ -10,8 +10,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import * as AERO from './aero_mirror.js?v=rq1';
-import * as REQ from './req_panel.js?v=rq1';
-import * as WHY from './why_panel.js?v=rq1';
+import * as REQ from './req_panel.js?v=rq2';
+import * as WHY from './why_panel.js?v=rq2';
 
 const MU_AIR = 1.81e-5;
 const PAYLOAD_FRACTION = 0.30;

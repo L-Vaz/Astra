@@ -9,7 +9,7 @@
  * shown in the collapsed rows; the tree itself always comes from Python.
  */
 import * as AERO from './aero_mirror.js?v=rq1';
-import { flightCtx } from './req_panel.js?v=rq1';
+import { flightCtx } from './req_panel.js?v=rq2';
 
 const METRIC_ROWS = [
   { id: 'ld_cruise',        label: 'L/D at cruise',    get: e => e.ldCruise,    dp: 1 },
