@@ -47,6 +47,8 @@ const S = {
   analysisKey: null,      // candidate key shown in the Analysis overlay
   requirements: null,     // DesignRequirements (flight condition + targets)
   reqStatus: null,        // server-computed status of built geometry vs requirements
+  reqSchema: null,        // DesignRequirements json-schema properties (bounds)
+  reqMeta: null,          // solver met-tolerances + per-launch stall caps
 };
 
 const PARAM_META = {
@@ -1229,6 +1231,8 @@ async function refreshVersions() {
   S.versions = b.versions;
   S.requirements = b.requirements;
   S.reqStatus = b.requirements_status;
+  S.reqSchema = b.requirements_schema.properties;
+  S.reqMeta = b.requirements_meta;
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
   buildVersionsTab();
@@ -1288,6 +1292,8 @@ async function boot() {
   S.fast = b.fast_aero; S.fastForVersion = S.geomVersion;
   S.requirements = b.requirements;
   S.reqStatus = b.requirements_status;
+  S.reqSchema = b.requirements_schema.properties;
+  S.reqMeta = b.requirements_meta;
 
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
