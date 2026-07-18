@@ -7,8 +7,11 @@ Claude Code (the MCP client) is stateless between calls, so this store is the
 single source of truth for a design session. Creating a new version of stage k
 invalidates every stage after k; old versions stay on disk for comparison.
 """
+import hashlib
 import json
 import os
+import platform
+import subprocess
 import time
 import uuid
 from typing import Optional
@@ -16,6 +19,12 @@ from typing import Optional
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 STAGES = ["plan", "geometry", "fast_aero", "mesh", "simulation", "results"]
+
+# Manifest inventory limits — big meshes/CFD outputs are recorded by size only,
+# and a runaway directory can't stall version recording. Truncation is flagged
+# in the manifest, never silent.
+_HASH_CAP_BYTES = 32 * 1024 * 1024
+_INVENTORY_CAP_FILES = 500
 
 
 def sessions_root() -> str:
@@ -77,9 +86,59 @@ def new_version_dir(session_id: str, stage: str) -> str:
     return path
 
 
+_git_commit_cache: Optional[tuple] = None
+
+
+def _git_commit() -> Optional[str]:
+    """Repo HEAD at first use, cached; None when git is unavailable."""
+    global _git_commit_cache
+    if _git_commit_cache is None:
+        try:
+            out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT,
+                                 capture_output=True, text=True, timeout=5)
+            _git_commit_cache = (out.stdout.strip() if out.returncode == 0 else None,)
+        except Exception:
+            _git_commit_cache = (None,)
+    return _git_commit_cache[0]
+
+
+def _artifact_inventory(vdir: str) -> dict:
+    """Inventory of the stage version's files: relative path, size, and sha256
+    for anything small enough to hash. The registry (roadmap phase 4) ingests
+    this instead of re-scanning disks."""
+    files, truncated = [], False
+    for root, _dirs, names in os.walk(vdir):
+        for name in sorted(names):
+            if root == vdir and name == "manifest.json":
+                continue
+            if len(files) >= _INVENTORY_CAP_FILES:
+                truncated = True
+                break
+            path = os.path.join(root, name)
+            size = os.path.getsize(path)
+            entry = {"path": os.path.relpath(path, vdir).replace(os.sep, "/"),
+                     "bytes": size}
+            if size <= _HASH_CAP_BYTES:
+                h = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                entry["sha256"] = h.hexdigest()
+            files.append(entry)
+        if truncated:
+            break
+    return {"files": files, "truncated": truncated}
+
+
 def record_version(session_id: str, stage: str, summary: dict,
                    invalidate_from: Optional[str] = None) -> int:
     """Mark the newest version of `stage` valid and invalidate downstream stages.
+
+    Besides the caller's summary, the manifest records machine-readable
+    provenance: which upstream stage versions and requirements version were
+    current, an artifact inventory with hashes, and tool identity. That makes
+    each version directory self-describing evidence a future DOE/provenance
+    registry can ingest without re-running anything.
 
     invalidate_from: first stage to invalidate; defaults to the stage right
     after `stage` (the historical behaviour). Passing a later stage keeps the
@@ -101,10 +160,22 @@ def record_version(session_id: str, stage: str, summary: dict,
 
     vdir = os.path.join(sessions_root(), session_id, stage, f"v{n}")
     os.makedirs(vdir, exist_ok=True)
+    upstream = {s: state["stages"][s]["latest"]
+                for s in STAGES[:STAGES.index(stage)]
+                if state["stages"][s]["valid"]}
+    manifest = {
+        "stage": stage, "version": n,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "inputs": {"upstream": upstream,
+                   "requirements_version": _latest_requirements_version(session_id)},
+        "artifacts": _artifact_inventory(vdir),
+        "tools": {"python": platform.python_version(),
+                  "platform": platform.platform(),
+                  "git_commit": _git_commit()},
+        **summary,
+    }
     with open(os.path.join(vdir, "manifest.json"), "w") as f:
-        json.dump({"stage": stage, "version": n,
-                   "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-                   **summary}, f, indent=2)
+        json.dump(manifest, f, indent=2)
     return n
 
 
@@ -117,6 +188,15 @@ def record_version(session_id: str, stage: str, summary: dict,
 
 def _requirements_dir(session_id: str) -> str:
     return os.path.join(sessions_root(), session_id, "requirements")
+
+
+def _latest_requirements_version(session_id: str) -> int:
+    """Latest saved requirements version, 0 for pre-requirements sessions."""
+    idx_path = os.path.join(_requirements_dir(session_id), "index.json")
+    if not os.path.exists(idx_path):
+        return 0
+    with open(idx_path) as f:
+        return json.load(f).get("latest", 0)
 
 
 def save_requirements(session_id: str, payload: dict) -> int:
