@@ -77,12 +77,25 @@ def new_version_dir(session_id: str, stage: str) -> str:
     return path
 
 
-def record_version(session_id: str, stage: str, summary: dict) -> int:
-    """Mark the newest version of `stage` valid and invalidate downstream stages."""
+def record_version(session_id: str, stage: str, summary: dict,
+                   invalidate_from: Optional[str] = None) -> int:
+    """Mark the newest version of `stage` valid and invalidate downstream stages.
+
+    invalidate_from: first stage to invalidate; defaults to the stage right
+    after `stage` (the historical behaviour). Passing a later stage keeps the
+    ones in between valid — e.g. record_version(sid, "plan",
+    invalidate_from="fast_aero") records a new mission WITHOUT orphaning the
+    built geometry (a mission change alters the flight condition, not the
+    already-built shape; geometry staleness vs requirements is tracked
+    separately by the requirements store below)."""
     state = _load(session_id)
     n = state["stages"][stage]["latest"] + 1
     state["stages"][stage] = {"latest": n, "valid": True}
-    for later in STAGES[STAGES.index(stage) + 1:]:
+    first_invalid = STAGES.index(invalidate_from) if invalidate_from \
+        else STAGES.index(stage) + 1
+    if first_invalid <= STAGES.index(stage):
+        raise ValueError(f"invalidate_from '{invalidate_from}' must come after '{stage}'")
+    for later in STAGES[first_invalid:]:
         state["stages"][later]["valid"] = False
     _save(state)
 
@@ -93,3 +106,51 @@ def record_version(session_id: str, stage: str, summary: dict) -> int:
                    "created": time.strftime("%Y-%m-%d %H:%M:%S"),
                    **summary}, f, indent=2)
     return n
+
+
+# ---------------------------------------------------------------------------
+# requirements store — first-class, versioned, deliberately NOT a stage:
+# saving requirements never touches stage validity. The cockpit/server compare
+# the latest requirements against the built geometry and surface staleness
+# instead of invalidating anything.
+# ---------------------------------------------------------------------------
+
+def _requirements_dir(session_id: str) -> str:
+    return os.path.join(sessions_root(), session_id, "requirements")
+
+
+def save_requirements(session_id: str, payload: dict) -> int:
+    """Persist a new requirements version; returns the version number."""
+    _load(session_id)  # raises on unknown session
+    root = _requirements_dir(session_id)
+    idx_path = os.path.join(root, "index.json")
+    latest = 0
+    if os.path.exists(idx_path):
+        with open(idx_path) as f:
+            latest = json.load(f).get("latest", 0)
+    n = latest + 1
+    vdir = os.path.join(root, f"v{n}")
+    os.makedirs(vdir, exist_ok=True)
+    with open(os.path.join(vdir, "requirements.json"), "w") as f:
+        json.dump({"created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "version": n, **payload}, f, indent=2)
+    with open(idx_path, "w") as f:
+        json.dump({"latest": n}, f, indent=2)
+    return n
+
+
+def latest_requirements(session_id: str) -> Optional[dict]:
+    """Latest saved requirements payload, or None for pre-requirements sessions."""
+    root = _requirements_dir(session_id)
+    idx_path = os.path.join(root, "index.json")
+    if not os.path.exists(idx_path):
+        return None
+    with open(idx_path) as f:
+        n = json.load(f).get("latest", 0)
+    if n == 0:
+        return None
+    path = os.path.join(root, f"v{n}", "requirements.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)

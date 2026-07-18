@@ -97,19 +97,20 @@ Purpose: when planning or implementing a change, read the section for your task,
 - Adding a tool: `@mcp.tool` async fn + pydantic Request/Response models; business logic stays in `src/services/`. Astra stage pattern: `_require_stage(sid, stage)` → `ds.new_version_dir` → service → `ds.record_version`.
 - Caveat: `RunSimulationRequest` is defined twice (local `run` tool and Astra `run_simulation`); annotations bind at decoration time so both work, but don't rely on the module-level name.
 
-## 11. Cockpit UI
+## 11. Cockpit UI (requirements-first explorer)
 
-- `src/cockpit/server.py` — FastAPI, port 8765, shares `design_session` as source of truth, **no LLM**. Endpoints: `/api/health`, `/api/bootstrap`, `/api/preview`, `/api/mission`, `/api/revision` (rebuilds geometry), `/api/stl/...`, `/api/fast_aero`, `/api/locks`, `/api/explanations/...`, `/api/debug/snapshot`. API routes are registered before the static mount so they win.
-- `src/cockpit/static/cockpit.js` — frontend; live parametric three.js loft that mirrors `domain_packs/bwb` math client-side (`PARAM_META`, `MU_AIR`, `TIP_CHORD_MIN`, `AR_RANGE`); authoritative STL loaded only after Apply. `index.html` (three.js 0.160.0 via unpkg CDN — needs network), `cockpit.css`.
+- `src/cockpit/server.py` — FastAPI, port 8765, shares `design_session` as source of truth, **no LLM**. Endpoints: `/api/health`, `/api/bootstrap` (now includes `requirements`, `requirements_status`, `requirements_schema`), `/api/preview`, `/api/requirements` (inverse solve, persist optional, never builds OpenVSP), `/api/explain` (stateless derivation graph + sensitivities), `/api/mission` (uses `invalidate_from="fast_aero"` — keeps built geometry), `/api/revision` (rebuilds geometry; the only Apply), `/api/stl/...`, `/api/fast_aero`, `/api/locks`, `/api/explanations/...`, `/api/debug/snapshot`. API routes are registered before the static mount so they win.
+- Frontend: three-column explorer. `static/req_panel.js` — requirement controls, chips, binding banner; POSTs `/api/requirements` (debounced 120 ms, `persist:false` while dragging). `static/why_panel.js` — clickable metric rows → `/api/explain` derivation trees + sensitivity strips. `static/cockpit.js` — state, three.js viewport, Apply, candidates carousel ("Suggest designs" button), versions. `index.html` (three.js 0.160.0 via unpkg CDN — needs network), `cockpit.css`.
 - Launch: `open_cockpit` MCP tool (`fastmcp_server.py`) — Popen `-m src.cockpit.server`, polls `/api/health` up to 120 s (first start loads FAISS); log at `<parent-of-sessions_root>/cockpit.log`.
-- Caveat: changing BWB math means changing it in BOTH `domain_packs/bwb/` and the client-side mirror in `cockpit.js`.
+- Caveat: `aero_mirror.js` mirrors the FORWARD estimate only (frozen scope, instant drag feedback). The inverse solver, derivation graph, and sensitivities are server-side only (`domain_packs/bwb/inverse.py`, `derivation.py`, `sensitivity.py`) — do NOT port them to JS; changing forward BWB math still means changing both `domain_packs/bwb/aero_estimates.py` and `aero_mirror.js`.
 
-## 12. Design sessions / revisions / rollback
+## 12. Design sessions / revisions / rollback / requirements
 
-- `src/services/design_session.py` — the versioned store. `sessions_root()` (env `ASTRA_SESSIONS_DIR`, default `runs/design_sessions`), `create_session`, `get_state`, `latest_dir(sid, stage)` (latest **valid** version or None), `new_version_dir`, `record_version` (marks valid + **invalidates all downstream stages**). Layout: `<sid>/<stage>/v<N>/` + `session.json`.
+- `src/services/design_session.py` — the versioned store. `sessions_root()` (env `ASTRA_SESSIONS_DIR`, default `runs/design_sessions`), `create_session`, `get_state`, `latest_dir(sid, stage)` (latest **valid** version or None), `new_version_dir`, `record_version(sid, stage, summary, invalidate_from=None)` (marks valid + invalidates downstream from `invalidate_from`, default = the next stage — the cockpit mission route passes `"fast_aero"` so a mission change no longer orphans built geometry). Layout: `<sid>/<stage>/v<N>/` + `session.json`.
+- Requirements store (NOT a stage; never touches stage validity): `save_requirements` / `latest_requirements` → `<sid>/requirements/v<N>/requirements.json` + `index.json`. Staleness of built geometry vs requirements is surfaced by the cockpit, not enforced. Models: `domain_packs/bwb/requirements.py`; solver: `domain_packs/bwb/inverse.py` (`solve_requirements`, `check_requirements`, `solve_planform` — also the engine behind `variants._solve_planform`).
 - Rollback model: versions are never deleted; a new stage-k version invalidates stages > k, forcing re-run downstream.
 - Cockpit extras under `<sid>/cockpit/`: `explanations.jsonl`, `locks.json`.
-- Readers/writers: `fastmcp_server.py` (all Astra tools), `cockpit/server.py`, `verify_revisions.py`.
+- Readers/writers: `fastmcp_server.py` (all Astra tools incl. `set_requirements`), `cockpit/server.py`, `verify_revisions.py`.
 
 ## 13. Verification & gates
 

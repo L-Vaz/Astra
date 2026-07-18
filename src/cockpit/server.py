@@ -29,8 +29,15 @@ from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
 from domain_packs.bwb.defaults import (  # noqa: E402
     MU_AIR, PAYLOAD_FRACTION, derive, isa_density)
+from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX  # noqa: E402
+from domain_packs.bwb.derivation import derive_graph  # noqa: E402
+from domain_packs.bwb.inverse import (  # noqa: E402
+    MET_TOLERANCES, check_requirements, solve_requirements)
+from domain_packs.bwb.requirements import DesignRequirements  # noqa: E402
 from domain_packs.bwb.schema import (  # noqa: E402
     BWBParams, GeometryReport, MissionDerived, MissionSpec)
+from domain_packs.bwb.sensitivity import (  # noqa: E402
+    requirement_sensitivity_table, sensitivity_table)
 from services import candidates as cand_svc  # noqa: E402
 from services import design_session as ds  # noqa: E402
 from services.geometry import GeometryRejected, build_geometry as build_geometry_svc  # noqa: E402
@@ -76,13 +83,15 @@ def _list_sessions() -> List[Dict[str, Any]]:
     return sorted(out, key=lambda s: s["mtime"], reverse=True)
 
 
-def _write_plan_version(sid: str, derived: MissionDerived, note: str) -> int:
+def _write_plan_version(sid: str, derived: MissionDerived, note: str,
+                        invalidate_from: Optional[str] = None) -> int:
     vdir = ds.new_version_dir(sid, "plan")
     with open(os.path.join(vdir, "mission_derived.json"), "w") as f:
         f.write(derived.model_dump_json(indent=2))
     with open(os.path.join(vdir, "enriched_requirement.txt"), "w") as f:
         f.write(build_enriched_requirement(derived))
-    return ds.record_version(sid, "plan", {"prompt": note, "source": "cockpit"})
+    return ds.record_version(sid, "plan", {"prompt": note, "source": "cockpit"},
+                             invalidate_from=invalidate_from)
 
 
 def _ensure_session(sid: Optional[str]) -> str:
@@ -276,6 +285,68 @@ def _diff_params(old: Dict[str, Any], new: Dict[str, Any]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# requirements — first-class store + staleness vs the built geometry
+# ---------------------------------------------------------------------------
+
+_REQ_FIELDS = set(DesignRequirements.model_fields)
+
+
+def _current_requirements(sid: str) -> DesignRequirements:
+    """Latest saved requirements, or a synthesis from the plan for sessions
+    predating the requirements store (targets all None)."""
+    saved = ds.latest_requirements(sid)
+    if saved:
+        return DesignRequirements.model_validate(
+            {k: v for k, v in saved.items() if k in _REQ_FIELDS})
+    plan = _plan_derived(sid)
+    if plan:
+        return DesignRequirements(
+            mtow_kg=plan.mtow_kg,
+            cruise_speed_ms=plan.mission.cruise_speed_ms,
+            cruise_altitude_m=plan.mission.cruise_altitude_m,
+            launch=plan.mission.launch)
+    m = DEFAULT_MISSION
+    return DesignRequirements(
+        mtow_kg=m["payload_kg"] / PAYLOAD_FRACTION,
+        cruise_speed_ms=m["cruise_speed_ms"],
+        cruise_altitude_m=m["cruise_altitude_m"], launch=m["launch"])
+
+
+def _requirements_version(sid: str) -> int:
+    saved = ds.latest_requirements(sid)
+    return saved.get("version", 0) if saved else 0
+
+
+def _requirements_status_for_params(sid: str, params: BWBParams) -> Dict[str, Any]:
+    """Requirement statuses of one specific parameter set (no staleness logic)."""
+    statuses = check_requirements(_current_requirements(sid), params)
+    return {"statuses": [s.model_dump() for s in statuses],
+            "unmet": [s.name for s in statuses if s.met is False]}
+
+
+def _requirements_status(sid: str, req: Optional[DesignRequirements] = None
+                         ) -> Dict[str, Any]:
+    """How the latest BUILT geometry measures against the requirements.
+    Never invalidates anything — staleness is surfaced, not enforced."""
+    req = req or _current_requirements(sid)
+    params_raw = _current_params(sid)
+    geo_valid = ds.get_state(sid)["stages"]["geometry"]["valid"]
+    out: Dict[str, Any] = {"stale": False, "statuses": [], "unmet": [],
+                           "checked_against": "built geometry" if geo_valid else "plan baseline"}
+    if not params_raw:
+        return out
+    try:
+        params = BWBParams.model_validate(params_raw)
+    except ValidationError:
+        return out
+    statuses = check_requirements(req, params)
+    out["statuses"] = [s.model_dump() for s in statuses]
+    out["unmet"] = [s.name for s in statuses if s.met is False]
+    out["stale"] = bool(out["unmet"]) and geo_valid
+    return out
+
+
+# ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
 
@@ -323,6 +394,16 @@ def bootstrap(session: Optional[str] = None) -> Dict[str, Any]:
         "versions": _versions(sid),
         "locks": _read_locks(sid),
         "pending_explanations": sum(1 for e in _read_explanations(sid) if not e["delivered"]),
+        "requirements": _current_requirements(sid).model_dump(),
+        "requirements_version": _requirements_version(sid),
+        "requirements_status": _requirements_status(sid),
+        "requirements_schema": DesignRequirements.model_json_schema(),
+        # solver-owned numbers the req panel must not duplicate: met-tolerances
+        # (inverse._statuses) and per-launch-method stall caps
+        "requirements_meta": {
+            "tolerances": MET_TOLERANCES,
+            "launch_vstall_max": LAUNCH_VSTALL_MAX,
+        },
     }
 
 
@@ -338,6 +419,107 @@ def preview(req: PreviewRequest) -> Dict[str, Any]:
     tie-breaker and what Apply uses as its final pre-flight check."""
     return {"derived": _instant_derived(req.mission, req.params),
             "issues": _validate_params(req.params)}
+
+
+class RequirementsRequest(BaseModel):
+    session_id: str
+    requirements: Dict[str, Any]
+    keep_shape: bool = Field(default=True, description="Hold the current design's "
+                             "shape fractions so the change morphs, not resets")
+    persist: bool = Field(default=True, description="False = pure preview while "
+                          "dragging; nothing is written")
+
+
+@app.post("/api/requirements")
+def set_requirements(req: RequirementsRequest) -> Dict[str, Any]:
+    """The heart of the explorer: requirements in, solved geometry out.
+    Deterministic closed-form inverse sizing — NEVER builds OpenVSP; /api/revision
+    remains the one and only Apply."""
+    merged = _current_requirements(req.session_id).model_dump()
+    merged.update({k: v for k, v in req.requirements.items() if k in _REQ_FIELDS})
+    try:
+        requirements = DesignRequirements.model_validate(merged)
+    except ValidationError as e:
+        raise HTTPException(422, detail=[
+            {"params": [str(err["loc"][0])] if err["loc"] else [],
+             "message": err["msg"]} for err in e.errors()])
+
+    shape_from = None
+    if req.keep_shape:
+        current = _current_params(req.session_id)
+        if current:
+            try:
+                shape_from = BWBParams.model_validate(current)
+            except ValidationError:
+                shape_from = None
+    result = solve_requirements(requirements, shape_from=shape_from)
+
+    version = None
+    if req.persist:
+        version = ds.save_requirements(req.session_id, requirements.model_dump())
+        unmet = [s.label for s in result.requirements if s.met is False]
+        _queue_explanation(
+            req.session_id, "requirements",
+            f"Requirements v{version} set from cockpit: "
+            + ", ".join(f"{k}={v}" for k, v in requirements.model_dump().items()
+                        if v is not None) + ". "
+            + (f"Solver result: all targets met."
+               if not result.binding_constraint else
+               f"Unmet: {', '.join(unmet)} — binding: {result.binding_explanation}"),
+            {"requirements_version": version,
+             "binding_constraint": result.binding_constraint})
+
+    built = _current_params(req.session_id) or {}
+    stale = any(abs(float(built.get(k, 0)) - float(v)) > 1e-9
+                for k, v in result.params.model_dump().items()) if built else True
+    return {
+        "requirements_version": version,
+        "requirements": requirements.model_dump(),
+        "proposed_params": result.params.model_dump(),
+        "panel": json.loads(result.panel.model_dump_json()),
+        "statuses": [s.model_dump() for s in result.requirements],
+        "binding_constraint": result.binding_constraint,
+        "binding_explanation": result.binding_explanation,
+        "notes": result.notes,
+        "stale_vs_built_geometry": stale,
+    }
+
+
+class ExplainRequest(BaseModel):
+    params: Dict[str, Any]
+    flight: Dict[str, Any]     # mtow_kg, cruise_speed_ms, cruise_altitude_m, launch
+    include: List[str] = Field(default=["derivation", "sensitivity"],
+                               description="any of: derivation, sensitivity, req_sensitivity")
+
+
+@app.post("/api/explain")
+def explain(req: ExplainRequest) -> Dict[str, Any]:
+    """First-principles drill-down: machine-readable equation tree + finite-
+    difference sensitivities for ANY parameter set (stateless — also serves
+    candidates and unsaved slider states). Microseconds server-side."""
+    try:
+        params = BWBParams.model_validate(req.params)
+    except ValidationError as e:
+        raise HTTPException(422, detail=[{"message": err["msg"]} for err in e.errors()])
+    try:
+        flight = DesignRequirements.model_validate(
+            {k: v for k, v in req.flight.items() if k in _REQ_FIELDS})
+    except ValidationError as e:
+        raise HTTPException(422, detail=[{"message": err["msg"]} for err in e.errors()])
+
+    rho = isa_density(flight.cruise_altitude_m)
+    w = flight.mtow_kg * 9.81
+    out: Dict[str, Any] = {}
+    if "derivation" in req.include:
+        graph = derive_graph(params, rho, flight.cruise_speed_ms, w, flight.launch)
+        out["derivation"] = json.loads(graph.model_dump_json())
+    if "sensitivity" in req.include:
+        rows = sensitivity_table(params, rho, flight.cruise_speed_ms, w, flight.launch)
+        out["sensitivity"] = [r.model_dump() for r in rows]
+    if "req_sensitivity" in req.include:
+        rows = requirement_sensitivity_table(flight, params)
+        out["req_sensitivity"] = [r.model_dump() for r in rows]
+    return out
 
 
 class MissionRequest(BaseModel):
@@ -359,12 +541,24 @@ def save_mission(req: MissionRequest) -> Dict[str, Any]:
     current = _current_params(req.session_id)
     if current:
         derived = derived.model_copy(update={"params": BWBParams.model_validate(current)})
-    version = _write_plan_version(req.session_id, derived, "cockpit mission update")
+    # invalidate_from="fast_aero": a mission change alters the flight condition
+    # (fast-aero/mesh/CFD genuinely stale) but NOT the already-built shape —
+    # the geometry stays valid and staleness vs requirements is surfaced instead.
+    version = _write_plan_version(req.session_id, derived, "cockpit mission update",
+                                  invalidate_from="fast_aero")
+    # keep the requirements' flight condition in sync so the two never disagree
+    synced = _current_requirements(req.session_id).model_dump()
+    synced.update({"mtow_kg": derived.mtow_kg,
+                   "cruise_speed_ms": mission.cruise_speed_ms,
+                   "cruise_altitude_m": mission.cruise_altitude_m,
+                   "launch": mission.launch})
+    ds.save_requirements(req.session_id, synced)
     _queue_explanation(
         req.session_id, "mission",
         f"Mission updated in cockpit (plan v{version}): payload {mission.payload_kg} kg, "
         f"{mission.cruise_speed_ms} m/s at {mission.cruise_altitude_m} m, "
-        f"launch {mission.launch}.",
+        f"launch {mission.launch}. Built geometry kept (staleness is tracked "
+        f"against requirements); fast-aero/mesh/CFD invalidated.",
         {"mission": mission.model_dump(), "plan_version": version})
     return {"plan_version": version,
             "assumptions": derived.assumptions,
@@ -398,11 +592,14 @@ def apply_revision(req: RevisionRequest) -> Dict[str, Any]:
         raise HTTPException(422, detail=[
             {"params": [], "message": str(e), "gates": gates}])
 
+    req_status = _requirements_status_for_params(req.session_id, report.params)
     version = ds.record_version(req.session_id, "geometry", {
         "source": "cockpit", "note": req.note,
         "overrides": {k: req.params[k] for k in req.params
                       if abs(float(old.get(k, req.params[k])) - float(req.params[k])) > 1e-9},
         "passed": report.all_gates_pass,
+        "requirements_version": _requirements_version(req.session_id),
+        "requirements_unmet": req_status["unmet"],
     })
 
     changes = _diff_params(old, req.params)
@@ -413,7 +610,9 @@ def apply_revision(req: RevisionRequest) -> Dict[str, Any]:
         + ("Changed " + "; ".join(changes) + ". " if changes else "")
         + f"Result: S={report.s_ref_m2:.3f} m2, AR={report.aspect_ratio:.2f}, "
           f"MAC={report.mean_aero_chord_m:.3f} m, watertight={report.watertight}. "
-          f"Downstream fast-aero/mesh/CFD results are now invalidated.",
+        + (f"Requirements unmet: {', '.join(req_status['unmet'])}. "
+           if req_status["unmet"] else "All set requirements met. ")
+        + "Downstream fast-aero/mesh/CFD results are now invalidated.",
         {"version": version, "changes": changes, "note": req.note})
 
     return {

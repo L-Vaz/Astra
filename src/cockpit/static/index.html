@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra Aero Design Cockpit</title>
-<link rel="stylesheet" href="cockpit.css?v=bcd1">
+<link rel="stylesheet" href="cockpit.css?v=rq1">
 <script type="importmap">
 {
   "imports": {
@@ -16,7 +16,7 @@
 </head>
 <body>
 <div id="topbar">
-  <button id="btn-left" class="vb" title="Toggle controls sidebar">☰</button>
+  <button id="btn-left" class="vb" title="Toggle requirements sidebar">☰</button>
   <div class="brand">ASTRA <span>Aero Design Cockpit</span></div>
   <div id="session-chip" class="chip" title="Design session">session: —</div>
   <div class="legend">
@@ -39,28 +39,36 @@
   </select>
   <button id="btn-half" class="vb" title="View-only half display — the CFD half export is an exact cut at the mesh stage">Half view</button>
   <button id="btn-ghost" class="vb" title="Overlay previous geometry version">Ghost prev</button>
-  <button id="btn-apply" class="primary" disabled>Apply Revision</button>
-  <button id="btn-right" class="vb" title="Toggle results panel">☰</button>
+  <button id="btn-apply" class="primary" disabled>Apply — rebuild STL</button>
+  <button id="btn-right" class="vb" title="Toggle why panel">☰</button>
 </div>
 
 <div id="main">
   <div id="sidebar">
-    <div class="tabs">
-      <button class="tab active" data-tab="mission">Mission</button>
-      <button class="tab" data-tab="designs">Designs</button>
-      <button class="tab" data-tab="geometry">Geometry</button>
-      <button class="tab" data-tab="versions">Versions</button>
-    </div>
-    <div id="tab-mission" class="tabpane active"></div>
-    <div id="tab-designs" class="tabpane"></div>
-    <div id="tab-geometry" class="tabpane"></div>
-    <div id="tab-versions" class="tabpane"></div>
+    <div id="req-panel"></div>
+    <details id="det-mission" class="secdd">
+      <summary>Mission context <span class="dim">(optional)</span></summary>
+      <div id="tab-mission"></div>
+    </details>
+    <details id="det-geometry" class="secdd">
+      <summary>Geometry <span class="dim">(the consequence — edit directly if you want)</span></summary>
+      <div id="tab-geometry"></div>
+    </details>
+    <details id="det-versions" class="secdd">
+      <summary>Versions</summary>
+      <div id="tab-versions"></div>
+    </details>
   </div>
 
   <div id="viewport">
     <canvas id="canvas3d"></canvas>
     <div id="model-status" class="overlay-chip">parametric preview</div>
+    <div id="stale-chip" class="overlay-chip stale hidden"></div>
     <div id="dim-overlay" class="overlay-box"></div>
+    <div id="viewport-actions">
+      <button id="btn-suggest" class="vb" title="Browse equation-sized design candidates (baseline + 4 objectives)">✦ Suggest designs</button>
+      <button id="btn-verify" class="vb secondary" title="Run a VSPAERO vortex-lattice sweep on the built geometry">Verify with solver</button>
+    </div>
     <button id="cand-prev" class="cand-nav hidden" title="Previous design (←)">‹</button>
     <button id="cand-next" class="cand-nav hidden" title="Next design (→)">›</button>
     <div id="cand-hud" class="hidden"></div>
@@ -69,41 +77,47 @@
   </div>
 
   <div id="rightpanel">
-    <section id="derived-panel">
-      <h3>Aerodynamic reference values <span class="badge instant">instant preview</span></h3>
-      <div id="derived-list" class="kv"></div>
-      <p class="note">Instant values are mathematical consequences of the mission and planform equations — not aerodynamic predictions.</p>
-    </section>
-    <section id="aeroest-panel">
-      <h3>Aero estimates <span class="badge instant">equation</span></h3>
-      <div id="aeroest-list" class="kv"></div>
-      <p class="note">Textbook estimates (drag buildup + lifting-line + planform
-      neutral point) recomputed live while you edit. VSPAERO and CFD results
-      supersede these — they are guidance, not validation.</p>
-    </section>
-    <section id="consequence-panel">
-      <h3>Consequences of pending changes</h3>
-      <div id="consequence-list" class="mono"></div>
+    <section id="why-panel-sec">
+      <h3>Why — first principles <span class="badge instant">equation</span></h3>
+      <div id="why-list"></div>
+      <p class="note">Click any number to expand its derivation: the equation,
+      your actual values substituted, the source of every constant, and what
+      one notch of each geometry control does to it. Textbook estimates —
+      VSPAERO and CFD supersede them.</p>
     </section>
     <section id="issues-panel">
       <h3>Validation</h3>
       <div id="issues-list"></div>
     </section>
-    <section id="fast-panel">
-      <h3>Fast aero (VSPAERO) <span class="badge fast">fast validated</span></h3>
-      <div id="fast-list" class="kv"><span class="dim">not run for this geometry</span></div>
-      <button id="btn-fastaero" class="secondary">Run fast aero</button>
+    <section id="consequence-panel">
+      <h3>Consequences of pending changes</h3>
+      <div id="consequence-list" class="mono"></div>
     </section>
-    <section id="cfd-panel">
-      <h3>CFD <span class="badge cfd">CFD verified</span></h3>
-      <div class="dim">No CFD results yet — approve a geometry and export a half-model from chat to run OpenFOAM.</div>
-    </section>
+    <details class="secdd">
+      <summary>Reference values (mission math)</summary>
+      <section id="derived-panel">
+        <div id="derived-list" class="kv"></div>
+        <p class="note">Mathematical consequences of the mission and planform equations — not aerodynamic predictions.</p>
+      </section>
+    </details>
+    <details class="secdd" id="det-solver">
+      <summary>Solver results (VSPAERO / CFD)</summary>
+      <section id="fast-panel">
+        <h3>Fast aero (VSPAERO) <span class="badge fast">fast validated</span></h3>
+        <div id="fast-list" class="kv"><span class="dim">not run for this geometry</span></div>
+        <button id="btn-fastaero" class="secondary">Run fast aero</button>
+      </section>
+      <section id="cfd-panel">
+        <h3>CFD <span class="badge cfd">CFD verified</span></h3>
+        <div class="dim">No CFD results yet — approve a geometry and export a half-model from chat to run OpenFOAM.</div>
+      </section>
+    </details>
   </div>
 </div>
 
 <div id="toast-stack"></div>
 
-<script type="module" src="cockpit.js?v=bcd1"></script>
+<script type="module" src="cockpit.js?v=rq1"></script>
 <noscript>The cockpit needs JavaScript.</noscript>
 </body>
 </html>

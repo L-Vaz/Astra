@@ -83,7 +83,7 @@ class AeroEstimate(BaseModel):
 # component estimates
 # ---------------------------------------------------------------------------
 
-def _mean_tc(params: BWBParams) -> float:
+def mean_tc(params: BWBParams) -> float:
     """Area-weighted mean thickness ratio across the two panels."""
     c_root, c_mid, c_tip = params.chords()
     b1, b2 = params.half_widths()
@@ -95,13 +95,13 @@ def _mean_tc(params: BWBParams) -> float:
     return (a1 * (t_root + t_mid) / 2.0 + a2 * (t_mid + t_tip) / 2.0) / (a1 + a2)
 
 
-def _effective_le_sweep_deg(params: BWBParams) -> float:
+def effective_le_sweep_deg(params: BWBParams) -> float:
     """Half-width-weighted leading-edge sweep of the two panels."""
     b1, b2 = params.half_widths()
     return (b1 * params.sweep_inner_deg + b2 * params.sweep_outer_deg) / (b1 + b2)
 
 
-def _effective_c4_sweep_deg(params: BWBParams) -> float:
+def effective_c4_sweep_deg(params: BWBParams) -> float:
     """Half-width-weighted quarter-chord sweep (governs CLmax and lift slope).
     Per trapezoid: tan(Lc/4) = tan(LLE) - 0.25*(cr - ct)/half_width."""
     c_root, c_mid, c_tip = params.chords()
@@ -142,7 +142,7 @@ def oswald_efficiency(ar: float, le_sweep_deg: float) -> float:
 def parasite_drag_coeff(params: BWBParams, re_mac: float) -> float:
     """Wetted-area buildup: CD0 = Cf * FF * (Swet/Sref) * interference margin.
     All-wing aircraft: exposed area = reference area (no fuselage)."""
-    tc = _mean_tc(params)
+    tc = mean_tc(params)
     cf = skin_friction_coeff(re_mac)
     ff = form_factor(tc)
     swet_ratio = 1.977 + 0.52 * tc  # Raymer wetted-area fit for wings
@@ -152,7 +152,7 @@ def parasite_drag_coeff(params: BWBParams, re_mac: float) -> float:
 def cl_max_3d(params: BWBParams) -> float:
     """Section CLmax knocked down for finite span and quarter-chord sweep
     (Raymer: CLmax ~ 0.9 * Clmax * cos(Lc/4))."""
-    sweep = math.radians(_effective_c4_sweep_deg(params))
+    sweep = math.radians(effective_c4_sweep_deg(params))
     return CL_MAX_2D * CL_MAX_3D_FACTOR * math.cos(sweep)
 
 
@@ -193,7 +193,7 @@ def estimate(params: BWBParams, rho_kgm3: float, v_ms: float, weight_n: float,
     re_mac = rho_kgm3 * v_ms * mac / MU_AIR
 
     cd0 = parasite_drag_coeff(params, re_mac)
-    sweep_eff = _effective_le_sweep_deg(params)
+    sweep_eff = effective_le_sweep_deg(params)
     e = oswald_efficiency(ar, sweep_eff)
 
     cl = weight_n / (q * s)

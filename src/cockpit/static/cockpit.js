@@ -9,7 +9,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import * as AERO from './aero_mirror.js?v=bcd1';
+import * as AERO from './aero_mirror.js?v=rq1';
+import * as REQ from './req_panel.js?v=rq1';
+import * as WHY from './why_panel.js?v=rq1';
 
 const MU_AIR = 1.81e-5;
 const PAYLOAD_FRACTION = 0.30;
@@ -38,13 +40,13 @@ const S = {
   halfOn: false,
   candidates: [],
   candGenerated: null,
-  browse: false,          // Designs tab: viewport carousel mode
+  browse: false,          // Suggest designs: viewport carousel mode
   candIdx: 0,
   preBrowseParams: null,  // params to restore when leaving browse without adopting
   hudOpen: false,         // design-details dropdown expanded?
-  goalsOpen: false,       // goal-sliders dropdown expanded?
-  goalVals: null,         // {ld, stall, span} for the currently browsed design
   analysisKey: null,      // candidate key shown in the Analysis overlay
+  requirements: null,     // DesignRequirements (flight condition + targets)
+  reqStatus: null,        // server-computed status of built geometry vs requirements
 };
 
 const PARAM_META = {
@@ -227,6 +229,9 @@ function initThree() {
   };
   new ResizeObserver(() => { resize(); requestRender(); }).observe(canvas);
   resize();
+  // headless/hidden panes: ResizeObserver and rAF may never fire — let the
+  // debug API force a buffer resize + render (used by snapshot tooling)
+  if (window.__astra) window.__astra.resize = () => { resize(); renderer.render(scene, camera); };
   controls.addEventListener('change', requestRender);
   // render on demand — a continuous 60 fps loop starves software WebGL
   (function loop() {
@@ -667,19 +672,10 @@ function latestGeoVersion() {
 }
 
 /* ------------------------------------------------------- design candidates
- * Browsing happens in the CENTER: the viewport becomes a carousel (‹ › arrows
- * or arrow keys), the 3D preview morphs to each design, and a HUD overlay
- * shows that design's metric table, trade-offs, and actions. The sidebar
- * collapses while browsing — no card list. */
-function buildDesignsTab() {
-  const pane = document.getElementById('tab-designs');
-  pane.innerHTML = `
-    <div class="group-title">Design candidates</div>
-    <div class="ctl-info">Browsing happens in the 3D viewport: flip through the
-    designs with the ‹ › arrows (or ←/→ keys). Metrics, trade-offs, and
-    screen/promote actions sit on the panel under the model.</div>`;
-}
-
+ * Demoted from a tab to the "Suggest designs" viewport button. Browsing
+ * happens in the CENTER: the viewport becomes a carousel (‹ › arrows or
+ * arrow keys), the 3D preview morphs to each design, and a HUD overlay
+ * shows that design's metric table, trade-offs, and actions. */
 function setBrowseMode(on) {
   if (on === S.browse) { if (on) showCandidate(S.candIdx); return; }
   S.browse = on;
@@ -705,136 +701,18 @@ function showCandidate(i) {
   if (!S.candidates.length) { renderCandHud(); return; }
   S.candIdx = ((i % S.candidates.length) + S.candidates.length) % S.candidates.length;
   S.params = { ...S.candidates[S.candIdx].params };
-  S.goalVals = null;   // goals are per-design; re-seed from this candidate
   syncAll();
   renderCandHud();
 }
 
-/* ------------------------------------------------ goal-based resize (tier 0)
- * Inverse design at equation level: hold the candidate's shape fractions
- * (taper, sweeps, twist, thickness, body fraction) and solve wing area +
- * aspect ratio toward a target cruise L/D, subject to a stall-speed cap
- * (launch method AND user goal) and a span cap. Reports which limit binds. */
-function solveGoals(p0, ctx, goals) {
-  const shape = { ...p0 };
-  const launchCap = AERO.LAUNCH_VSTALL_MAX[ctx.launch] ?? 99;
-  const stallCap = Math.min(goals.stall, launchCap);
-  const spanCap = Math.min(goals.span, 3.0);
-  const q = 0.5 * ctx.rho * ctx.v * ctx.v;
-
-  const build = (s, ar) => {
-    let span = Math.max(0.8, Math.min(Math.sqrt(ar * s), spanCap));
-    const b1 = shape.centre_body_fraction * span / 2, b2 = span / 2 - b1;
-    const kk = b1 * (1 + shape.mid_chord_frac)
-      + b2 * (shape.mid_chord_frac + shape.mid_chord_frac * shape.taper_outer);
-    return { ...shape, span_m: span, root_chord_m: Math.max(0.25, s / kk) };
-  };
-
-  let s = AERO.planformArea(p0);
-  let ar = p0.span_m * p0.span_m / s;
-  let params = build(s, ar);
-  let est = AERO.estimate(params, ctx);
-  for (let i = 0; i < 60; i++) {
-    if (est.ldCruise >= goals.ld - 0.05) break;
-    let changed = false;
-    // shrink/grow the wing toward CL*, bounded by the stall floor + CL cap
-    const sFloor = Math.max(
-      2 * ctx.w / (ctx.rho * stallCap * stallCap * est.clMax3d),  // stall
-      ctx.w / (q * 0.75));                                        // cruise-CL cap
-    const sNew = Math.max(ctx.w / (q * est.clStar), sFloor);
-    if (Math.abs(sNew - s) / s > 1e-3) { s = sNew; changed = true; }
-    // spend remaining span budget on aspect ratio
-    if (ar < 10 && Math.sqrt(ar * s) < spanCap - 1e-3) { ar = Math.min(10, ar + 0.25); changed = true; }
-    params = build(s, ar);
-    est = AERO.estimate(params, ctx);
-    if (!changed) break;
-  }
-
-  let binding = '';
-  if (est.ldCruise >= goals.ld - 0.05) {
-    binding = 'target met';
-  } else {
-    const sFloor = 2 * ctx.w / (ctx.rho * stallCap * stallCap * est.clMax3d);
-    if (s <= sFloor * 1.001 && est.cl < est.clStar * 0.98) {
-      binding = stallCap === launchCap
-        ? `stall floor binds: ${ctx.launch} launch tolerates ≤ ${launchCap} m/s — a faster launch method would unlock more`
-        : `your ${goals.stall.toFixed(1)} m/s stall goal binds — relax it for more L/D`;
-    } else if (Math.sqrt(ar * s) >= spanCap - 1e-3) {
-      binding = `span cap ${spanCap.toFixed(2)} m binds — allow more span for more L/D`;
-    } else if (ar >= 10) {
-      binding = 'aspect-ratio gate (10) reached';
-    } else {
-      binding = 'physics limit for this planform family';
-    }
-  }
-  return { params, est, binding };
-}
-
-function goalBoxHtml(c) {
-  const est0 = AERO.estimate(c.params, aeroCtx(S.mission));
-  if (!S.goalVals) S.goalVals = {
-    ld: Math.round(est0.ldCruise * 2) / 2,
-    stall: est0.launchLimit ?? 12,
-    span: 3.0,
-  };
-  const g = S.goalVals;
-  return `
-    <details class="goal-dd" ${S.goalsOpen ? 'open' : ''}>
-      <summary>🎯 Design to goals <span class="badge instant">equation</span></summary>
-      <div class="goal-row"><label>Target cruise L/D</label>
-        <input type="range" id="goal-ld" min="8" max="22" step="0.5" value="${g.ld}">
-        <span class="goal-val" id="goal-ld-v">${g.ld.toFixed(1)}</span></div>
-      <div class="goal-row"><label>Max stall speed</label>
-        <input type="range" id="goal-stall" min="7" max="16" step="0.5" value="${g.stall}">
-        <span class="goal-val" id="goal-stall-v">${g.stall.toFixed(1)} m/s</span></div>
-      <div class="goal-row"><label>Max span</label>
-        <input type="range" id="goal-span" min="1" max="3" step="0.05" value="${g.span}">
-        <span class="goal-val" id="goal-span-v">${g.span.toFixed(2)} m</span></div>
-      <div id="goal-result" class="cand-obj" style="margin-top:6px">move a slider —
-        the wing re-sizes live (shape proportions stay, area + aspect ratio solve)</div>
-      <div class="ver-actions" style="margin-top:6px">
-        <button id="goal-reset">Reset to candidate</button>
-      </div>
-    </details>`;
-}
-
-function wireGoalBox(c) {
-  const dd = document.querySelector('.goal-dd');
-  if (!dd) return;
-  dd.addEventListener('toggle', (e) => { S.goalsOpen = e.target.open; });
-  const solve = () => {
-    const g = S.goalVals = {
-      ld: +document.getElementById('goal-ld').value,
-      stall: +document.getElementById('goal-stall').value,
-      span: +document.getElementById('goal-span').value,
-    };
-    document.getElementById('goal-ld-v').textContent = g.ld.toFixed(1);
-    document.getElementById('goal-stall-v').textContent = `${g.stall.toFixed(1)} m/s`;
-    document.getElementById('goal-span-v').textContent = `${g.span.toFixed(2)} m`;
-    const { params, est, binding } = solveGoals(c.params, aeroCtx(S.mission), g);
-    S.params = { ...params };
-    syncAll();
-    const met = binding === 'target met';
-    document.getElementById('goal-result').innerHTML =
-      `achieved <b>L/D ${est.ldCruise.toFixed(1)}</b> · stall ${est.vStall.toFixed(1)} m/s · ` +
-      `span ${est.span.toFixed(2)} m · AR ${est.ar.toFixed(2)} · ` +
-      `wing loading ${est.wingLoading.toFixed(1)} kg/m²<br>` +
-      (met ? '<span style="color:var(--ok)">target met</span>'
-           : `<span style="color:var(--warn)">◈ ${binding}</span>`) +
-      '<br><span class="dim">use “Edit this design” to keep this shape, or Reset to discard</span>';
-  };
-  for (const id of ['goal-ld', 'goal-stall', 'goal-span'])
-    document.getElementById(id).addEventListener('input', solve);
-  document.getElementById('goal-reset').addEventListener('click', () => {
-    S.params = { ...c.params };
-    S.goalVals = null;
-    syncAll();
-    renderCandHud();
-    toast('ok', 'Geometry reset to the candidate — goal edits discarded.');
-  });
-}
+/* Goal-based inverse design moved SERVER-SIDE: the requirements panel
+ * (req_panel.js -> POST /api/requirements -> domain_packs/bwb/inverse.py) is
+ * the single source of truth. The old JS solveGoals/goalBox re-implementation
+ * was deleted to eliminate mirror drift. */
 
 function aeroCtx(mission) {
+  // requirements are the authoritative flight condition when present
+  if (S.requirements) return REQ.flightCtx();
   const rho = isaDensity(+mission.cruise_altitude_m);
   const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
   const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
@@ -932,7 +810,6 @@ function renderCandHud() {
         <ul>${c.provenance.map(x => `<li>${x}</li>`).join('')}</ul>
         <div class="dim" style="margin-top:4px">Assumptions: ${c.panel.assumptions.join(' · ')}</div>
       </details>
-      ${goalBoxHtml(c)}
       <div class="ver-actions">
         <button data-act="screen" ${c.status === 'discarded' ? 'disabled' : ''}>Screen (VSPAERO)</button>
         <button data-act="promote" ${c.status === 'discarded' ? 'disabled' : ''}>Promote to main</button>
@@ -945,21 +822,21 @@ function renderCandHud() {
   hud.querySelector('.cand-dd').addEventListener('toggle', (e) => {
     S.hudOpen = e.target.open;   // remember across design flips
   });
-  wireGoalBox(c);
   hud.querySelector('[data-act=screen]').addEventListener('click', () => openAnalysis(c.key));
   hud.querySelector('[data-act=promote]').addEventListener('click', () => promoteCandidate(c.key));
   hud.querySelector('[data-act=discard]').addEventListener('click', () => discardCandidate(c.key));
   hud.querySelector('[data-act=regen]').addEventListener('click', () => generateCandidates(true));
   hud.querySelector('[data-act=edit]').addEventListener('click', () => {
     S.preBrowseParams = null;           // keep this design in the editor
-    switchTab('geometry');
-    toast('ok', `"${c.title}" kept in the editor — tweak it in Geometry, then Apply Revision to build it.`);
+    exitBrowse();
+    document.getElementById('det-geometry').open = true;
+    toast('ok', `"${c.title}" kept in the editor — tweak it under Geometry, then Apply to build it.`);
   });
 }
 
-function switchTab(name) {
-  const btn = document.querySelector(`.tab[data-tab=${name}]`);
-  if (btn) btn.click();
+function exitBrowse() {
+  document.getElementById('btn-suggest').classList.remove('active');
+  setBrowseMode(false);
 }
 
 /* --------------------------------------------------------- analysis overlay
@@ -1182,41 +1059,27 @@ function renderDerived() {
   document.getElementById('dim-overlay').textContent = dims;
 }
 
-function renderAeroEst() {
-  const el = document.getElementById('aeroest-list');
-  if (!el) return;
-  let est;
-  try { est = AERO.estimate(S.params, aeroCtx(S.mission)); }
-  catch { el.innerHTML = '<span class="dim">geometry invalid — no estimate</span>'; return; }
-  let base = null;
-  if (S.applied) {
-    try { base = AERO.estimate(S.applied, aeroCtx(S.savedMission || S.mission)); } catch {}
+/* The old "Aero estimates" list is superseded by the why panel
+ * (why_panel.js), which shows the same metrics with click-to-derive. */
+
+function renderStale() {
+  const chip = document.getElementById('stale-chip');
+  if (!chip) return;
+  if (!S.appliedIsBuilt) { chip.classList.add('hidden'); return; }
+  if (isDirty()) {
+    chip.textContent = '⚠ preview differs from the built STL — Apply to rebuild';
+    chip.classList.remove('hidden');
+    return;
   }
-  const row = (label, val, baseVal, dp, unit = '', warn = '') => {
-    let delta = '';
-    if (baseVal != null && Math.abs(val - baseVal) > Math.abs(baseVal) * 1e-4 + 1e-9) {
-      const d = val - baseVal;
-      delta = ` <span class="aer-delta">(${d > 0 ? '+' : ''}${d.toFixed(dp)})</span>`;
-    }
-    return `<span class="k">${label}</span><span class="v${delta ? ' changed' : ''}">` +
-      `${val.toFixed(dp)}${unit}${warn}${delta}</span>`;
-  };
-  el.innerHTML =
-    row('L/D at cruise CL', est.ldCruise, base?.ldCruise, 1) +
-    row(`best L/D (at CL* ${est.clStar.toFixed(2)})`, est.ldMax, base?.ldMax, 1) +
-    row('Stall speed', est.vStall, base?.vStall, 1, ' m/s',
-        est.launchOk === false ? ' ⚠' : '') +
-    row('Neutral point x', est.xNp, base?.xNp, 3, ' m') +
-    row('CG for 8% SM', est.xCgTarget, base?.xCgTarget, 3, ' m') +
-    row('Parasite CD0', est.cd0, base?.cd0, 4) +
-    row('Oswald e (est)', est.e, base?.e, 3) +
-    row('Root bending ~', est.bending, base?.bending, 1, ' N·m') +
-    `<span class="k">Tip Reynolds</span><span class="v">${est.tipRe.toExponential(2)}` +
-    `${est.tipRe < 1.5e5 ? ' ⚠ low' : ''}</span>` +
-    (est.launchOk === false
-      ? `<span class="k" style="color:var(--warn)">launch</span>` +
-        `<span class="v" style="color:var(--warn)">stall > ${est.launchLimit} m/s ${S.mission.launch} limit</span>`
-      : '');
+  const unmet = (S.reqStatus && S.reqStatus.unmet) || [];
+  if (unmet.length) {
+    chip.textContent = `⚠ built geometry no longer meets: ${unmet.map(u =>
+      ({ cl_cruise_target: 'CL target', ld_min: 'L/D', v_stall_max_ms: 'stall',
+         span_max_m: 'span' }[u] || u)).join(', ')} — Re-solve, then Apply`;
+    chip.classList.remove('hidden');
+  } else {
+    chip.classList.add('hidden');
+  }
 }
 
 function renderConsequences() {
@@ -1364,9 +1227,13 @@ async function refreshVersions() {
   if (!r.ok) return;
   const b = await r.json();
   S.versions = b.versions;
+  S.requirements = b.requirements;
+  S.reqStatus = b.requirements_status;
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
   buildVersionsTab();
+  REQ.renderFromState();
+  renderStale();
 }
 
 /* ----------------------------------------------------------------- helpers */
@@ -1389,10 +1256,12 @@ function syncAll(skipMesh) {
     document.querySelectorAll('.ctl').forEach(c => c._sync && c._sync());
     if (!skipMesh) refreshPreviewMesh();
     renderDerived();
-    renderAeroEst();
+    WHY.refresh();
+    REQ.refreshAchieved();
     renderConsequences();
     renderIssues();
     renderFast();
+    renderStale();
     applyDisplayModes();
   }, 16);
 }
@@ -1417,16 +1286,19 @@ async function boot() {
   S.geomVersion = b.geometry.valid ? b.geometry.version : 0;
   S.appliedIsBuilt = !!(b.geometry.valid && b.geometry.report);
   S.fast = b.fast_aero; S.fastForVersion = S.geomVersion;
+  S.requirements = b.requirements;
+  S.reqStatus = b.requirements_status;
 
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
 
   buildMissionTab();
-  buildDesignsTab();
   buildGeometryTab();
   buildVersionsTab();
   renderSizing();
   fetchCandidates();
+  REQ.init({ S, toast, syncAll });
+  WHY.init({ S });
 
   // mission inputs initial values
   document.querySelectorAll('[data-mkey]').forEach(inp => {
@@ -1477,13 +1349,15 @@ async function boot() {
   document.getElementById('btn-right').addEventListener('click', () =>
     document.getElementById('main').classList.toggle('right-collapsed'));
   document.getElementById('btn-fastaero').addEventListener('click', runFastAero);
-  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
-    t.classList.add('active');
-    document.getElementById('tab-' + t.dataset.tab).classList.add('active');
-    setBrowseMode(t.dataset.tab === 'designs');
-  }));
+  document.getElementById('btn-suggest').addEventListener('click', (e) => {
+    const on = !S.browse;
+    e.target.classList.toggle('active', on);
+    setBrowseMode(on);
+  });
+  document.getElementById('btn-verify').addEventListener('click', () => {
+    document.getElementById('det-solver').open = true;
+    runFastAero();
+  });
   document.getElementById('cand-prev').addEventListener('click', () => showCandidate(S.candIdx - 1));
   document.getElementById('cand-next').addEventListener('click', () => showCandidate(S.candIdx + 1));
   window.addEventListener('keydown', (e) => {

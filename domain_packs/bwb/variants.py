@@ -10,7 +10,6 @@ trade-off sentences against the baseline.
 Deterministic and closed-form throughout — no LLM, no solver. Candidates are
 *hypotheses*: VSPAERO screening (tier 1) and OpenFOAM (tier 2) judge them.
 """
-import math
 from typing import Callable, List, Optional
 
 from pydantic import BaseModel, Field
@@ -18,9 +17,10 @@ from pydantic import BaseModel, Field
 from .aero_estimates import (AeroEstimate, LAUNCH_VSTALL_MAX, cl_max_3d,
                              estimate)
 from .defaults import MAX_CRUISE_CL
+from .inverse import MIN_TIP_CHORD as _MIN_TIP_CHORD  # noqa: F401 (re-export)
+from .inverse import ShapeFractions, solve_planform
 from .schema import BWBParams, MissionDerived
 
-_MIN_TIP_CHORD = 0.042  # m; geometry gate is 0.040 — keep a hair of margin
 _TIP_RE_WARN = 1.5e5
 
 
@@ -96,40 +96,11 @@ LENSES: List[_Lens] = [
 
 def _solve_planform(s_ref: float, lens: _Lens,
                     notes: Optional[List[str]] = None) -> BWBParams:
-    """Build a valid BWBParams with lens proportions hitting s_ref exactly,
-    clamping span/AR/tip-chord into the geometry gates."""
-    ar = lens.ar
-    span = math.sqrt(ar * s_ref)
-    if span > 3.0:
-        span = 3.0
-        ar = span ** 2 / s_ref
-        if notes is not None:
-            notes.append(f"Span capped at 3.0 m (schema): AR falls to {ar:.2f}")
-    if span < 0.8:
-        span = 0.8
-        ar = span ** 2 / s_ref
-
-    cbf, mf = lens.centre_body_fraction, lens.mid_chord_frac
-    taper = lens.taper_outer
-    for _ in range(20):
-        b1 = cbf * span / 2.0
-        b2 = span / 2.0 - b1
-        k = b1 * (1 + mf) + b2 * (mf + mf * taper)
-        root_chord = s_ref / k
-        if root_chord * mf * taper >= _MIN_TIP_CHORD or taper >= 0.7:
-            break
-        taper = min(0.7, taper + 0.05)  # widen the tip until manufacturable
-    if taper != lens.taper_outer and notes is not None:
-        notes.append(f"Taper relaxed to {taper:.2f} to keep tip chord above 42 mm")
-
-    return BWBParams(
-        span_m=span, root_chord_m=root_chord, centre_body_fraction=cbf,
-        mid_chord_frac=mf, taper_outer=taper,
-        sweep_inner_deg=lens.sweep_inner_deg, sweep_outer_deg=lens.sweep_outer_deg,
-        root_thickness_pct=lens.root_thickness_pct,
-        tip_thickness_pct=lens.tip_thickness_pct,
-        root_twist_deg=lens.root_twist_deg, tip_twist_deg=lens.tip_twist_deg,
-        dihedral_deg=lens.dihedral_deg)
+    """Build a valid BWBParams with lens proportions hitting s_ref exactly.
+    Thin wrapper over inverse.solve_planform (the lens-independent
+    generalization); clamps and note wording are identical."""
+    shape = ShapeFractions(**{k: getattr(lens, k) for k in ShapeFractions.model_fields})
+    return solve_planform(s_ref, lens.ar, shape, notes=notes)
 
 
 def _size_wing(lens: _Lens, derived: MissionDerived,

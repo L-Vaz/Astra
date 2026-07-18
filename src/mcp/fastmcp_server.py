@@ -766,6 +766,100 @@ async def build_geometry(request: BuildGeometryRequest, ctx: Context) -> BuildGe
         raise
 
 
+class SetRequirementsRequest(BaseModel):
+    """Solve the geometry from engineering requirements (requirements-first)."""
+    session_id: str
+    requirements: Dict[str, Any] = Field(
+        description="Partial DesignRequirements fields, merged over the session's saved "
+                    "requirements: mtow_kg, cruise_speed_ms, cruise_altitude_m, launch, "
+                    "cl_cruise_target, ld_min, v_stall_max_ms, span_max_m. "
+                    "Set a target to null to drop that requirement.")
+    keep_shape: bool = Field(default=True,
+                             description="Hold the current design's shape fractions so the "
+                                         "change morphs the existing design instead of resetting it")
+    apply: bool = Field(default=False,
+                        description="True: also OpenVSP-build the solved geometry as a new "
+                                    "geometry version (slow); False: solve only")
+
+
+class SetRequirementsResponse(BaseModel):
+    session_id: str
+    requirements_version: int
+    proposed_params: Dict[str, Any]
+    panel: Dict[str, Any] = Field(description="Closed-form metric panel of the solved design")
+    statuses: List[Dict[str, Any]] = Field(description="Per-requirement target vs achieved")
+    binding_constraint: Optional[str] = Field(description="Machine key of the limit that "
+                                              "stopped the solver, or null when all targets met")
+    binding_explanation: str
+    notes: List[str]
+    geometry_version: Optional[int] = Field(description="Set when apply=True built the STL")
+
+
+@mcp.tool(name="set_requirements")
+async def set_requirements(request: SetRequirementsRequest, ctx: Context) -> SetRequirementsResponse:
+    """Requirements-first design: state engineering requirements (cruise CL target,
+    minimum L/D, maximum stall speed, span cap, flight condition) and get back a
+    deterministically solved BWB geometry with per-requirement status and the named
+    binding constraint when a target is unreachable. Closed-form inverse sizing —
+    microseconds, no LLM, no solver. Shares the requirements store with the cockpit,
+    so both stay in sync. Use apply=true to also rebuild the authoritative STL."""
+    from domain_packs.bwb.inverse import solve_requirements
+    from domain_packs.bwb.requirements import DesignRequirements
+    try:
+        req_fields = set(DesignRequirements.model_fields)
+        saved = ds.latest_requirements(request.session_id) or {}
+        merged = {k: v for k, v in saved.items() if k in req_fields}
+        if not merged:  # session predates the requirements store: seed from the plan
+            plan_dir = ds.latest_dir(request.session_id, "plan")
+            if plan_dir:
+                with open(os.path.join(plan_dir, "mission_derived.json")) as f:
+                    d = MissionDerived.model_validate_json(f.read())
+                merged = {"mtow_kg": d.mtow_kg,
+                          "cruise_speed_ms": d.mission.cruise_speed_ms,
+                          "cruise_altitude_m": d.mission.cruise_altitude_m,
+                          "launch": d.mission.launch}
+        merged.update({k: v for k, v in request.requirements.items() if k in req_fields})
+        requirements = DesignRequirements.model_validate(merged)
+
+        shape_from = None
+        if request.keep_shape:
+            geo_dir = ds.latest_dir(request.session_id, "geometry")
+            if geo_dir and os.path.exists(os.path.join(geo_dir, "params.json")):
+                with open(os.path.join(geo_dir, "params.json")) as f:
+                    shape_from = BWBParams.model_validate_json(f.read())
+
+        result = solve_requirements(requirements, shape_from=shape_from)
+        version = ds.save_requirements(request.session_id, requirements.model_dump())
+        await ctx.info(f"Requirements v{version} solved: "
+                       + (result.binding_explanation if result.binding_constraint
+                          else "all targets met"))
+
+        geometry_version = None
+        if request.apply:
+            vdir = ds.new_version_dir(request.session_id, "geometry")
+            report = build_geometry_svc(result.params, vdir)
+            geometry_version = ds.record_version(request.session_id, "geometry", {
+                "source": "set_requirements",
+                "requirements_version": version,
+                "passed": report.all_gates_pass,
+            })
+
+        return SetRequirementsResponse(
+            session_id=request.session_id,
+            requirements_version=version,
+            proposed_params=result.params.model_dump(),
+            panel=json.loads(result.panel.model_dump_json()),
+            statuses=[s.model_dump() for s in result.requirements],
+            binding_constraint=result.binding_constraint,
+            binding_explanation=result.binding_explanation,
+            notes=result.notes,
+            geometry_version=geometry_version,
+        )
+    except Exception as e:
+        await ctx.error(f"set_requirements failed: {e}")
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Astra stage tools: run_fast_aero, generate_mesh, run_simulation,
 # evaluate_results.  Session layout: runs/design_sessions/<sid>/<stage>/v<N>/
