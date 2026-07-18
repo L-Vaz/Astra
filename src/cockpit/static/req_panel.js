@@ -242,15 +242,17 @@ export function init(context) {
   const targetKeys = Object.entries(REQ_META).filter(([, m]) => m.kind === 'target');
   for (const [k, m] of flightKeys) pane.appendChild(buildRow(k, m));
 
+  // per-method stall caps come from the server (aero_estimates.LAUNCH_VSTALL_MAX)
+  const LAUNCH_LABELS = { hand: 'Hand launch', catapult: 'Catapult', runway: 'Runway' };
+  const caps = (C.S.reqMeta && C.S.reqMeta.launch_vstall_max) || {};
+  const opts = (Object.keys(caps).length ? Object.entries(caps) : [['hand'], ['catapult'], ['runway']])
+    .map(([k, v]) => `<option value="${k}">${LAUNCH_LABELS[k] || k}${v != null ? ` (stall ≤ ${v} m/s)` : ''}</option>`)
+    .join('');
   const launch = document.createElement('div');
   launch.className = 'req-row';
   launch.innerHTML = `
     <div class="req-head"><label>Launch method</label></div>
-    <div class="ctl-row"><select id="req-launch" style="flex:1">
-      <option value="hand">Hand launch (stall ≤ 10.5 m/s)</option>
-      <option value="catapult">Catapult (stall ≤ 13 m/s)</option>
-      <option value="runway">Runway (stall ≤ 16 m/s)</option>
-    </select></div>
+    <div class="ctl-row"><select id="req-launch" style="flex:1">${opts}</select></div>
     <div class="req-hint">hard stall tolerance — the tightest limit of this and your stall requirement wins</div>`;
   launch.querySelector('select').addEventListener('change', () => requestSolve(true));
   pane.appendChild(launch);
