@@ -204,11 +204,7 @@ def save_requirements(session_id: str, payload: dict) -> int:
     _load(session_id)  # raises on unknown session
     root = _requirements_dir(session_id)
     idx_path = os.path.join(root, "index.json")
-    latest = 0
-    if os.path.exists(idx_path):
-        with open(idx_path) as f:
-            latest = json.load(f).get("latest", 0)
-    n = latest + 1
+    n = _latest_requirements_version(session_id) + 1
     vdir = os.path.join(root, f"v{n}")
     os.makedirs(vdir, exist_ok=True)
     with open(os.path.join(vdir, "requirements.json"), "w") as f:
