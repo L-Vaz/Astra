@@ -10,20 +10,43 @@
  */
 import * as AERO from './aero_mirror.js?v=rq1';
 
+/* Presentation only — validity bounds come from the served
+ * DesignRequirements json-schema (S.reqSchema), i.e. the pydantic Field
+ * constraints. uiMin may NARROW a uselessly loose schema floor (mtow gt=0,
+ * ld gt=0) for slider ergonomics; it can never widen the schema range. */
 const REQ_META = {
-  mtow_kg:          { label: 'Takeoff mass', unit: 'kg', min: 0.5, max: 25, step: 0.1, dp: 1,
+  mtow_kg:          { label: 'Takeoff mass', unit: 'kg', step: 0.1, dp: 1, uiMin: 0.5,
                       kind: 'flight', hint: 'the weight the wing must carry' },
-  cruise_speed_ms:  { label: 'Cruise speed', unit: 'm/s', min: 8, max: 60, step: 0.5, dp: 1,
+  cruise_speed_ms:  { label: 'Cruise speed', unit: 'm/s', step: 0.5, dp: 1,
                       kind: 'flight', hint: 'sets dynamic pressure q = ½ρV²' },
-  cl_cruise_target: { label: 'Cruise CL =', unit: '', min: 0.10, max: 0.75, step: 0.01, dp: 2,
+  cl_cruise_target: { label: 'Cruise CL =', unit: '', step: 0.01, dp: 2,
                       kind: 'target', hint: 'equality: sets wing area S = W/(q·CL). Off = size to best-L/D CL*' },
-  ld_min:           { label: 'Cruise L/D ≥', unit: '', min: 5, max: 40, step: 0.5, dp: 1,
+  ld_min:           { label: 'Cruise L/D ≥', unit: '', step: 0.5, dp: 1, uiMin: 5,
                       kind: 'target', hint: 'objective: solver raises aspect ratio until met or a limit binds' },
-  v_stall_max_ms:   { label: 'Stall speed ≤', unit: 'm/s', min: 5, max: 20, step: 0.1, dp: 1,
+  v_stall_max_ms:   { label: 'Stall speed ≤', unit: 'm/s', step: 0.1, dp: 1,
                       kind: 'target', hint: 'hard: floors the wing area (launch method also caps this)' },
-  span_max_m:       { label: 'Span ≤', unit: 'm', min: 0.8, max: 3.0, step: 0.05, dp: 2,
+  span_max_m:       { label: 'Span ≤', unit: 'm', step: 0.05, dp: 2,
                       kind: 'target', hint: 'hard: transport / handling limit' },
 };
+
+/* Optional pydantic fields arrive as anyOf [{number…}, {null}]; exclusive
+ * bounds are nudged by one step so the slider can never submit a value the
+ * server would reject. */
+function schemaBounds(key, meta) {
+  const prop = (C.S.reqSchema || {})[key] || {};
+  const facet = prop.anyOf ? (prop.anyOf.find(p => p.type === 'number') || {}) : prop;
+  let min = facet.minimum != null ? facet.minimum
+    : facet.exclusiveMinimum != null ? facet.exclusiveMinimum + meta.step : meta.uiMin;
+  let max = facet.maximum != null ? facet.maximum
+    : facet.exclusiveMaximum != null ? facet.exclusiveMaximum - meta.step : meta.uiMax;
+  if (meta.uiMin != null) min = Math.max(min, meta.uiMin);
+  if (meta.uiMax != null) max = Math.min(max, meta.uiMax);
+  return { min, max };
+}
+
+function metTolerances() {
+  return (C.S.reqMeta && C.S.reqMeta.tolerances) || {};
+}
 const STATUS_FIELD = { cl_cruise_target: 'cl', ld_min: 'ldCruise',
                        v_stall_max_ms: 'vStall', span_max_m: 'span' };
 
@@ -125,9 +148,10 @@ export function refreshAchieved() {
     const v = est[field];
     let met = null;
     if (target != null) {
-      if (key === 'ld_min') met = v >= target - 0.05;
-      else if (key === 'cl_cruise_target') met = Math.abs(v - target) <= 0.02 * target;
-      else met = v <= target + (key === 'span_max_m' ? 1e-6 : 0.05);
+      const tol = metTolerances();  // solver-owned (inverse.MET_TOLERANCES)
+      if (key === 'ld_min') met = v >= target - (tol.ld_min || 0);
+      else if (key === 'cl_cruise_target') met = Math.abs(v - target) <= (tol.cl_cruise_target_rel || 0) * target;
+      else met = v <= target + (tol[key] || 0);
     }
     e.row.querySelector('.req-achieved').innerHTML =
       `achieved <span class="${met === false ? 'bad' : 'ok'}">${fmtN(v)}${REQ_META[key].unit ? ' ' + REQ_META[key].unit : ''}</span>`
@@ -164,6 +188,7 @@ function fmtN(v) {
 }
 
 function buildRow(key, meta) {
+  const { min, max } = schemaBounds(key, meta);
   const div = document.createElement('div');
   div.className = 'req-row' + (meta.kind === 'target' ? ' off' : '');
   div.innerHTML = `
@@ -172,8 +197,8 @@ function buildRow(key, meta) {
       <label>${meta.label}</label><span class="unit">${meta.unit}</span>
     </div>
     <div class="ctl-row">
-      <input type="range" min="${meta.min}" max="${meta.max}" step="${meta.step}">
-      <input type="number" min="${meta.min}" max="${meta.max}" step="${meta.step}">
+      <input type="range" min="${min}" max="${max}" step="${meta.step}">
+      <input type="number" min="${min}" max="${max}" step="${meta.step}">
     </div>
     ${meta.kind === 'target' ? '<div class="req-achieved"></div>' : ''}
     <div class="req-hint">${meta.hint}</div>`;
@@ -186,7 +211,7 @@ function buildRow(key, meta) {
   num.addEventListener('change', () => {
     let v = +num.value;
     if (Number.isNaN(v)) { C.toast('warn', `${meta.label}: not a number — reverted.`); renderFromState(); return; }
-    v = Math.min(meta.max, Math.max(meta.min, v));
+    v = Math.min(max, Math.max(min, v));
     num.value = v.toFixed(meta.dp); range.value = v;
     requestSolve(true);
   });
@@ -199,7 +224,7 @@ function buildRow(key, meta) {
         const est = AERO.estimate(C.S.params, flightCtx());
         const seed = est[STATUS_FIELD[key]];
         num.value = (+seed).toFixed(meta.dp); range.value = +seed;
-      } catch { num.value = ((meta.min + meta.max) / 2).toFixed(meta.dp); }
+      } catch { num.value = ((min + max) / 2).toFixed(meta.dp); }
     }
     requestSolve(true);
   });
