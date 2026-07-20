@@ -25,6 +25,7 @@
 | [GMSH] | Gmsh 4.15.2 Reference Manual (official, Geuzaine & Remacle) | https://gmsh.info/doc/texinfo/gmsh.html | fetched 2026-07-10 |
 | [VSP] | OpenVSP API documentation (official) | https://openvsp.org/api_docs/latest/ | fetched 2026-07-10 |
 | [REPO] | The Foam-Agent repo itself + its paper | `user_req_tandem_wing.txt`; arXiv:2509.18178 | in-repo |
+| [USSA] | U.S. Standard Atmosphere, 1976 (NOAA-S/T 76-1562 / NASA-TM-X-74335) | https://ntrs.nasa.gov/citations/19770009539 | fetched and implemented 2026-07-20 |
 
 ---
 
@@ -121,7 +122,7 @@ These are **engineering-judgment values**, chosen by me, not referred from any o
 | BWB parameter hard ranges (sweep 15–60°, t/c 8–20%, etc.) | `schema.py` | judgment |
 | Plausibility band CFD-vs-VLM: ±max(0.15, 60%) | `evaluate.py` | judgment, documented in-code as "coarse-tier, order-of-magnitude check" |
 | CL-target tolerance ±25%; residual threshold 5×10⁻³; force-tail ±5% | `evaluate.py` | convention/judgment |
-| ISA density formula ρ = 1.225(1 − 2.25577×10⁻⁵h)^4.2559 | `defaults.py` | standard ISA troposphere (ISO 2533 / US Standard Atmosphere 1976) — formula is standard, but I did not consult the standard at build time |
+| Standard-atmosphere state from 0–4,000 m (temperature, pressure, density, dynamic and kinematic viscosity) | `atmosphere.py` + versioned CSV/metadata | [USSA] Equations 51–52 and the standard thermodynamic model; generated table is checksum-verified and linearly interpolated |
 | CL_α sanity range 0.02–0.15 /deg; "expected ~0.05–0.09" | `vsp_aero.py` | lifting-line textbook estimate |
 | "y+ ≈ 900 → CL under-prediction expected" interpretation | report | qualitative CFD experience; the 30–300 wall-function validity range is textbook (e.g., Versteeg & Malalasekera), not consulted at build time |
 

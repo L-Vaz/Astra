@@ -1,4 +1,6 @@
 import math
+import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +10,18 @@ from domain_packs.bwb.atmosphere import (
     atmosphere_at,
     atmosphere_table_payload,
 )
+
+
+def test_atmosphere_dataset_is_in_distribution_package_data():
+    repository = Path(__file__).parent.parent
+    config = tomllib.loads((repository / "pyproject.toml").read_text())
+
+    includes = config["tool"]["setuptools"]["packages"]["find"]["include"]
+    package_data = config["tool"]["setuptools"]["package-data"]
+    assert "domain_packs" in includes
+    assert "domain_packs.*" in includes
+    assert "data/*.csv" in package_data["domain_packs.bwb"]
+    assert "data/*.json" in package_data["domain_packs.bwb"]
 
 
 @pytest.mark.parametrize(
