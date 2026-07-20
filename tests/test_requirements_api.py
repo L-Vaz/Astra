@@ -35,6 +35,27 @@ def test_bootstrap_includes_requirements(client):
     assert "requirements" in b and "requirements_status" in b
     assert b["requirements"]["cruise_speed_ms"] == pytest.approx(25.0)
     assert b["requirements_schema"]["title"] == "DesignRequirements"
+    assert b["atmosphere_table"]["row_interval_m"] == 100.0
+    assert len(b["atmosphere_table"]["rows"]) == 41
+    atmosphere = b["derived"]["atmosphere"]
+    assert atmosphere["geometric_altitude_m"] == 100.0
+    assert atmosphere["kinematic_viscosity_m2s"] == pytest.approx(
+        atmosphere["dynamic_viscosity_kgms"] / atmosphere["density_kgm3"]
+    )
+
+
+def test_preview_resolves_interpolated_atmosphere(client):
+    b = _bootstrap(client)
+    mission = {**b["mission"], "cruise_altitude_m": 1275.0}
+
+    r = client.post("/api/preview", json={"mission": mission, "params": b["params"]})
+
+    assert r.status_code == 200
+    atmosphere = r.json()["derived"]["atmosphere"]
+    assert atmosphere["interpolation"]["lower_table_altitude_m"] == 1200.0
+    assert atmosphere["interpolation"]["upper_table_altitude_m"] == 1300.0
+    assert atmosphere["interpolation"]["fraction"] == pytest.approx(0.75)
+    assert atmosphere["density_kgm3"] == pytest.approx(1.081960014904785)
 
 
 def test_requirements_solve_and_persist(client):

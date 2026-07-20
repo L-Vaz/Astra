@@ -6,7 +6,6 @@
  * instant feedback while dragging — VSPAERO (fast) and OpenFOAM (CFD) results
  * always supersede these. Keep in sync with the Python module.
  */
-export const MU_AIR = 1.81e-5;
 export const LAMINAR_FRACTION = 0.30;
 export const INTERFERENCE_MARGIN = 1.10;
 export const CL_MAX_2D = 1.30;
@@ -108,14 +107,16 @@ export function neutralPoint(p) {
 }
 
 /* Full tier-0 panel for one geometry at one flight condition.
- * ctx: { rho, v, w, launch }  (density kg/m3, speed m/s, weight N) */
+ * ctx: { atmosphere, v, w, launch } */
 export function estimate(p, ctx) {
   const s = planformArea(p);
   const ar = +p.span_m * +p.span_m / s;
   const mac = meanAeroChord(p);
   const { cTip } = chords(p);
-  const q = 0.5 * ctx.rho * ctx.v * ctx.v;
-  const reMac = ctx.rho * ctx.v * mac / MU_AIR;
+  const rho = ctx.atmosphere.density_kgm3;
+  const nu = ctx.atmosphere.kinematic_viscosity_m2s;
+  const q = 0.5 * rho * ctx.v * ctx.v;
+  const reMac = ctx.v * mac / nu;
 
   const cd0 = parasiteDrag(p, reMac);
   const e = oswald(ar, effLeSweepDeg(p));
@@ -125,7 +126,7 @@ export function estimate(p, ctx) {
   const clStar = Math.sqrt(cd0 / k);
 
   const clmax = clMax3d(p);
-  const vStall = Math.sqrt(2 * ctx.w / (ctx.rho * s * clmax));
+  const vStall = Math.sqrt(2 * ctx.w / (rho * s * clmax));
   const cap = LAUNCH_VSTALL_MAX[ctx.launch] ?? null;
   const xNp = neutralPoint(p);
 
@@ -140,6 +141,6 @@ export function estimate(p, ctx) {
     launchLimit: cap, launchOk: cap == null ? null : vStall <= cap,
     xNp, xCgTarget: xNp - STATIC_MARGIN_TARGET * mac,
     bending: ctx.w * +p.span_m / 8,
-    tipRe: ctx.rho * ctx.v * cTip / MU_AIR,
+    tipRe: ctx.v * cTip / nu,
   };
 }

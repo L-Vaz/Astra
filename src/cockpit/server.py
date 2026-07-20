@@ -27,8 +27,9 @@ from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
-from domain_packs.bwb.defaults import (  # noqa: E402
-    MU_AIR, PAYLOAD_FRACTION, derive, isa_density)
+from domain_packs.bwb.atmosphere import (  # noqa: E402
+    atmosphere_at, atmosphere_table_payload)
+from domain_packs.bwb.defaults import PAYLOAD_FRACTION, derive  # noqa: E402
 from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX  # noqa: E402
 from domain_packs.bwb.derivation import derive_graph  # noqa: E402
 from domain_packs.bwb.inverse import (  # noqa: E402
@@ -240,20 +241,27 @@ def _planform(raw: Dict[str, Any]) -> Optional[Dict[str, float]]:
 def _instant_derived(mission: Dict[str, Any], raw_params: Dict[str, Any]) -> Dict[str, Any]:
     """Every value here is a mathematical consequence, never a prediction."""
     plan = _planform(raw_params) or {}
-    rho = isa_density(float(mission.get("cruise_altitude_m", 100.0)))
+    atmosphere = atmosphere_at(float(mission.get("cruise_altitude_m", 100.0)))
+    rho = atmosphere.density_kgm3
     v = float(mission.get("cruise_speed_ms", 25.0))
     payload = float(mission.get("payload_kg", 1.0))
     mtow = mission.get("mtow_kg") or payload / PAYLOAD_FRACTION
     q = 0.5 * rho * v ** 2
     w = mtow * 9.81
-    out = {"evidence": "instant",
-           "air_density_kgm3": rho, "dynamic_pressure_pa": q,
+    out = {"evidence": "instant", "atmosphere": atmosphere.model_dump(),
+           "air_temperature_k": atmosphere.temperature_k,
+           "air_pressure_pa": atmosphere.pressure_pa,
+           "air_density_kgm3": rho,
+           "dynamic_viscosity_kgms": atmosphere.dynamic_viscosity_kgms,
+           "kinematic_viscosity_m2s": atmosphere.kinematic_viscosity_m2s,
+           "dynamic_pressure_pa": q,
            "mtow_kg": mtow, "weight_n": w,
            "mtow_assumed": mission.get("mtow_kg") in (None, "", 0)}
     if plan:
         out.update(plan)
         out["required_cl"] = w / (q * plan["s_ref_m2"])
-        out["reynolds_mac"] = rho * v * plan["mac_m"] / MU_AIR
+        out["reynolds_mac"] = (
+            v * plan["mac_m"] / atmosphere.kinematic_viscosity_m2s)
         out["wing_loading_kgm2"] = mtow / plan["s_ref_m2"]
     return out
 
@@ -376,6 +384,7 @@ def bootstrap(session: Optional[str] = None) -> Dict[str, Any]:
         "sessions": _list_sessions()[:12],
         "param_schema": BWBParams.model_json_schema(),
         "mission_schema": MissionSpec.model_json_schema(),
+        "atmosphere_table": atmosphere_table_payload(),
         "mission": mission,
         "params": params,
         "derived": _instant_derived(mission, params) if params else None,
@@ -507,14 +516,16 @@ def explain(req: ExplainRequest) -> Dict[str, Any]:
     except ValidationError as e:
         raise HTTPException(422, detail=[{"message": err["msg"]} for err in e.errors()])
 
-    rho = isa_density(flight.cruise_altitude_m)
+    atmosphere = atmosphere_at(flight.cruise_altitude_m)
     w = flight.mtow_kg * 9.81
     out: Dict[str, Any] = {}
     if "derivation" in req.include:
-        graph = derive_graph(params, rho, flight.cruise_speed_ms, w, flight.launch)
+        graph = derive_graph(params, atmosphere, flight.cruise_speed_ms,
+                             w, flight.launch)
         out["derivation"] = json.loads(graph.model_dump_json())
     if "sensitivity" in req.include:
-        rows = sensitivity_table(params, rho, flight.cruise_speed_ms, w, flight.launch)
+        rows = sensitivity_table(params, atmosphere, flight.cruise_speed_ms,
+                                 w, flight.launch)
         out["sensitivity"] = [r.model_dump() for r in rows]
     if "req_sensitivity" in req.include:
         rows = requirement_sensitivity_table(flight, params)

@@ -9,11 +9,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import * as AERO from './aero_mirror.js?v=rq1';
-import * as REQ from './req_panel.js?v=rq2';
-import * as WHY from './why_panel.js?v=rq2';
+import * as ATMOSPHERE from './atmosphere.js?v=atm1';
+import * as AERO from './aero_mirror.js?v=atm1';
+import * as REQ from './req_panel.js?v=atm1';
+import * as WHY from './why_panel.js?v=atm1';
 
-const MU_AIR = 1.81e-5;
 const PAYLOAD_FRACTION = 0.30;
 const TIP_CHORD_MIN = 0.04;
 const AR_RANGE = [2.5, 10.0];
@@ -49,6 +49,7 @@ const S = {
   reqStatus: null,        // server-computed status of built geometry vs requirements
   reqSchema: null,        // DesignRequirements json-schema properties (bounds)
   reqMeta: null,          // solver met-tolerances + per-launch stall caps
+  atmosphereTable: null,  // canonical server-supplied USSA1976 rows + metadata
 };
 
 const PARAM_META = {
@@ -92,17 +93,18 @@ function planform(p) {
   const mac = (a1 * trapMac(cr, cMid) + a2 * trapMac(cMid, cTip)) / (a1 + a2);
   return { s, mac, ar: span * span / s, cMid, cTip, b1, b2 };
 }
-const isaDensity = (alt) => 1.225 * Math.pow(1 - 2.25577e-5 * alt, 4.2559);
-
 function derived(mission, p) {
   const pf = planform(p);
-  const rho = isaDensity(+mission.cruise_altitude_m);
+  const atmosphere = ATMOSPHERE.resolveAtmosphere(
+    +mission.cruise_altitude_m, S.atmosphereTable);
+  const rho = atmosphere.density_kgm3;
   const v = +mission.cruise_speed_ms;
   const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
   const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
   const q = 0.5 * rho * v * v, w = mtow * 9.81;
-  return { ...pf, rho, q, mtow, mtowGiven, w,
-    cl: w / (q * pf.s), re: rho * v * pf.mac / MU_AIR, wl: mtow / pf.s };
+  return { ...pf, atmosphere, rho, q, mtow, mtowGiven, w,
+    cl: w / (q * pf.s), re: v * pf.mac / atmosphere.kinematic_viscosity_m2s,
+    wl: mtow / pf.s };
 }
 
 function bounds(key) {
@@ -715,10 +717,12 @@ function showCandidate(i) {
 function aeroCtx(mission) {
   // requirements are the authoritative flight condition when present
   if (S.requirements) return REQ.flightCtx();
-  const rho = isaDensity(+mission.cruise_altitude_m);
+  const atmosphere = ATMOSPHERE.resolveAtmosphere(
+    +mission.cruise_altitude_m, S.atmosphereTable);
   const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
   const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
-  return { rho, v: +mission.cruise_speed_ms, w: mtow * 9.81, launch: mission.launch || 'hand' };
+  return { atmosphere, v: +mission.cruise_speed_ms,
+    w: mtow * 9.81, launch: mission.launch || 'hand' };
 }
 
 function evidenceBadges(c) {
@@ -1042,7 +1046,11 @@ function renderDerived() {
   const d = derived(S.mission, S.params);
   const a = S.applied ? derived(S.savedMission || S.mission, S.applied) : null;
   const rows = [
+    ['Air temperature', `${fmt(d.atmosphere.temperature_k, 2)} K`],
+    ['Air pressure', `${fmt(d.atmosphere.pressure_pa, 0)} Pa`],
     ['Air density ρ', `${fmt(d.rho, 4)} kg/m³`],
+    ['Dynamic viscosity μ', `${d.atmosphere.dynamic_viscosity_kgms.toExponential(5)} kg/(m·s)`],
+    ['Kinematic viscosity ν', `${d.atmosphere.kinematic_viscosity_m2s.toExponential(5)} m²/s`],
     ['Dynamic pressure q', `${fmt(d.q, 1)} Pa`],
     ['MTOW' + (d.mtowGiven ? '' : ' (assumed 30% payload fraction)'), `${fmt(d.mtow, 2)} kg`],
     ['Weight', `${fmt(d.w, 1)} N`],
@@ -1233,6 +1241,7 @@ async function refreshVersions() {
   S.reqStatus = b.requirements_status;
   S.reqSchema = b.requirements_schema.properties;
   S.reqMeta = b.requirements_meta;
+  S.atmosphereTable = b.atmosphere_table;
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
   buildVersionsTab();
@@ -1278,6 +1287,7 @@ async function boot() {
   const b = await r.json();
   S.sid = b.session_id;
   S.schema = b.param_schema.properties;
+  S.atmosphereTable = b.atmosphere_table;
   S.mission = { ...b.mission };
   S.savedMission = { ...b.mission };
   S.params = { ...b.params };

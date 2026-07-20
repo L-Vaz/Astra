@@ -8,7 +8,8 @@
  * The only client math is the aero_mirror forward estimate used to refresh
  * "achieved" readouts instantly while the user drags a geometry slider.
  */
-import * as AERO from './aero_mirror.js?v=rq1';
+import * as ATMOSPHERE from './atmosphere.js?v=atm1';
+import * as AERO from './aero_mirror.js?v=atm1';
 
 /* Presentation only — validity bounds come from the served
  * DesignRequirements json-schema (S.reqSchema), i.e. the pydantic Field
@@ -57,8 +58,10 @@ let debounceTimer = null;
 
 export function flightCtx() {
   const r = C.S.requirements;
-  const rho = 1.225 * Math.pow(1 - 2.25577e-5 * (+r.cruise_altitude_m || 0), 4.2559);
-  return { rho, v: +r.cruise_speed_ms, w: +r.mtow_kg * 9.81, launch: r.launch || 'hand' };
+  const atmosphere = ATMOSPHERE.resolveAtmosphere(
+    +r.cruise_altitude_m || 0, C.S.atmosphereTable);
+  return { atmosphere, v: +r.cruise_speed_ms,
+    w: +r.mtow_kg * 9.81, launch: r.launch || 'hand' };
 }
 
 function collect() {
