@@ -2,6 +2,7 @@
 import os
 from utils import save_file, parse_context, retrieve_faiss, FoamPydantic, FoamfilePydantic
 from services.input_writer import initial_write, build_allrun, rewrite_files, read_mesh_boundary_summary
+from services.flow_conditions import enforce_flow_contract_path
 
 
 def _premeshed_boundary_info(state):
@@ -79,6 +80,9 @@ def _rewrite_mode(state):
         mesh_locked=state.get("mesh_type") in ("custom_mesh", "gmsh_mesh"),
         mesh_boundary_info=mesh_boundary_info,
     )
+    enforce_flow_contract_path(
+        state["case_dir"], state.get("flow_conditions_path")
+    )
     print("</input_writer>")
     return out
 
@@ -120,6 +124,9 @@ def _initial_write_mode(state):
         mesh_type=mesh_type,
         mesh_commands=mesh_commands,
         mesh_boundary_info=mesh_boundary_info,
+    )
+    enforce_flow_contract_path(
+        state["case_dir"], state.get("flow_conditions_path")
     )
 
     print("</input_writer>")

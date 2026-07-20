@@ -873,6 +873,11 @@ async def set_requirements(request: SetRequirementsRequest, ctx: Context) -> Set
 from services.vspaero import FastAeroRejected, run_fast_aero as fast_aero_svc
 from services.bwb_mesh import MeshRejected, generate_mesh as mesh_svc
 from services.simulate import SimulationFailed, compose_requirement, run_simulation as sim_svc
+from services.flow_conditions import (
+    build_flow_contract,
+    validate_openfoam_viscosity,
+    write_flow_contract,
+)
 from services.evaluate import evaluate_case
 from domain_packs.bwb.schema import GeometryReport
 
@@ -976,21 +981,47 @@ async def run_simulation(request: RunSimulationRequest, ctx: Context) -> Dict[st
     trim angle of attack."""
     try:
         plan_dir = _require_stage(request.session_id, "plan")
+        geo_dir = _require_stage(request.session_id, "geometry")
         fa_dir = _require_stage(request.session_id, "fast_aero")
         mesh_dir = _require_stage(request.session_id, "mesh")
         derived = MissionDerived.model_validate(
             _load_json(os.path.join(plan_dir, "mission_derived.json")))
+        geometry = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
         fast = _load_json(os.path.join(fa_dir, "fast_aero.json"))
         with open(os.path.join(plan_dir, "enriched_requirement.txt")) as f:
             enriched = f.read()
+        vdir = ds.new_version_dir(request.session_id, "simulation")
+        flow_conditions = build_flow_contract(
+            derived,
+            reference_length_m=geometry.mean_aero_chord_m,
+            reference_area_m2=geometry.s_ref_m2,
+        )
+        flow_conditions_path = os.path.join(vdir, "flow_conditions.json")
+        write_flow_contract(flow_conditions_path, flow_conditions)
         requirement = compose_requirement(
             enriched, derived.mission.cruise_speed_ms,
-            fast["alpha_trim_deg"], request.iterations)
-        vdir = ds.new_version_dir(request.session_id, "simulation")
+            fast["alpha_trim_deg"], request.iterations,
+            flow_conditions=flow_conditions)
         await ctx.info(f"Running Foam-Agent graph in {vdir} (this takes a while)")
-        result = sim_svc(requirement, os.path.join(mesh_dir, "bwb.msh"), vdir)
-        version = ds.record_version(request.session_id, "simulation",
-                                    {"iterations": request.iterations, "passed": True})
+        result = sim_svc(
+            requirement,
+            os.path.join(mesh_dir, "bwb.msh"),
+            vdir,
+            flow_conditions_path=flow_conditions_path,
+        )
+        validate_openfoam_viscosity(result["case_dir"], flow_conditions)
+        version = ds.record_version(request.session_id, "simulation", {
+            "iterations": request.iterations,
+            "passed": True,
+            "atmosphere_source": flow_conditions.atmosphere.source,
+            "atmosphere_dataset_sha256": (
+                flow_conditions.atmosphere.dataset_sha256
+            ),
+            "kinematic_viscosity_m2s": (
+                flow_conditions.atmosphere.kinematic_viscosity_m2s
+            ),
+        })
         return {"session_id": request.session_id, "version": version,
                 "case_dir": result["case_dir"], "log_path": result["log_path"],
                 "simulation_dir": vdir}

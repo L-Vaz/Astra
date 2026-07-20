@@ -13,16 +13,36 @@ import subprocess
 import sys
 from typing import Optional
 
+from services.flow_conditions import FlowConditions
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _MAIN = os.path.join(_REPO_ROOT, "src", "main.py")
 FOAM_BASHRC = os.environ.get("FOAM_BASHRC", "/opt/openfoam10/etc/bashrc")
 
 
 def compose_requirement(enriched_requirement: str, cruise_speed_ms: float,
-                        alpha_deg: float, iterations: int = 600) -> str:
+                        alpha_deg: float, iterations: int = 600,
+                        flow_conditions: Optional[FlowConditions] = None) -> str:
     ux = cruise_speed_ms * math.cos(math.radians(alpha_deg))
     uz = cruise_speed_ms * math.sin(math.radians(alpha_deg))
-    return enriched_requirement + f"""
+    atmosphere_requirement = ""
+    if flow_conditions is not None:
+        atmosphere = flow_conditions.atmosphere
+        atmosphere_requirement = f"""
+Authoritative flow contract (IMPORTANT): use these exact SI values. The
+deterministic input-writer gate will overwrite and read back kinematic
+viscosity before every solver attempt; a mismatch rejects the case.
+altitude_m = {atmosphere.geometric_altitude_m:.17g}
+temperature_k = {atmosphere.temperature_k:.17g}
+pressure_pa = {atmosphere.pressure_pa:.17g}
+density_kgm3 = {atmosphere.density_kgm3:.17g}
+dynamic_viscosity_kgms = {atmosphere.dynamic_viscosity_kgms:.17g}
+kinematic_viscosity_m2s = {atmosphere.kinematic_viscosity_m2s:.17g}
+reference_reynolds = {flow_conditions.reference_reynolds:.17g}
+atmosphere_source = {atmosphere.source}
+atmosphere_dataset_sha256 = {atmosphere.dataset_sha256}
+"""
+    return enriched_requirement + atmosphere_requirement + f"""
 Mesh (IMPORTANT): a custom mesh file is provided to this workflow - use the
 provided custom mesh file as-is. Do NOT generate, re-create, or modify the
 mesh, and do NOT write any mesh-generation script. The converted mesh has
@@ -65,7 +85,8 @@ class SimulationFailed(Exception):
 
 
 def run_simulation(requirement_text: str, msh_path: str, workdir: str,
-                   timeout_s: int = 10800) -> dict:
+                   timeout_s: int = 10800,
+                   flow_conditions_path: Optional[str] = None) -> dict:
     """Invoke the existing Foam-Agent graph (src/main.py) as a subprocess with
     OpenFOAM sourced. Returns {case_dir, success, log_path}. Raises
     SimulationFailed when the graph reports failure (honest exit status)."""
@@ -82,6 +103,8 @@ def run_simulation(requirement_text: str, msh_path: str, workdir: str,
            f"--prompt_path {_quote(req_path)} "
            f"--output_dir {_quote(case_dir)} "
            f"--custom_mesh_path {_quote(msh_path)}")
+    if flow_conditions_path:
+        cmd += f" --flow_conditions_path {_quote(flow_conditions_path)}"
     with open(log_path, "w") as logf:
         proc = subprocess.run(["bash", "-lc", cmd], stdout=logf,
                               stderr=subprocess.STDOUT, timeout=timeout_s)

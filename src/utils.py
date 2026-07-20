@@ -766,6 +766,7 @@ class GraphState(TypedDict):
     custom_mesh_used: Optional[bool]
     mesh_type: Optional[str]
     custom_mesh_path: Optional[str]
+    flow_conditions_path: Optional[str]
     # Review and rewrite related fields
     review_analysis: Optional[str]
     rewrite_plan: Optional[dict]

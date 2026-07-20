@@ -50,7 +50,9 @@ def create_foam_agent_graph() -> StateGraph:
     
     return workflow
 
-def initialize_state(user_requirement: str, config: Config, custom_mesh_path: Optional[str] = None) -> GraphState:
+def initialize_state(user_requirement: str, config: Config,
+                     custom_mesh_path: Optional[str] = None,
+                     flow_conditions_path: Optional[str] = None) -> GraphState:
     case_stats = json.load(open(f"{config.database_path}/raw/openfoam_case_stats.json", "r"))
     # mesh_type = "custom_mesh" if custom_mesh_path else "standard_mesh"
     state = GraphState(
@@ -84,6 +86,7 @@ def initialize_state(user_requirement: str, config: Config, custom_mesh_path: Op
         custom_mesh_used=None,
         mesh_type=None,
         custom_mesh_path=custom_mesh_path,
+        flow_conditions_path=flow_conditions_path,
         review_analysis=None,
         rewrite_plan=None,
         input_writer_mode="initial",
@@ -100,7 +103,9 @@ def initialize_state(user_requirement: str, config: Config, custom_mesh_path: Op
         print("<custom_mesh_path>None</custom_mesh_path>")
     return state
 
-def main(user_requirement: str, config: Config, custom_mesh_path: Optional[str] = None):
+def main(user_requirement: str, config: Config,
+         custom_mesh_path: Optional[str] = None,
+         flow_conditions_path: Optional[str] = None):
     """Main function to run the OpenFOAM workflow."""
     
     # Create and compile the graph
@@ -108,7 +113,9 @@ def main(user_requirement: str, config: Config, custom_mesh_path: Optional[str] 
     app = workflow.compile()
     
     # Initialize the state
-    initial_state = initialize_state(user_requirement, config, custom_mesh_path)
+    initial_state = initialize_state(
+        user_requirement, config, custom_mesh_path, flow_conditions_path
+    )
     
     print("<workflow_start>Starting Foam-Agent...</workflow_start>")
 
@@ -167,6 +174,12 @@ if __name__ == "__main__":
         help="Path to custom mesh file (e.g., .msh, .stl, .obj). If not provided, no custom mesh will be used.",
     )
     parser.add_argument(
+        "--flow_conditions_path",
+        type=str,
+        default=None,
+        help="Path to the authoritative serialized atmosphere/flow contract.",
+    )
+    parser.add_argument(
         "--reuse_generated_dir",
         type=str,
         default="",
@@ -194,5 +207,10 @@ if __name__ == "__main__":
         user_requirement = f.read()
 
     import sys
-    succeeded = main(user_requirement, config, args.custom_mesh_path)
+    succeeded = main(
+        user_requirement,
+        config,
+        args.custom_mesh_path,
+        args.flow_conditions_path,
+    )
     sys.exit(0 if succeeded else 1)
