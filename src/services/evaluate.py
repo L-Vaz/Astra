@@ -20,6 +20,7 @@ import subprocess
 from typing import List, Optional
 
 from domain_packs.bwb.schema import GateResult
+from services.flow_conditions import FlowConditions
 
 FOAM_BASHRC = os.environ.get("FOAM_BASHRC", "/opt/openfoam10/etc/bashrc")
 
@@ -146,7 +147,8 @@ def evaluate_case(case_dir: str, outdir: str,
                   required_cl: Optional[float] = None,
                   vlm_cl: Optional[float] = None,
                   extra_slices: Optional[List[str]] = None,
-                  ref: Optional[dict] = None) -> dict:
+                  ref: Optional[dict] = None,
+                  flow_conditions: Optional[FlowConditions] = None) -> dict:
     """Run all result gates + produce the visual report. Never raises on gate
     failure — returns the report with a verdict (the caller routes on it).
 
@@ -218,6 +220,14 @@ def evaluate_case(case_dir: str, outdir: str,
 
     yp = parse_yplus(case_dir)
     if yp:
+        yp = dict(yp)
+        if flow_conditions is not None:
+            atmosphere = flow_conditions.atmosphere
+            yp.update({
+                "kinematic_viscosity_m2s": atmosphere.kinematic_viscosity_m2s,
+                "atmosphere_source": atmosphere.source,
+                "atmosphere_dataset_sha256": atmosphere.dataset_sha256,
+            })
         metrics["yplus"] = yp
         if not (5 <= yp["avg"] <= 500):
             warnings.append(f"average y+ {yp['avg']:.0f} outside wall-function range 5-500")
@@ -248,7 +258,11 @@ def evaluate_case(case_dir: str, outdir: str,
 
     report = {"case_dir": case_dir, "verdict": verdict, "metrics": metrics,
               "gates": [g.model_dump() for g in gates], "warnings": warnings,
-              "artifacts": artifacts}
+              "artifacts": artifacts,
+              "flow_conditions": (
+                  flow_conditions.model_dump(mode="json")
+                  if flow_conditions is not None else None
+              )}
     with open(os.path.join(outdir, "evaluation.json"), "w") as f:
         json.dump(report, f, indent=2)
     return report

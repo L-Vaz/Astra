@@ -875,6 +875,7 @@ from services.bwb_mesh import MeshRejected, generate_mesh as mesh_svc
 from services.simulate import SimulationFailed, compose_requirement, run_simulation as sim_svc
 from services.flow_conditions import (
     build_flow_contract,
+    load_flow_contract,
     validate_openfoam_viscosity,
     write_flow_contract,
 )
@@ -1053,6 +1054,9 @@ async def evaluate_results(request: EvaluateRequest, ctx: Context) -> Dict[str, 
         derived = MissionDerived.model_validate(
             _load_json(os.path.join(plan_dir, "mission_derived.json")))
         fast = _load_json(os.path.join(fa_dir, "fast_aero.json"))
+        flow_conditions = load_flow_contract(
+            os.path.join(sim_dir, "flow_conditions.json")
+        )
         geo_dir = _require_stage(request.session_id, "geometry")
         geo = GeometryReport.model_validate(
             _load_json(os.path.join(geo_dir, "geometry_report.json")))
@@ -1065,9 +1069,15 @@ async def evaluate_results(request: EvaluateRequest, ctx: Context) -> Dict[str, 
         report = evaluate_case(
             case_dir=os.path.join(sim_dir, "case"), outdir=vdir,
             required_cl=derived.required_cl, vlm_cl=derived.required_cl,
-            extra_slices=request.extra_slices, ref=ref)
-        version = ds.record_version(request.session_id, "results",
-                                    {"verdict": report["verdict"]})
+            extra_slices=request.extra_slices, ref=ref,
+            flow_conditions=flow_conditions)
+        version = ds.record_version(request.session_id, "results", {
+            "verdict": report["verdict"],
+            "atmosphere_source": flow_conditions.atmosphere.source,
+            "atmosphere_dataset_sha256": (
+                flow_conditions.atmosphere.dataset_sha256
+            ),
+        })
         return {"session_id": request.session_id, "version": version,
                 "verdict": report["verdict"], "metrics": report["metrics"],
                 "gates": report["gates"], "warnings": report["warnings"],
