@@ -24,6 +24,7 @@ _NU_RE = re.compile(
     rf"(?:\[(?P<dimensions>[^\]]+)\][ \t]+)?"
     rf"(?P<value>{_FLOAT_PATTERN})[ \t]*;"
 )
+_NU_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])nu(?![A-Za-z0-9_])")
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT_RE = re.compile(r"//.*?$", re.MULTILINE)
 _INDIRECTION_RE = re.compile(r"(?m)^[ \t]*#|\$\{?[A-Za-z_]", re.MULTILINE)
@@ -44,6 +45,14 @@ class FlowConditions(BaseModel):
 
     @model_validator(mode="after")
     def validate_reynolds_identity(self):
+        values = (
+            self.velocity_ms,
+            self.reference_length_m,
+            self.reference_area_m2,
+            self.reference_reynolds,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("flow-condition values must be finite")
         expected = (
             self.velocity_ms * self.reference_length_m
             / self.atmosphere.kinematic_viscosity_m2s
@@ -137,6 +146,17 @@ def _active_dictionary(content: str, target: Path) -> str:
     return active
 
 
+def _literal_nu_matches(active: str, target: Path) -> list[re.Match]:
+    matches = list(_NU_RE.finditer(active))
+    tokens = list(_NU_TOKEN_RE.finditer(active))
+    if len(tokens) != len(matches):
+        raise FlowConditionMismatch(
+            f"{target} contains unsupported nu syntax; use one literal, "
+            "single-line nu entry"
+        )
+    return matches
+
+
 def enforce_openfoam_viscosity(
     case_dir: str, contract: FlowConditions
 ) -> float:
@@ -147,7 +167,9 @@ def enforce_openfoam_viscosity(
     replacement = f"nu [{KINEMATIC_VISCOSITY_DIMENSIONS}] {nu:.17g};"
     if target.exists():
         content = target.read_text(encoding="utf-8")
-        matches = list(_NU_RE.finditer(_active_dictionary(content, target)))
+        matches = _literal_nu_matches(
+            _active_dictionary(content, target), target
+        )
         if len(matches) > 1:
             raise FlowConditionMismatch(
                 f"{target} contains {len(matches)} active nu entries"
@@ -172,7 +194,7 @@ def validate_openfoam_viscosity(
         raise FlowConditionMismatch(f"missing Foundation v10 dictionary: {target}")
     content = target.read_text(encoding="utf-8")
     active = _active_dictionary(content, target)
-    matches = list(_NU_RE.finditer(active))
+    matches = _literal_nu_matches(active, target)
     if len(matches) != 1:
         raise FlowConditionMismatch(
             f"{target} must contain exactly one active nu entry; found {len(matches)}"

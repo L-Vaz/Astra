@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
 from domain_packs.bwb.atmosphere import (  # noqa: E402
-    atmosphere_at, atmosphere_table_payload)
+    atmosphere_at, atmosphere_provenance, atmosphere_table_payload)
 from domain_packs.bwb.defaults import PAYLOAD_FRACTION, derive  # noqa: E402
 from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX  # noqa: E402
 from domain_packs.bwb.derivation import derive_graph  # noqa: E402
@@ -91,7 +91,11 @@ def _write_plan_version(sid: str, derived: MissionDerived, note: str,
         f.write(derived.model_dump_json(indent=2))
     with open(os.path.join(vdir, "enriched_requirement.txt"), "w") as f:
         f.write(build_enriched_requirement(derived))
-    return ds.record_version(sid, "plan", {"prompt": note, "source": "cockpit"},
+    return ds.record_version(sid, "plan", {
+                                 "prompt": note,
+                                 "source": "cockpit",
+                                 **atmosphere_provenance(derived.atmosphere),
+                             },
                              invalidate_from=invalidate_from)
 
 
@@ -680,8 +684,11 @@ def fast_aero(req: FastAeroReq) -> Dict[str, Any]:
     except FastAeroRejected as e:
         raise HTTPException(422, detail=[{"params": [], "message": str(e),
                                           "gates": (e.result or {}).get("gates", [])}])
-    version = ds.record_version(req.session_id, "fast_aero",
-                                {"source": "cockpit", "passed": True})
+    version = ds.record_version(req.session_id, "fast_aero", {
+        "source": "cockpit",
+        "passed": True,
+        **atmosphere_provenance(plan.atmosphere),
+    })
     _queue_explanation(
         req.session_id, "fast_aero",
         f"VSPAERO fast validation v{version} from cockpit: trim alpha "

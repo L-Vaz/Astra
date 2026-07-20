@@ -105,6 +105,15 @@ class AtmosphereState(BaseModel):
             provenance.fraction, expected_fraction, rel_tol=0.0, abs_tol=1e-12
         ):
             raise ValueError("atmosphere interpolation fraction is inconsistent")
+        canonical = _canonical_values(self.geometric_altitude_m)
+        for field in _INTERPOLATED_FIELDS:
+            if not math.isclose(
+                getattr(self, field), canonical[field],
+                rel_tol=2e-12, abs_tol=0.0,
+            ):
+                raise ValueError(
+                    f"atmosphere {field} does not match canonical table"
+                )
         return self
 
 
@@ -185,6 +194,25 @@ def _rows() -> tuple[_AtmosphereRow, ...]:
 
 def _lerp(lower: float, upper: float, fraction: float) -> float:
     return lower + fraction * (upper - lower)
+
+
+def _canonical_values(altitude: float) -> dict[str, float]:
+    rows = _rows()
+    altitudes = tuple(row.geometric_altitude_m for row in rows)
+    index = bisect.bisect_left(altitudes, altitude)
+    if index < len(rows) and altitudes[index] == altitude:
+        lower = upper = rows[index]
+        fraction = 0.0
+    else:
+        lower = rows[index - 1]
+        upper = rows[index]
+        fraction = (altitude - lower.geometric_altitude_m) / (
+            upper.geometric_altitude_m - lower.geometric_altitude_m
+        )
+    return {
+        name: _lerp(getattr(lower, name), getattr(upper, name), fraction)
+        for name in _INTERPOLATED_FIELDS
+    }
 
 
 def atmosphere_at(altitude_m: float) -> AtmosphereState:

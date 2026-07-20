@@ -62,6 +62,14 @@ def test_flow_contract_rejects_inconsistent_reynolds(contract):
         type(contract).model_validate(corrupt)
 
 
+def test_flow_contract_rejects_non_finite_inputs(contract):
+    corrupt = contract.model_dump()
+    corrupt["velocity_ms"] = float("inf")
+    corrupt["reference_reynolds"] = float("inf")
+    with pytest.raises(ValueError, match="finite"):
+        type(contract).model_validate(corrupt)
+
+
 def test_enforcement_rewrites_and_validates_nu(contract, tmp_path):
     physical = tmp_path / "constant" / "physicalProperties"
     physical.parent.mkdir()
@@ -125,6 +133,22 @@ def test_enforcement_rejects_dictionary_indirection(contract, tmp_path):
     physical.write_text('#include "sharedViscosity"\n')
 
     with pytest.raises(FlowConditionMismatch, match="indirection"):
+        enforce_openfoam_viscosity(str(tmp_path), contract)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "viscosityModel constant; nu [0 2 -1 0 0 0 0] 9e-5;\n",
+        "nu\n[0 2 -1 0 0 0 0]\n9e-5;\n",
+    ],
+)
+def test_enforcement_rejects_unsupported_nu_layout(contract, tmp_path, content):
+    physical = tmp_path / "constant" / "physicalProperties"
+    physical.parent.mkdir()
+    physical.write_text(content)
+
+    with pytest.raises(FlowConditionMismatch, match="unsupported nu syntax"):
         enforce_openfoam_viscosity(str(tmp_path), contract)
 
 

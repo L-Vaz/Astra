@@ -41,6 +41,11 @@ def test_serialized_atmosphere_rejects_corrupt_physics_and_provenance():
     with pytest.raises(ValidationError, match="checksum"):
         type(state).model_validate(corrupt_source)
 
+    fabricated = state.model_dump()
+    fabricated["pressure_pa"] *= 0.9
+    with pytest.raises(ValidationError, match="canonical table"):
+        type(state).model_validate(fabricated)
+
 
 def test_manifest_provenance_summary_is_self_describing():
     state = atmosphere_at(1275.0)

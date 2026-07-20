@@ -43,6 +43,40 @@ def test_bootstrap_includes_requirements(client):
         atmosphere["dynamic_viscosity_kgms"] / atmosphere["density_kgm3"]
     )
 
+    import services.design_session as ds
+    plan_dir = ds.latest_dir(b["session_id"], "plan")
+    with open(os.path.join(plan_dir, "manifest.json")) as f:
+        manifest = json.load(f)
+    assert manifest["atmosphere_source"] == atmosphere["source"]
+    assert manifest["atmosphere_dataset_sha256"] == atmosphere["dataset_sha256"]
+
+
+def test_cockpit_fast_aero_manifest_records_atmosphere(client, monkeypatch):
+    import services.design_session as ds
+    from cockpit import server as cockpit_server
+
+    b = _bootstrap(client)
+    monkeypatch.setattr(cockpit_server, "_geometry_report", lambda sid: object())
+    monkeypatch.setattr(cockpit_server, "fast_aero_svc", lambda *args: {
+        "alpha_trim_deg": 2.0,
+        "ld_at_trim": 15.0,
+        "cl_alpha_per_deg": 0.07,
+        "x_np_m": 0.4,
+        "gates": [],
+    })
+
+    response = client.post(
+        "/api/fast_aero", json={"session_id": b["session_id"]}
+    )
+
+    assert response.status_code == 200
+    fast_dir = ds.latest_dir(b["session_id"], "fast_aero")
+    with open(os.path.join(fast_dir, "manifest.json")) as f:
+        manifest = json.load(f)
+    atmosphere = b["derived"]["atmosphere"]
+    assert manifest["atmosphere_source"] == atmosphere["source"]
+    assert manifest["atmosphere_dataset_sha256"] == atmosphere["dataset_sha256"]
+
 
 def test_preview_resolves_interpolated_atmosphere(client):
     b = _bootstrap(client)
