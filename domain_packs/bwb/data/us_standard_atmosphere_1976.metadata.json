@@ -1,0 +1,48 @@
+{
+  "altitude_type": "geometric altitude above mean sea level",
+  "checksum_encoding": "SHA-256 of UTF-8 CSV with LF line endings",
+  "csv_sha256": "28a7fb55b7e6f38c604379432628aa5af31d3d3b6b27689f58bb9dada92237f0",
+  "equations": {
+    "dynamic_viscosity": "USSA1976 Equation 51",
+    "kinematic_viscosity": "USSA1976 Equation 52"
+  },
+  "generator": "verification/generate_standard_atmosphere.py",
+  "generator_version": 1,
+  "interpolation": {
+    "derived_fields": {
+      "kinematic_viscosity_m2s": "dynamic_viscosity_kgms / density_kgm3"
+    },
+    "fields": [
+      "geopotential_altitude_m",
+      "temperature_k",
+      "pressure_pa",
+      "density_kgm3",
+      "dynamic_viscosity_kgms"
+    ],
+    "method": "linear",
+    "out_of_range": "reject"
+  },
+  "maximum_altitude_m": 4000.0,
+  "minimum_altitude_m": 0.0,
+  "reports": [
+    "NOAA-S/T 76-1562",
+    "NASA-TM-X-74335"
+  ],
+  "row_count": 41,
+  "row_interval_m": 100.0,
+  "source": "USSA1976-NOAA-S/T-76-1562-NASA-TM-X-74335",
+  "source_urls": [
+    "https://ntrs.nasa.gov/citations/19770009539",
+    "https://www.ngdc.noaa.gov/stp/space-weather/online-publications/miscellaneous/us-standard-atmosphere-1976/us-standard-atmosphere_st76-1562_noaa.pdf"
+  ],
+  "title": "U.S. Standard Atmosphere, 1976",
+  "units": {
+    "density_kgm3": "kg/m^3",
+    "dynamic_viscosity_kgms": "kg/(m*s)",
+    "geometric_altitude_m": "m",
+    "geopotential_altitude_m": "m",
+    "kinematic_viscosity_m2s": "m^2/s",
+    "pressure_pa": "Pa",
+    "temperature_k": "K"
+  }
+}
