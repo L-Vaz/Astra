@@ -6,14 +6,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from domain_packs.bwb.defaults import derive, isa_density
+from domain_packs.bwb.atmosphere import atmosphere_at
+from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.requirements import DesignRequirements
 from domain_packs.bwb.schema import BWBParams, MissionSpec
 from domain_packs.bwb.sensitivity import (HUMAN_STEPS,
                                           requirement_sensitivity_table,
                                           sensitivity_table)
 
-CTX = dict(rho=isa_density(100.0), v=25.0, weight_n=5.0 * 9.81, launch="hand")
+CTX = dict(atmosphere=atmosphere_at(100.0), v=25.0,
+           weight_n=5.0 * 9.81, launch="hand")
 
 
 @pytest.fixture(scope="module")
@@ -60,3 +62,5 @@ def test_requirement_sensitivities(params):
     assert speed.deltas["cl_cruise"] < 0    # faster -> less CL needed
     mtow = _row(rows, "mtow_kg")
     assert mtow.deltas["v_stall_ms"] > 0    # heavier -> stalls faster
+    altitude = _row(rows, "cruise_altitude_m")
+    assert altitude.clamped is True          # 100 - 125 m would be out of range

@@ -8,11 +8,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from domain_packs.bwb.aero_estimates import estimate
-from domain_packs.bwb.defaults import derive, isa_density
+from domain_packs.bwb.atmosphere import atmosphere_at
+from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.derivation import ROOTS, derive_graph
 from domain_packs.bwb.schema import MissionSpec
 
-CTX = dict(rho_kgm3=isa_density(100.0), v_ms=25.0, weight_n=5.0 * 9.81,
+CTX = dict(atmosphere=atmosphere_at(100.0), v_ms=25.0, weight_n=5.0 * 9.81,
            launch="hand")
 
 
@@ -24,7 +25,7 @@ def params():
 
 def test_root_values_match_estimate(params):
     graph = derive_graph(params, **CTX)
-    est = estimate(params, CTX["rho_kgm3"], CTX["v_ms"], CTX["weight_n"],
+    est = estimate(params, CTX["atmosphere"], CTX["v_ms"], CTX["weight_n"],
                    CTX["launch"])
     expected = {
         "ld_cruise": est.ld_cruise, "cd_cruise": est.cd_cruise,
@@ -58,8 +59,19 @@ def test_every_node_documented(params):
             assert node.substitution, f"{node.id} computed without substitution"
 
 
+def test_atmosphere_chain_is_explicit_and_consistent(params):
+    graph = derive_graph(params, **CTX)
+
+    for node_id in ("altitude_m", "temperature_k", "pressure_pa", "rho",
+                    "mu_air", "nu_air"):
+        assert node_id in graph.nodes
+    assert graph.nodes["nu_air"].value == pytest.approx(
+        graph.nodes["mu_air"].value / graph.nodes["rho"].value, rel=1e-13)
+    assert graph.nodes["reynolds_mac"].children == ["v_ms", "mac_m", "nu_air"]
+
+
 def test_launch_node_present_only_with_launch(params):
     with_launch = derive_graph(params, **CTX)
     assert "launch_limit" in with_launch.nodes
-    without = derive_graph(params, CTX["rho_kgm3"], CTX["v_ms"], CTX["weight_n"])
+    without = derive_graph(params, CTX["atmosphere"], CTX["v_ms"], CTX["weight_n"])
     assert "launch_limit" not in without.nodes

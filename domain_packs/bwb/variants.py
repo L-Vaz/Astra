@@ -107,7 +107,8 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
                provenance: List[str], notes: List[str]) -> BWBParams:
     """Choose S for the lens: either baseline wing loading, or iterate S so
     cruise CL approaches CL*, bounded by stall-at-launch and MAX_CRUISE_CL."""
-    rho = derived.air_density_kgm3
+    atmosphere = derived.atmosphere
+    rho = atmosphere.density_kgm3
     v = derived.mission.cruise_speed_ms
     w = derived.weight_n
     q = 0.5 * rho * v ** 2
@@ -132,7 +133,7 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
     params = _solve_planform(s, lens, None)
     cl_star = 0.0
     for _ in range(8):
-        est = estimate(params, rho, v, w, launch)
+        est = estimate(params, atmosphere, v, w, launch)
         cl_star = est.cl_star
         s_new = w / (q * cl_star)
         if abs(s_new - s) / s < 1e-3:
@@ -230,12 +231,12 @@ def _drag_provenance(panel: AeroEstimate) -> List[str]:
 
 def generate_candidates(derived: MissionDerived) -> List[DesignCandidate]:
     """Baseline + one candidate per lens, each scored on the same panel."""
-    rho = derived.air_density_kgm3
+    atmosphere = derived.atmosphere
     v = derived.mission.cruise_speed_ms
     w = derived.weight_n
     launch = derived.mission.launch
 
-    base_panel = estimate(derived.params, rho, v, w, launch)
+    base_panel = estimate(derived.params, atmosphere, v, w, launch)
     baseline = DesignCandidate(
         key="baseline", title="Baseline",
         objective="The deterministic sizing default: a physically reasonable "
@@ -250,7 +251,7 @@ def generate_candidates(derived: MissionDerived) -> List[DesignCandidate]:
         provenance: List[str] = [lens.objective]
         notes: List[str] = []
         params = _size_wing(lens, derived, provenance, notes)
-        panel = estimate(params, rho, v, w, launch)
+        panel = estimate(params, atmosphere, v, w, launch)
         provenance += _drag_provenance(panel)
         out.append(DesignCandidate(
             key=lens.key, title=lens.title, objective=lens.objective,

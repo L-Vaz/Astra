@@ -18,9 +18,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from .atmosphere import AtmosphereState
 from .schema import BWBParams
-
-MU_AIR = 1.81e-5  # dynamic viscosity, kg/(m s), ~15 C
 
 # --- declared engineering constants (each echoed into assumptions) ----------
 LAMINAR_FRACTION = 0.30       # smooth small-UAV wing at Re ~ 5e5-1e6
@@ -182,15 +181,17 @@ def neutral_point_m(params: BWBParams) -> float:
 # full panel
 # ---------------------------------------------------------------------------
 
-def estimate(params: BWBParams, rho_kgm3: float, v_ms: float, weight_n: float,
+def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
+             weight_n: float,
              launch: Optional[str] = None) -> AeroEstimate:
     """Compute the tier-0 metric panel for one geometry at one condition."""
     s = params.planform_area_m2()
     ar = params.aspect_ratio()
     mac = params.mean_aero_chord_m()
     _, _, c_tip = params.chords()
+    rho_kgm3 = atmosphere.density_kgm3
     q = 0.5 * rho_kgm3 * v_ms ** 2
-    re_mac = rho_kgm3 * v_ms * mac / MU_AIR
+    re_mac = v_ms * mac / atmosphere.kinematic_viscosity_m2s
 
     cd0 = parasite_drag_coeff(params, re_mac)
     sweep_eff = effective_le_sweep_deg(params)
@@ -236,7 +237,7 @@ def estimate(params: BWBParams, rho_kgm3: float, v_ms: float, weight_n: float,
         x_np_m=x_np,
         x_cg_for_target_sm_m=x_np - STATIC_MARGIN_TARGET * mac,
         root_bending_index_nm=weight_n * params.span_m / 8.0,
-        tip_re=rho_kgm3 * v_ms * c_tip / MU_AIR,
+        tip_re=v_ms * c_tip / atmosphere.kinematic_viscosity_m2s,
         roll_damping_index=params.span_m ** 2,
         assumptions=assumptions,
     )

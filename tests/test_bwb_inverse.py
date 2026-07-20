@@ -10,7 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX, estimate
-from domain_packs.bwb.defaults import MAX_CRUISE_CL, derive, isa_density
+from domain_packs.bwb.atmosphere import atmosphere_at
+from domain_packs.bwb.defaults import MAX_CRUISE_CL, derive
 from domain_packs.bwb.inverse import (BASELINE_SHAPE, ShapeFractions,
                                       check_requirements, solve_planform,
                                       solve_requirements)
@@ -23,8 +24,9 @@ REQ = dict(mtow_kg=5.0, cruise_speed_ms=25.0, cruise_altitude_m=100.0)
 
 
 def _panel(req: DesignRequirements, params: BWBParams):
-    rho = isa_density(req.cruise_altitude_m)
-    return estimate(params, rho, req.cruise_speed_ms, req.mtow_kg * 9.81, req.launch)
+    atmosphere = atmosphere_at(req.cruise_altitude_m)
+    return estimate(params, atmosphere, req.cruise_speed_ms,
+                    req.mtow_kg * 9.81, req.launch)
 
 
 def test_cl_target_hit_exactly_when_feasible():
@@ -131,7 +133,7 @@ def test_variants_refactor_snapshot():
     for c in cands:
         BWBParams.model_validate(c.params.model_dump())
         # every candidate's panel is self-consistent with its params
-        fresh = estimate(c.params, derived.air_density_kgm3,
+        fresh = estimate(c.params, derived.atmosphere,
                          derived.mission.cruise_speed_ms, derived.weight_n,
                          derived.mission.launch)
         assert fresh.ld_cruise == pytest.approx(c.panel.ld_cruise, rel=1e-9)

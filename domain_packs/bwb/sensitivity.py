@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
 from .aero_estimates import AeroEstimate, estimate
-from .defaults import isa_density
+from .atmosphere import AtmosphereState, atmosphere_at
 from .requirements import DesignRequirements
 from .schema import BWBParams
 
@@ -54,9 +54,9 @@ class SensitivityRow(BaseModel):
         description="True when a schema bound forced a one-sided difference")
 
 
-def _panel(params: BWBParams, rho: float, v: float, w: float,
+def _panel(params: BWBParams, atmosphere: AtmosphereState, v: float, w: float,
            launch: Optional[str]) -> AeroEstimate:
-    return estimate(params, rho, v, w, launch)
+    return estimate(params, atmosphere, v, w, launch)
 
 
 def _try_params(base: BWBParams, key: str, value: float) -> Optional[BWBParams]:
@@ -66,13 +66,14 @@ def _try_params(base: BWBParams, key: str, value: float) -> Optional[BWBParams]:
         return None
 
 
-def sensitivity_table(params: BWBParams, rho: float, v: float, weight_n: float,
+def sensitivity_table(params: BWBParams, atmosphere: AtmosphereState,
+                      v: float, weight_n: float,
                       launch: Optional[str] = None,
                       metrics: Sequence[str] = METRICS) -> List[SensitivityRow]:
     """d(metric) for +HUMAN_STEP of each geometry parameter.
     Central difference estimate(p ± step/2); degrades to one-sided at bounds."""
     rows: List[SensitivityRow] = []
-    center = _panel(params, rho, v, weight_n, launch)
+    center = _panel(params, atmosphere, v, weight_n, launch)
     for key, step in HUMAN_STEPS.items():
         x0 = float(getattr(params, key))
         lo = _try_params(params, key, x0 - step / 2)
@@ -93,8 +94,8 @@ def sensitivity_table(params: BWBParams, rho: float, v: float, weight_n: float,
                 p_lo, p_hi, scale, clamped = full_lo, None, 1.0, True
             else:
                 continue  # boxed in on both sides — no derivative available
-        e_lo = _panel(p_lo, rho, v, weight_n, launch) if p_lo else center
-        e_hi = _panel(p_hi, rho, v, weight_n, launch) if p_hi else center
+        e_lo = _panel(p_lo, atmosphere, v, weight_n, launch) if p_lo else center
+        e_hi = _panel(p_hi, atmosphere, v, weight_n, launch) if p_hi else center
         deltas = {m: (getattr(e_hi, m) - getattr(e_lo, m)) * scale for m in metrics}
         rows.append(SensitivityRow(param=key, step=step,
                                    step_unit=STEP_UNITS.get(key, ""),
@@ -110,7 +111,7 @@ def requirement_sensitivity_table(
     rows: List[SensitivityRow] = []
 
     def panel_at(speed: float, mtow: float, alt: float) -> AeroEstimate:
-        return estimate(params, isa_density(alt), speed, mtow * 9.81, req.launch)
+        return estimate(params, atmosphere_at(alt), speed, mtow * 9.81, req.launch)
 
     base = dict(speed=req.cruise_speed_ms, mtow=req.mtow_kg,
                 alt=req.cruise_altitude_m)
@@ -120,9 +121,23 @@ def requirement_sensitivity_table(
         arg = arg_of[key]
         lo = {**base, arg: base[arg] - step / 2}
         hi = {**base, arg: base[arg] + step / 2}
-        e_lo, e_hi = panel_at(**lo), panel_at(**hi)
-        deltas = {m: getattr(e_hi, m) - getattr(e_lo, m) for m in metrics}
+        center = panel_at(**base)
+        clamped = False
+        try:
+            e_lo = panel_at(**lo)
+        except ValueError:
+            e_lo = center
+            clamped = True
+        try:
+            e_hi = panel_at(**hi)
+        except ValueError:
+            e_hi = center
+            clamped = True
+        scale = 2.0 if clamped else 1.0
+        deltas = {
+            m: (getattr(e_hi, m) - getattr(e_lo, m)) * scale for m in metrics
+        }
         rows.append(SensitivityRow(param=key, step=step,
                                    step_unit=REQ_STEP_UNITS.get(key, ""),
-                                   deltas=deltas))
+                                   deltas=deltas, clamped=clamped))
     return rows

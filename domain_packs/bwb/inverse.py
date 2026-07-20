@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 
 from .aero_estimates import (LAUNCH_VSTALL_MAX, AeroEstimate, cl_max_3d,
                              estimate)
-from .defaults import DEFAULT_AR, MAX_CRUISE_CL, isa_density
+from .atmosphere import atmosphere_at
+from .defaults import DEFAULT_AR, MAX_CRUISE_CL
 from .requirements import DesignRequirements, RequirementStatus
 from .schema import BWBParams
 
@@ -215,8 +216,9 @@ def check_requirements(req: DesignRequirements,
                        params: BWBParams) -> List[RequirementStatus]:
     """Forward check only — no solving. Used when the user drags a geometry
     slider and the requirement chips must update live."""
-    rho = isa_density(req.cruise_altitude_m)
-    est = estimate(params, rho, req.cruise_speed_ms, req.mtow_kg * 9.81, req.launch)
+    atmosphere = atmosphere_at(req.cruise_altitude_m)
+    est = estimate(params, atmosphere, req.cruise_speed_ms,
+                   req.mtow_kg * 9.81, req.launch)
     return _statuses(req, est)
 
 
@@ -237,7 +239,8 @@ def solve_requirements(req: DesignRequirements,
       5. Name the binding constraint.
     """
     shape = ShapeFractions.from_params(shape_from) if shape_from else BASELINE_SHAPE
-    rho = isa_density(req.cruise_altitude_m)
+    atmosphere = atmosphere_at(req.cruise_altitude_m)
+    rho = atmosphere.density_kgm3
     v = req.cruise_speed_ms
     w = req.mtow_kg * 9.81
     q = 0.5 * rho * v ** 2
@@ -257,7 +260,7 @@ def solve_requirements(req: DesignRequirements,
             s = w / (q * 0.5)  # neutral start; fixed point converges in <=8
             params_i = _feasible_planform(s, ar_try, shape, span_cap, None)
             for _ in range(8):
-                est_i = estimate(params_i, rho, v, w, req.launch)
+                est_i = estimate(params_i, atmosphere, v, w, req.launch)
                 s_new = w / (q * est_i.cl_star)
                 if abs(s_new - s) / s < 1e-3:
                     s = s_new
@@ -276,7 +279,7 @@ def solve_requirements(req: DesignRequirements,
 
     s, floor = area_at(ar)
     params = _feasible_planform(s, ar, shape, span_cap, notes)
-    est = estimate(params, rho, v, w, req.launch)
+    est = estimate(params, atmosphere, v, w, req.launch)
 
     # step 4 — spend span budget on AR for the L/D objective
     if req.ld_min is not None:
@@ -288,7 +291,7 @@ def solve_requirements(req: DesignRequirements,
             ar = min(_AR_GATE[1], ar + 0.25)  # never overshoot the AR gate
             s, floor = area_at(ar)
             params = _feasible_planform(s, ar, shape, span_cap, None)
-            est = estimate(params, rho, v, w, req.launch)
+            est = estimate(params, atmosphere, v, w, req.launch)
 
     statuses = _statuses(req, est)
     unmet = [st for st in statuses if st.met is False]

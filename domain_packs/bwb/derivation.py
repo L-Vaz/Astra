@@ -19,11 +19,12 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from .aero_estimates import (CL_MAX_2D, CL_MAX_3D_FACTOR, INTERFERENCE_MARGIN,
-                             LAMINAR_FRACTION, LAUNCH_VSTALL_MAX, MU_AIR,
+                             LAMINAR_FRACTION, LAUNCH_VSTALL_MAX,
                              STATIC_MARGIN_TARGET, effective_c4_sweep_deg,
                              effective_le_sweep_deg, form_factor, mean_tc,
                              neutral_point_m, oswald_efficiency,
                              skin_friction_coeff)
+from .atmosphere import AtmosphereState
 from .schema import BWBParams
 
 ROOTS = ["ld_cruise", "cd_cruise", "cl_cruise", "cd0", "oswald_e", "cl_star",
@@ -54,7 +55,7 @@ def _g(v: float, sig: int = 4) -> str:
     return f"{v:.{sig}g}"
 
 
-def derive_graph(params: BWBParams, rho_kgm3: float, v_ms: float,
+def derive_graph(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
                  weight_n: float, launch: Optional[str] = None) -> DerivationGraph:
     """Full derivation graph for one geometry at one flight condition."""
     nodes: Dict[str, DerivationNode] = {}
@@ -74,11 +75,46 @@ def derive_graph(params: BWBParams, rho_kgm3: float, v_ms: float,
                            unit=unit, kind="constant", source=source))
 
     # ---------------- inputs -------------------------------------------------
+    rho_kgm3 = atmosphere.density_kgm3
     mass_kg = weight_n / 9.81
     inp("mtow_kg", "Takeoff mass", "m", mass_kg, "kg")
     inp("v_ms", "Cruise speed", "V", v_ms, "m/s")
-    inp("rho", "Air density", "ρ", rho_kgm3, "kg/m³",
-        source="ISA troposphere at cruise altitude")
+    inp("altitude_m", "Geometric altitude AMSL", "z",
+        atmosphere.geometric_altitude_m, "m")
+    interpolation = atmosphere.interpolation
+    if interpolation.exact_row:
+        lookup = f"exact table row at {interpolation.lower_table_altitude_m:g} m"
+    else:
+        lookup = (
+            f"linear interpolation from {interpolation.lower_table_altitude_m:g} "
+            f"to {interpolation.upper_table_altitude_m:g} m "
+            f"(fraction {interpolation.fraction:.6g})"
+        )
+    atmosphere_source = (
+        f"{atmosphere.source}; {lookup}; dataset {atmosphere.dataset_sha256}"
+    )
+    for node_id, label, symbol, value, unit in [
+        ("geopotential_altitude_m", "Geopotential altitude", "H",
+         atmosphere.geopotential_altitude_m, "m"),
+        ("temperature_k", "Air temperature", "T", atmosphere.temperature_k, "K"),
+        ("pressure_pa", "Air pressure", "p", atmosphere.pressure_pa, "Pa"),
+        ("rho", "Air density", "ρ", atmosphere.density_kgm3, "kg/m³"),
+        ("mu_air", "Dynamic viscosity", "μ",
+         atmosphere.dynamic_viscosity_kgms, "kg/(m·s)"),
+    ]:
+        add(DerivationNode(
+            id=node_id, label=label, symbol=symbol, value=value, unit=unit,
+            formula="property = U.S. Standard Atmosphere 1976 table lookup",
+            substitution=f"{lookup} -> {_g(value, 7)} {unit}",
+            children=["altitude_m"], source=atmosphere_source))
+    add(DerivationNode(
+        id="nu_air", label="Kinematic viscosity", symbol="ν",
+        value=atmosphere.kinematic_viscosity_m2s, unit="m²/s",
+        formula="ν = μ/ρ",
+        substitution=(f"{_g(atmosphere.dynamic_viscosity_kgms, 7)}/"
+                      f"{_g(atmosphere.density_kgm3, 7)} = "
+                      f"{_g(atmosphere.kinematic_viscosity_m2s, 7)} m²/s"),
+        children=["mu_air", "rho"], source="definition"))
     for pid, label, sym, unit in [
             ("span_m", "Wingspan", "b", "m"),
             ("root_chord_m", "Root chord", "c_r", "m"),
@@ -92,8 +128,6 @@ def derive_graph(params: BWBParams, rho_kgm3: float, v_ms: float,
         inp(pid, label, sym, float(getattr(params, pid)), unit)
 
     # ---------------- constants ---------------------------------------------
-    const("mu_air", "Air viscosity", "μ", MU_AIR,
-          "dynamic viscosity of air at ~15 °C", "kg/(m·s)")
     const("laminar_fraction", "Laminar-run fraction", "f_lam", LAMINAR_FRACTION,
           "engineering default (LAMINAR_FRACTION = 0.30): smooth small-UAV wing at Re ~ 5e5–1e6")
     const("interference_margin", "Interference margin", "k_int", INTERFERENCE_MARGIN,
@@ -152,13 +186,15 @@ def derive_graph(params: BWBParams, rho_kgm3: float, v_ms: float,
         formula="q = ½·ρ·V²",
         substitution=f"0.5·{_g(rho_kgm3)}·{_g(v_ms)}² = {_g(q)} Pa",
         children=["rho", "v_ms"], source="definition"))
-    re_mac = rho_kgm3 * v_ms * mac / MU_AIR
+    re_mac = v_ms * mac / atmosphere.kinematic_viscosity_m2s
     add(DerivationNode(
         id="reynolds_mac", label="Reynolds number (MAC)", symbol="Re",
         value=re_mac,
-        formula="Re = ρ·V·c̄/μ",
-        substitution=f"{_g(rho_kgm3)}·{_g(v_ms)}·{_g(mac)}/{_g(MU_AIR, 3)} = {_g(re_mac, 3)}",
-        children=["rho", "v_ms", "mac_m", "mu_air"], source="definition"))
+        formula="Re = V·c̄/ν",
+        substitution=(f"{_g(v_ms)}·{_g(mac)}/"
+                      f"{_g(atmosphere.kinematic_viscosity_m2s, 5)} = "
+                      f"{_g(re_mac, 3)}"),
+        children=["v_ms", "mac_m", "nu_air"], source="definition"))
 
     # ---------------- parasite drag buildup ---------------------------------
     cf = skin_friction_coeff(re_mac)
