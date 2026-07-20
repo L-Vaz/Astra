@@ -59,7 +59,7 @@ let debounceTimer = null;
 export function flightCtx() {
   const r = C.S.requirements;
   const atmosphere = ATMOSPHERE.resolveAtmosphere(
-    +r.cruise_altitude_m || 0, C.S.atmosphereTable);
+    r.cruise_altitude_m, C.S.atmosphereTable);
   return { atmosphere, v: +r.cruise_speed_ms,
     w: +r.mtow_kg * 9.81, launch: r.launch || 'hand' };
 }

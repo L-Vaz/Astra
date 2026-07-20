@@ -82,7 +82,10 @@ def csv_text() -> str:
     writer.writeheader()
     for altitude_m in range(0, 4001, 100):
         row = standard_row(float(altitude_m))
-        writer.writerow({field: format(row[field], ".15g") for field in FIELDS})
+        # Thirteen significant digits retain far more precision than the
+        # engineering inputs while removing platform-libm differences in the
+        # final one or two binary64 digits (observed between Linux and Windows).
+        writer.writerow({field: format(row[field], ".13g") for field in FIELDS})
     return stream.getvalue()
 
 
@@ -130,7 +133,7 @@ def metadata(csv_sha256: str) -> dict:
             "kinematic_viscosity": "USSA1976 Equation 52",
         },
         "generator": "verification/generate_standard_atmosphere.py",
-        "generator_version": 1,
+        "generator_version": 2,
         "checksum_encoding": "SHA-256 of UTF-8 CSV with LF line endings",
         "csv_sha256": csv_sha256,
     }

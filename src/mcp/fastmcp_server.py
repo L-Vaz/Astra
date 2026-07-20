@@ -618,6 +618,7 @@ from services import design_session as ds
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from domain_packs.bwb.schema import BWBParams, MissionDerived
+from domain_packs.bwb.atmosphere import atmosphere_provenance
 
 
 class PlanDesignRequest(BaseModel):
@@ -660,7 +661,10 @@ async def plan_design(request: PlanDesignRequest, ctx: Context) -> PlanDesignRes
         with open(os.path.join(vdir, "enriched_requirement.txt"), "w") as f:
             f.write(result.enriched_requirement)
         version = ds.record_version(sid, "plan", {
-            "prompt": request.prompt, "revision_note": request.revision_note})
+            "prompt": request.prompt,
+            "revision_note": request.revision_note,
+            **atmosphere_provenance(d.atmosphere),
+        })
 
         return PlanDesignResponse(
             session_id=sid,
@@ -915,7 +919,10 @@ async def run_fast_aero(request: FastAeroRequest, ctx: Context) -> Dict[str, Any
         vdir = ds.new_version_dir(request.session_id, "fast_aero")
         await ctx.info(f"Running VSPAERO sweep in {vdir}")
         result = fast_aero_svc(report, derived, vdir)
-        version = ds.record_version(request.session_id, "fast_aero", {"passed": True})
+        version = ds.record_version(request.session_id, "fast_aero", {
+            "passed": True,
+            **atmosphere_provenance(derived.atmosphere),
+        })
         return {"session_id": request.session_id, "version": version,
                 "alpha_trim_deg": result["alpha_trim_deg"],
                 "ld_at_trim": result["ld_at_trim"],

@@ -1,13 +1,13 @@
 {
   "altitude_type": "geometric altitude above mean sea level",
   "checksum_encoding": "SHA-256 of UTF-8 CSV with LF line endings",
-  "csv_sha256": "28a7fb55b7e6f38c604379432628aa5af31d3d3b6b27689f58bb9dada92237f0",
+  "csv_sha256": "8a6b61ecc1b0419f8af6617766d7680da2dcfb0f4bdfe28b834b5a667b66fc03",
   "equations": {
     "dynamic_viscosity": "USSA1976 Equation 51",
     "kinematic_viscosity": "USSA1976 Equation 52"
   },
   "generator": "verification/generate_standard_atmosphere.py",
-  "generator_version": 1,
+  "generator_version": 2,
   "interpolation": {
     "derived_fields": {
       "kinematic_viscosity_m2s": "dynamic_viscosity_kgms / density_kgm3"

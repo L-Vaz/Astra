@@ -15,6 +15,7 @@ from services.flow_conditions import (  # noqa: E402
     enforce_flow_contract_path,
     enforce_openfoam_viscosity,
     load_flow_contract,
+    run_contracted_solver,
     validate_openfoam_viscosity,
     write_flow_contract,
 )
@@ -52,6 +53,13 @@ def test_flow_contract_round_trip_and_reynolds(contract, tmp_path):
     )
     raw = json.loads(path.read_text())
     assert raw["atmosphere"]["dataset_sha256"] == contract.atmosphere.dataset_sha256
+
+
+def test_flow_contract_rejects_inconsistent_reynolds(contract):
+    corrupt = contract.model_dump()
+    corrupt["reference_reynolds"] *= 2
+    with pytest.raises(ValueError, match="reference Reynolds"):
+        type(contract).model_validate(corrupt)
 
 
 def test_enforcement_rewrites_and_validates_nu(contract, tmp_path):
@@ -92,6 +100,58 @@ def test_validator_rejects_wrong_value_or_dimensions(contract, tmp_path):
     physical.write_text("nu [0 2 -1 0 0 0 0] 9e-5;\n")
     with pytest.raises(FlowConditionMismatch, match="does not match"):
         validate_openfoam_viscosity(str(tmp_path), contract)
+
+
+def test_enforcement_ignores_commented_nu(contract, tmp_path):
+    physical = tmp_path / "constant" / "physicalProperties"
+    physical.parent.mkdir()
+    physical.write_text(
+        "/* old value:\nnu [0 2 -1 0 0 0 0] 9e-5;\n*/\n"
+        "nu [0 2 -1 0 0 0 0] 8e-5;\n"
+    )
+
+    enforce_openfoam_viscosity(str(tmp_path), contract)
+
+    text = physical.read_text()
+    assert "old value:\nnu [0 2 -1 0 0 0 0] 9e-5;" in text
+    assert validate_openfoam_viscosity(str(tmp_path), contract) == pytest.approx(
+        contract.atmosphere.kinematic_viscosity_m2s
+    )
+
+
+def test_enforcement_rejects_dictionary_indirection(contract, tmp_path):
+    physical = tmp_path / "constant" / "physicalProperties"
+    physical.parent.mkdir()
+    physical.write_text('#include "sharedViscosity"\n')
+
+    with pytest.raises(FlowConditionMismatch, match="indirection"):
+        enforce_openfoam_viscosity(str(tmp_path), contract)
+
+
+def test_contracted_solver_enforces_immediately_before_launch(
+    monkeypatch, contract, tmp_path
+):
+    contract_path = tmp_path / "flow_conditions.json"
+    write_flow_contract(str(contract_path), contract)
+    physical = tmp_path / "case" / "constant" / "physicalProperties"
+    physical.parent.mkdir(parents=True)
+    physical.write_text("nu [0 2 -1 0 0 0 0] 9e-5;\n")
+    observed = {}
+
+    def fake_run(*args, **kwargs):
+        observed["nu"] = validate_openfoam_viscosity(str(tmp_path / "case"), contract)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("services.flow_conditions.subprocess.run", fake_run)
+
+    result = run_contracted_solver(
+        str(tmp_path / "case"), str(contract_path), timeout_s=30
+    )
+
+    assert result.returncode == 0
+    assert observed["nu"] == pytest.approx(
+        contract.atmosphere.kinematic_viscosity_m2s
+    )
 
 
 def test_contract_path_gate_enforces_serialized_contract(contract, tmp_path):

@@ -127,11 +127,16 @@ def main() -> int:
     # ================= Phase 2: numerics gates (evaluator) =================
     # Requires a completed golden case (run verify_golden.py with LLM first).
     golden_case = os.path.join(RUNS_DIR, "verify_golden", "simulation", "case")
-    if os.path.isdir(golden_case):
+    golden_flow = os.path.join(
+        RUNS_DIR, "verify_golden", "simulation", "flow_conditions.json"
+    )
+    if os.path.isdir(golden_case) and os.path.isfile(golden_flow):
         import shutil
         import subprocess
         from services.evaluate import evaluate_case
+        from services.flow_conditions import load_flow_contract, run_contracted_solver
         foam = os.environ.get("FOAM_BASHRC", "/opt/openfoam10/etc/bashrc")
+        flow_conditions = load_flow_contract(golden_flow)
 
         # bad: sabotage fvSchemes with an invalid divergence scheme, fresh run
         bad_case = os.path.join(outbase, "bad_numerics_case")
@@ -148,13 +153,16 @@ def main() -> int:
                         "foamDictionary system/fvSchemes -entry divSchemes/'div(phi,U)' "
                         "-set 'Gauss bogusScheme'"],
                        cwd=bad_case, capture_output=True, text=True)
-        subprocess.run(["bash", "-lc",
-                        f"source {foam} >/dev/null 2>&1; "
-                        "simpleFoam > log.simpleFoam 2>&1 || true"],
-                       cwd=bad_case, capture_output=True, text=True, timeout=1200)
+        run_contracted_solver(
+            bad_case,
+            golden_flow,
+            log_filename="log.simpleFoam",
+            timeout_s=1200,
+        )
         ev_bad = evaluate_case(case_dir=bad_case,
                                outdir=os.path.join(outbase, "bad_numerics_eval"),
-                               required_cl=0.181, vlm_cl=0.181)
+                               required_cl=0.181, vlm_cl=0.181,
+                               flow_conditions=flow_conditions)
         t.add("reject: bad numerics (bogus div scheme) caught by evaluator",
               ev_bad["verdict"] in ("reject", "revise-numerics"),
               f"verdict={ev_bad['verdict']}")
@@ -162,13 +170,14 @@ def main() -> int:
         # good: the golden case itself must NOT be rejected
         ev_good = evaluate_case(case_dir=golden_case,
                                 outdir=os.path.join(outbase, "good_numerics_eval"),
-                                required_cl=0.181, vlm_cl=0.181)
+                                required_cl=0.181, vlm_cl=0.181,
+                                flow_conditions=flow_conditions)
         t.add("proceed: good numerics accepted by evaluator",
               ev_good["verdict"] in ("pass", "revise-design"),
               f"verdict={ev_good['verdict']}")
     else:
         t.add("numerics gates", False,
-              "no golden case found — run verify_golden.py (with LLM) first")
+              "no contracted golden case found — run verify_golden.py (with LLM) first")
 
     return t.finish()
 

@@ -5,16 +5,19 @@ import json
 import math
 import os
 import re
+import shlex
+import subprocess
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from domain_packs.bwb.atmosphere import AtmosphereState
 from domain_packs.bwb.schema import MissionDerived
 
 
 KINEMATIC_VISCOSITY_DIMENSIONS = "0 2 -1 0 0 0 0"
+FOAM_BASHRC = os.environ.get("FOAM_BASHRC", "/opt/openfoam10/etc/bashrc")
 _FLOAT_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _NU_RE = re.compile(
     rf"(?m)^(?P<indent>[ \t]*)nu[ \t]+"
@@ -23,6 +26,7 @@ _NU_RE = re.compile(
 )
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT_RE = re.compile(r"//.*?$", re.MULTILINE)
+_INDIRECTION_RE = re.compile(r"(?m)^[ \t]*#|\$\{?[A-Za-z_]", re.MULTILINE)
 
 
 class FlowConditionMismatch(RuntimeError):
@@ -37,6 +41,18 @@ class FlowConditions(BaseModel):
     reference_length_m: float = Field(gt=0.0)
     reference_area_m2: float = Field(gt=0.0)
     reference_reynolds: float = Field(gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_reynolds_identity(self):
+        expected = (
+            self.velocity_ms * self.reference_length_m
+            / self.atmosphere.kinematic_viscosity_m2s
+        )
+        if not math.isclose(
+            self.reference_reynolds, expected, rel_tol=1e-12, abs_tol=0.0
+        ):
+            raise ValueError("reference Reynolds is inconsistent with flow conditions")
+        return self
 
 
 def build_flow_contract(
@@ -104,6 +120,23 @@ nu              [{KINEMATIC_VISCOSITY_DIMENSIONS}] {nu:.17g};
 """
 
 
+def _mask_comments(content: str) -> str:
+    """Replace comments with whitespace while preserving match offsets."""
+    def mask(match: re.Match) -> str:
+        return "".join("\n" if char == "\n" else " " for char in match.group())
+
+    return _LINE_COMMENT_RE.sub(mask, _BLOCK_COMMENT_RE.sub(mask, content))
+
+
+def _active_dictionary(content: str, target: Path) -> str:
+    active = _mask_comments(content)
+    if _INDIRECTION_RE.search(active):
+        raise FlowConditionMismatch(
+            f"{target} uses unsupported dictionary indirection; write one literal nu"
+        )
+    return active
+
+
 def enforce_openfoam_viscosity(
     case_dir: str, contract: FlowConditions
 ) -> float:
@@ -114,7 +147,7 @@ def enforce_openfoam_viscosity(
     replacement = f"nu [{KINEMATIC_VISCOSITY_DIMENSIONS}] {nu:.17g};"
     if target.exists():
         content = target.read_text(encoding="utf-8")
-        matches = list(_NU_RE.finditer(content))
+        matches = list(_NU_RE.finditer(_active_dictionary(content, target)))
         if len(matches) > 1:
             raise FlowConditionMismatch(
                 f"{target} contains {len(matches)} active nu entries"
@@ -138,7 +171,7 @@ def validate_openfoam_viscosity(
     if not target.exists():
         raise FlowConditionMismatch(f"missing Foundation v10 dictionary: {target}")
     content = target.read_text(encoding="utf-8")
-    active = _LINE_COMMENT_RE.sub("", _BLOCK_COMMENT_RE.sub("", content))
+    active = _active_dictionary(content, target)
     matches = list(_NU_RE.finditer(active))
     if len(matches) != 1:
         raise FlowConditionMismatch(
@@ -159,3 +192,26 @@ def validate_openfoam_viscosity(
             f"{expected:.17g}"
         )
     return actual
+
+
+def run_contracted_solver(
+    case_dir: str,
+    flow_conditions_path: str,
+    *,
+    solver_command: str = "simpleFoam",
+    log_filename: str = "log.simpleFoam",
+    timeout_s: int = 3600,
+):
+    """Enforce/read back nu immediately before a direct OpenFOAM solve."""
+    enforce_flow_contract_path(case_dir, flow_conditions_path)
+    command = (
+        f"source {shlex.quote(FOAM_BASHRC)} >/dev/null 2>&1; "
+        f"{solver_command} > {shlex.quote(log_filename)} 2>&1"
+    )
+    return subprocess.run(
+        ["bash", "-lc", command],
+        cwd=case_dir,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+    )

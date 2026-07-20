@@ -3,6 +3,7 @@
 Shared by the FoamAgent conda env (py3.12) and the OpenVSP venv (py3.10):
 pydantic-only, no OpenVSP imports here.
 """
+import math
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -146,5 +147,41 @@ class MissionDerived(BaseModel):
         if altitude_m is None:
             return data
         restored = dict(data)
-        restored["atmosphere"] = atmosphere_at(float(altitude_m))
+        atmosphere = atmosphere_at(float(altitude_m))
+        restored["atmosphere"] = atmosphere
+        restored["air_density_kgm3"] = atmosphere.density_kgm3
+        params = restored.get("params")
+        speed = mission.cruise_speed_ms if isinstance(mission, MissionSpec) else mission.get("cruise_speed_ms")
+        if params is not None and speed is not None:
+            parsed_params = params if isinstance(params, BWBParams) else BWBParams.model_validate(params)
+            restored["reynolds_mac"] = (
+                float(speed) * parsed_params.mean_aero_chord_m()
+                / atmosphere.kinematic_viscosity_m2s
+            )
         return restored
+
+    @model_validator(mode="after")
+    def validate_atmosphere_consistency(self):
+        if not math.isclose(
+            self.mission.cruise_altitude_m,
+            self.atmosphere.geometric_altitude_m,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("atmosphere does not match mission altitude")
+        if not math.isclose(
+            self.air_density_kgm3,
+            self.atmosphere.density_kgm3,
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            raise ValueError("flat density does not match atmosphere state")
+        expected_reynolds = (
+            self.mission.cruise_speed_ms * self.params.mean_aero_chord_m()
+            / self.atmosphere.kinematic_viscosity_m2s
+        )
+        if not math.isclose(
+            self.reynolds_mac, expected_reynolds, rel_tol=1e-12, abs_tol=0.0
+        ):
+            raise ValueError("mission Reynolds number is inconsistent with atmosphere")
+        return self

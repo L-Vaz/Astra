@@ -123,6 +123,16 @@ def main() -> int:
         t.add("mesh: build", False, str(e)[:200])
         return t.finish()
 
+    from services.flow_conditions import build_flow_contract, write_flow_contract
+    sim_dir = os.path.join(OUTDIR, "simulation")
+    flow_conditions = build_flow_contract(
+        derived,
+        reference_length_m=report.mean_aero_chord_m,
+        reference_area_m2=report.s_ref_m2,
+    )
+    flow_conditions_path = os.path.join(sim_dir, "flow_conditions.json")
+    write_flow_contract(flow_conditions_path, flow_conditions)
+
     if args.no_llm:
         t.add("simulation: existing Foam-Agent graph", None, "needs LLM (--no-llm set)")
         t.add("evaluate: convergence + plausibility + report", None, "needs simulation")
@@ -131,12 +141,17 @@ def main() -> int:
 
     # ---- Stage: simulation through the EXISTING Foam-Agent graph ----
     from services.simulate import SimulationFailed, compose_requirement, run_simulation
-    sim_dir = os.path.join(OUTDIR, "simulation")
     requirement = compose_requirement(
         build_enriched_requirement(derived), mission.cruise_speed_ms,
-        fast["alpha_trim_deg"], iterations=600)
+        fast["alpha_trim_deg"], iterations=600,
+        flow_conditions=flow_conditions)
     try:
-        sim = run_simulation(requirement, mesh_report["artifacts"]["msh"], sim_dir)
+        sim = run_simulation(
+            requirement,
+            mesh_report["artifacts"]["msh"],
+            sim_dir,
+            flow_conditions_path=flow_conditions_path,
+        )
         t.add("simulation: graph completed", True, sim["case_dir"])
     except SimulationFailed as e:
         t.add("simulation: graph completed", False, f"{e} …{e.log_tail[-200:]}")
@@ -151,7 +166,7 @@ def main() -> int:
            "cofr_x": fast["x_np_m"] - 0.08 * report.mean_aero_chord_m}
     ev = evaluate_case(case_dir=sim["case_dir"], outdir=eval_dir,
                        required_cl=derived.required_cl, vlm_cl=derived.required_cl,
-                       ref=ref)
+                       ref=ref, flow_conditions=flow_conditions)
     # meets_cl_target / plausible_vs_vspaero are DESIGN outcomes, not
     # machinery: a coarse mesh legitimately under-predicts CL and the verdict
     # (asserted below) is what must route correctly on them.

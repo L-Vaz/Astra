@@ -92,7 +92,10 @@ def main() -> int:
     # ---- simulation revision: documented restart with extended endTime ----
     # Requires a completed golden case (run verify_golden.py first).
     golden_case = os.path.join(RUNS_DIR, "verify_golden", "simulation", "case")
-    if os.path.isdir(golden_case):
+    golden_flow = os.path.join(
+        RUNS_DIR, "verify_golden", "simulation", "flow_conditions.json"
+    )
+    if os.path.isdir(golden_case) and os.path.isfile(golden_flow):
         import re
         import shutil
         import subprocess
@@ -114,9 +117,16 @@ def main() -> int:
         foam_run("foamDictionary system/controlDict -entry startFrom -set latestTime")
         # ensure the solver writes fields at the new endTime
         foam_run("foamDictionary system/controlDict -entry writeInterval -set 100")
-        res = foam_run("simpleFoam > log.simpleFoam.continue 2>&1; echo rc=$?")
+        from services.flow_conditions import load_flow_contract, run_contracted_solver
+        flow_conditions = load_flow_contract(golden_flow)
+        res = run_contracted_solver(
+            rev_case,
+            golden_flow,
+            log_filename="log.simpleFoam.continue",
+            timeout_s=3600,
+        )
         cont_log = os.path.join(rev_case, "log.simpleFoam.continue")
-        ok = os.path.exists(cont_log) and "rc=0" in res.stdout
+        ok = os.path.exists(cont_log) and res.returncode == 0
         t.add("simulation revision: restart to extended endTime",
               ok and os.path.isdir(os.path.join(rev_case, str(new_end))),
               f"endTime {end0} -> {new_end} (documented latestTime restart)")
@@ -125,13 +135,18 @@ def main() -> int:
         from services.evaluate import evaluate_case
         ev_dir = os.path.join(RUNS_DIR, "verify_revisions_sessions",
                               sid, "eval_revision")
-        ev = evaluate_case(case_dir=rev_case, outdir=ev_dir, extra_slices=["z"])
+        ev = evaluate_case(
+            case_dir=rev_case,
+            outdir=ev_dir,
+            extra_slices=["z"],
+            flow_conditions=flow_conditions,
+        )
         t.add("visualization revision: extra z-slice rendered",
               "render_U_slice_z" in ev["artifacts"],
               ", ".join(os.path.basename(v) for v in ev["artifacts"].values()))
     else:
         t.add("simulation revision", False,
-              "no golden case found — run verify_golden.py (with LLM) first")
+              "no contracted golden case found — run verify_golden.py (with LLM) first")
         t.add("visualization revision", False, "needs the simulation revision case")
 
     return t.finish()

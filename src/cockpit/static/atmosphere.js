@@ -11,13 +11,20 @@ const INTERPOLATED_FIELDS = [
 const lerp = (lower, upper, fraction) => lower + fraction * (upper - lower);
 
 export function resolveAtmosphere(altitudeM, table) {
+  if (altitudeM === null || altitudeM === undefined ||
+      (typeof altitudeM === 'string' && altitudeM.trim() === '')) {
+    throw new TypeError('geometric altitude must be a finite numeric value');
+  }
   const altitude = Number(altitudeM);
   if (!table || !Array.isArray(table.rows) || table.rows.length < 2) {
     throw new Error('standard-atmosphere table is unavailable');
   }
   const minimum = Number(table.minimum_altitude_m);
   const maximum = Number(table.maximum_altitude_m);
-  if (!Number.isFinite(altitude) || altitude < minimum || altitude > maximum) {
+  if (!Number.isFinite(altitude)) {
+    throw new TypeError('geometric altitude must be a finite numeric value');
+  }
+  if (altitude < minimum || altitude > maximum) {
     throw new RangeError(`geometric altitude ${altitudeM} outside [${minimum}, ${maximum}] m`);
   }
 

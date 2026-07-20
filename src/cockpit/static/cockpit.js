@@ -568,9 +568,9 @@ function buildMissionTab() {
       let v = +raw;
       if (Number.isNaN(v)) { toast('warn', `${label}: "${raw}" is not a number — ignored.`); inp.value = S.mission[key] ?? ''; return; }
       if (v < lo || v > hi) {
-        const c = Math.min(hi, Math.max(lo, v));
-        toast('warn', `${label} ${v} ${unit} is outside the supported envelope ${lo}–${hi} ${unit}; clamped to ${c}. (Schema limit for small-UAV scope.)`);
-        v = c;
+        toast('warn', `${label} ${v} ${unit} is outside the supported envelope ${lo}–${hi} ${unit}; keeping ${S.mission[key]}.`);
+        inp.value = S.mission[key] ?? '';
+        return;
       }
       S.mission[key] = v;
       syncAll();

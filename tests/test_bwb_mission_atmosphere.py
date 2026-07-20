@@ -36,5 +36,14 @@ def test_legacy_mission_derived_reconstructs_missing_atmosphere():
     assert loaded.air_density_kgm3 == legacy["air_density_kgm3"]
 
 
+def test_mission_rejects_atmosphere_from_different_altitude():
+    current = derive(MISSION)
+    corrupt = current.model_dump()
+    corrupt["atmosphere"] = atmosphere_at(2000.0).model_dump()
+
+    with pytest.raises(ValueError, match="mission altitude"):
+        MissionDerived.model_validate(corrupt)
+
+
 def test_isa_density_compatibility_wrapper_uses_the_table():
     assert isa_density(1275.0) == atmosphere_at(1275.0).density_kgm3

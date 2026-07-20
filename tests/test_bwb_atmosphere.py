@@ -3,11 +3,13 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from domain_packs.bwb.atmosphere import (
     DATASET_SHA256,
     SOURCE_ID,
     atmosphere_at,
+    atmosphere_provenance,
     atmosphere_table_payload,
 )
 
@@ -25,6 +27,30 @@ def test_atmosphere_dataset_is_in_distribution_package_data():
     assert "static/*.js" in package_data["src.cockpit"]
     assert "static/*.css" in package_data["src.cockpit"]
     assert "static/*.html" in package_data["src.cockpit"]
+
+
+def test_serialized_atmosphere_rejects_corrupt_physics_and_provenance():
+    state = atmosphere_at(1275.0)
+    corrupt_nu = state.model_dump()
+    corrupt_nu["kinematic_viscosity_m2s"] *= 2
+    with pytest.raises(ValidationError, match="kinematic viscosity"):
+        type(state).model_validate(corrupt_nu)
+
+    corrupt_source = state.model_dump()
+    corrupt_source["dataset_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="checksum"):
+        type(state).model_validate(corrupt_source)
+
+
+def test_manifest_provenance_summary_is_self_describing():
+    state = atmosphere_at(1275.0)
+
+    assert atmosphere_provenance(state) == {
+        "atmosphere_source": state.source,
+        "atmosphere_dataset_sha256": state.dataset_sha256,
+        "altitude_m": state.geometric_altitude_m,
+        "kinematic_viscosity_m2s": state.kinematic_viscosity_m2s,
+    }
 
 
 @pytest.mark.parametrize(

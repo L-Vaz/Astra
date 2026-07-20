@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 SOURCE_ID = "USSA1976-NOAA-S/T-76-1562-NASA-TM-X-74335"
@@ -49,6 +49,63 @@ class AtmosphereState(BaseModel):
     source: str
     dataset_sha256: str
     interpolation: InterpolationProvenance
+
+    @model_validator(mode="after")
+    def validate_physics_and_provenance(self):
+        numeric = (
+            self.geometric_altitude_m,
+            self.geopotential_altitude_m,
+            self.temperature_k,
+            self.temperature_c,
+            self.pressure_pa,
+            self.density_kgm3,
+            self.dynamic_viscosity_kgms,
+            self.kinematic_viscosity_m2s,
+        )
+        if not all(math.isfinite(value) for value in numeric):
+            raise ValueError("atmosphere values must be finite")
+        if not 0.0 <= self.geometric_altitude_m <= 4000.0:
+            raise ValueError("atmosphere altitude outside [0, 4000] m")
+        if any(value <= 0.0 for value in (
+            self.temperature_k,
+            self.pressure_pa,
+            self.density_kgm3,
+            self.dynamic_viscosity_kgms,
+            self.kinematic_viscosity_m2s,
+        )):
+            raise ValueError("atmosphere thermodynamic values must be positive")
+        if not math.isclose(
+            self.kinematic_viscosity_m2s,
+            self.dynamic_viscosity_kgms / self.density_kgm3,
+            rel_tol=2e-13,
+            abs_tol=0.0,
+        ):
+            raise ValueError("kinematic viscosity must equal dynamic viscosity / density")
+        if not math.isclose(
+            self.temperature_c, self.temperature_k - 273.15,
+            rel_tol=0.0, abs_tol=1e-10,
+        ):
+            raise ValueError("Celsius and kelvin temperatures are inconsistent")
+        if self.source != SOURCE_ID:
+            raise ValueError("atmosphere source is not the canonical USSA1976 source")
+        if self.dataset_sha256 != DATASET_SHA256:
+            raise ValueError("atmosphere dataset checksum is not canonical")
+        provenance = self.interpolation
+        lower = provenance.lower_table_altitude_m
+        upper = provenance.upper_table_altitude_m
+        if not lower <= self.geometric_altitude_m <= upper:
+            raise ValueError("atmosphere interpolation bounds do not contain altitude")
+        exact = math.isclose(lower, upper, rel_tol=0.0, abs_tol=0.0)
+        if exact != provenance.exact_row:
+            raise ValueError("atmosphere exact-row provenance is inconsistent")
+        expected_fraction = 0.0 if exact else (
+            (self.geometric_altitude_m - lower) / (upper - lower)
+        )
+        if not math.isclose(
+            provenance.fraction, expected_fraction, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise ValueError("atmosphere interpolation fraction is inconsistent")
+        return self
 
 
 class _AtmosphereRow(BaseModel):
@@ -120,7 +177,7 @@ def _rows() -> tuple[_AtmosphereRow, ...]:
             raise ValueError(f"non-positive atmosphere value at {row.geometric_altitude_m} m")
         expected_nu = row.dynamic_viscosity_kgms / row.density_kgm3
         if not math.isclose(
-            row.kinematic_viscosity_m2s, expected_nu, rel_tol=2e-14, abs_tol=0.0
+            row.kinematic_viscosity_m2s, expected_nu, rel_tol=2e-12, abs_tol=0.0
         ):
             raise ValueError(f"nu != mu/rho at {row.geometric_altitude_m} m")
     return rows
@@ -192,4 +249,14 @@ def atmosphere_table_payload() -> dict[str, Any]:
         "row_interval_m": float(meta["row_interval_m"]),
         "interpolation": meta["interpolation"],
         "rows": [row.model_dump() for row in _rows()],
+    }
+
+
+def atmosphere_provenance(state: AtmosphereState) -> dict[str, Any]:
+    """Compact self-describing fields for stage manifests and registries."""
+    return {
+        "atmosphere_source": state.source,
+        "atmosphere_dataset_sha256": state.dataset_sha256,
+        "altitude_m": state.geometric_altitude_m,
+        "kinematic_viscosity_m2s": state.kinematic_viscosity_m2s,
     }
