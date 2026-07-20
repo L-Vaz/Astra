@@ -551,7 +551,15 @@ def save_mission(req: MissionRequest) -> Dict[str, Any]:
     # mission + sizing targets, but does not overwrite edited geometry params.
     current = _current_params(req.session_id)
     if current:
-        derived = derived.model_copy(update={"params": BWBParams.model_validate(current)})
+        current_params = BWBParams.model_validate(current)
+        derived = MissionDerived.model_validate({
+            **derived.model_dump(),
+            "params": current_params,
+            "reynolds_mac": (
+                mission.cruise_speed_ms * current_params.mean_aero_chord_m()
+                / derived.atmosphere.kinematic_viscosity_m2s
+            ),
+        })
     # invalidate_from="fast_aero": a mission change alters the flight condition
     # (fast-aero/mesh/CFD genuinely stale) but NOT the already-built shape —
     # the geometry stays valid and staleness vs requirements is surfaced instead.
