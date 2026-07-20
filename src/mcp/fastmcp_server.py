@@ -669,6 +669,11 @@ async def plan_design(request: PlanDesignRequest, ctx: Context) -> PlanDesignRes
             derived={
                 "mtow_kg": round(d.mtow_kg, 2),
                 "air_density_kgm3": round(d.air_density_kgm3, 4),
+                "air_temperature_k": round(d.atmosphere.temperature_k, 3),
+                "air_pressure_pa": round(d.atmosphere.pressure_pa, 2),
+                "dynamic_viscosity_kgms": d.atmosphere.dynamic_viscosity_kgms,
+                "kinematic_viscosity_m2s": d.atmosphere.kinematic_viscosity_m2s,
+                "atmosphere": d.atmosphere.model_dump(),
                 "s_ref_target_m2": round(d.s_ref_target_m2, 4),
                 "wing_loading_kgm2": round(d.wing_loading_kgm2, 2),
                 "required_cl": round(d.required_cl, 3),

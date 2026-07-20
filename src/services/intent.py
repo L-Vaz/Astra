@@ -56,9 +56,14 @@ stage. Reference quantities: reference area {d.s_ref_target_m2:.4f} m^2, referen
 (MAC) {p.mean_aero_chord_m():.4f} m, span {p.span_m:.3f} m. Moment reference at the
 estimated CG.
 
-Flow conditions: freestream velocity {m.cruise_speed_ms:.1f} m/s along +x, air density
-{d.air_density_kgm3:.4f} kg/m^3, kinematic viscosity 1.48e-5 m^2/s, Reynolds number
-based on MAC approximately {d.reynolds_mac:.3g}.
+Flow conditions: freestream velocity {m.cruise_speed_ms:.1f} m/s along +x at geometric
+altitude {d.atmosphere.geometric_altitude_m:.2f} m AMSL. Standard-atmosphere
+temperature {d.atmosphere.temperature_k:.3f} K, pressure {d.atmosphere.pressure_pa:.2f} Pa,
+air density {d.atmosphere.density_kgm3:.6f} kg/m^3,
+dynamic viscosity {d.atmosphere.dynamic_viscosity_kgms:.9g} kg/(m*s),
+kinematic viscosity {d.atmosphere.kinematic_viscosity_m2s:.9g} m^2/s, Reynolds number based on MAC
+approximately {d.reynolds_mac:.3g}. Atmosphere source {d.atmosphere.source}, dataset
+SHA-256 {d.atmosphere.dataset_sha256}.
 
 Simulation: incompressible steady-state RANS with simpleFoam (Foundation OpenFOAM v10),
 turbulence model {d.turbulence_model} with wall functions (target y+ ~ {d.y_plus_target:.0f}).
