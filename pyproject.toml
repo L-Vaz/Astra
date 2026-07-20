@@ -60,3 +60,4 @@ namespaces = true
 [tool.setuptools.package-data]
 "*" = ["*.json", "*.md"]
 "domain_packs.bwb" = ["data/*.csv", "data/*.json"]
+"src.cockpit" = ["static/*.js", "static/*.css", "static/*.html"]

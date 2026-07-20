@@ -22,6 +22,9 @@ def test_atmosphere_dataset_is_in_distribution_package_data():
     assert "domain_packs.*" in includes
     assert "data/*.csv" in package_data["domain_packs.bwb"]
     assert "data/*.json" in package_data["domain_packs.bwb"]
+    assert "static/*.js" in package_data["src.cockpit"]
+    assert "static/*.css" in package_data["src.cockpit"]
+    assert "static/*.html" in package_data["src.cockpit"]
 
 
 @pytest.mark.parametrize(
