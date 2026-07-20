@@ -7,9 +7,8 @@ assumptions list so the user can audit (and override) it.
 import math
 from typing import List, Optional
 
+from .atmosphere import atmosphere_at
 from .schema import BWBParams, MissionDerived, MissionSpec
-
-MU_AIR = 1.81e-5  # dynamic viscosity, kg/(m s), ~15 C
 
 # Typical wing loading for small fixed-wing UAVs by launch method, kg/m^2
 WING_LOADING = {"hand": 7.0, "catapult": 10.0, "runway": 13.0}
@@ -19,8 +18,8 @@ MAX_CRUISE_CL = 0.75       # above this, cruise sits too close to stall
 
 
 def isa_density(altitude_m: float) -> float:
-    """ISA troposphere density."""
-    return 1.225 * (1.0 - 2.25577e-5 * altitude_m) ** 4.2559
+    """Compatibility wrapper for callers that only need standard density."""
+    return atmosphere_at(altitude_m).density_kgm3
 
 
 def derive(mission: MissionSpec) -> MissionDerived:
@@ -32,7 +31,8 @@ def derive(mission: MissionSpec) -> MissionDerived:
         assumptions.append(
             f"MTOW not given; assumed payload fraction {PAYLOAD_FRACTION:.0%} -> MTOW {mtow:.2f} kg")
 
-    rho = isa_density(mission.cruise_altitude_m)
+    atmosphere = atmosphere_at(mission.cruise_altitude_m)
+    rho = atmosphere.density_kgm3
     weight_n = mtow * 9.81
 
     wl = WING_LOADING[mission.launch]
@@ -58,13 +58,14 @@ def derive(mission: MissionSpec) -> MissionDerived:
 
     params = _planform_from(span, s_ref)
     mac = params.mean_aero_chord_m()
-    re_mac = rho * mission.cruise_speed_ms * mac / MU_AIR
+    re_mac = mission.cruise_speed_ms * mac / atmosphere.kinematic_viscosity_m2s
 
     assumptions.append("Turbulence model kOmegaSST with wall functions (external aero default)")
     assumptions.append("Static margin target 8% MAC (tailless BWB needs washout + swept tips)")
 
     return MissionDerived(
         mission=mission,
+        atmosphere=atmosphere,
         mtow_kg=mtow,
         air_density_kgm3=rho,
         weight_n=weight_n,

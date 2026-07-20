@@ -7,6 +7,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from .atmosphere import AtmosphereState, atmosphere_at
+
 
 class MissionSpec(BaseModel):
     """What the user wants the drone to do. Parsed from natural language."""
@@ -114,6 +116,7 @@ class GeometryReport(BaseModel):
 class MissionDerived(BaseModel):
     """Physics derived from the mission by the intent stage (democratization layer)."""
     mission: MissionSpec
+    atmosphere: AtmosphereState
     mtow_kg: float
     air_density_kgm3: float
     weight_n: float
@@ -126,3 +129,22 @@ class MissionDerived(BaseModel):
     static_margin_target: float = 0.08
     params: BWBParams
     assumptions: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def restore_legacy_atmosphere(cls, data):
+        """Load artifacts written before AtmosphereState was serialized."""
+        if not isinstance(data, dict) or data.get("atmosphere") is not None:
+            return data
+        mission = data.get("mission")
+        if isinstance(mission, MissionSpec):
+            altitude_m = mission.cruise_altitude_m
+        elif isinstance(mission, dict):
+            altitude_m = mission.get("cruise_altitude_m")
+        else:
+            altitude_m = None
+        if altitude_m is None:
+            return data
+        restored = dict(data)
+        restored["atmosphere"] = atmosphere_at(float(altitude_m))
+        return restored
