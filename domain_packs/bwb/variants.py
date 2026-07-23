@@ -18,7 +18,7 @@ from .aero_estimates import (AeroEstimate, LAUNCH_VSTALL_MAX, cl_max_3d,
                              estimate)
 from .defaults import MAX_CRUISE_CL
 from .inverse import MIN_TIP_CHORD as _MIN_TIP_CHORD  # noqa: F401 (re-export)
-from .inverse import ShapeFractions, solve_planform
+from .inverse import ShapeFractions, _feasible_planform, solve_planform  # noqa: F401
 from .schema import BWBParams, MissionDerived
 
 _TIP_RE_WARN = 1.5e5
@@ -97,10 +97,11 @@ LENSES: List[_Lens] = [
 def _solve_planform(s_ref: float, lens: _Lens,
                     notes: Optional[List[str]] = None) -> BWBParams:
     """Build a valid BWBParams with lens proportions hitting s_ref exactly.
-    Thin wrapper over inverse.solve_planform (the lens-independent
-    generalization); clamps and note wording are identical."""
+    Uses inverse._feasible_planform (solve_planform plus defensive schema-gate
+    repairs) so envelope corners — tiny or heavy-and-slow aircraft — yield the
+    closest valid planform with a note instead of a ValidationError."""
     shape = ShapeFractions(**{k: getattr(lens, k) for k in ShapeFractions.model_fields})
-    return solve_planform(s_ref, lens.ar, shape, notes=notes)
+    return _feasible_planform(s_ref, lens.ar, shape, 3.0, notes)
 
 
 def _size_wing(lens: _Lens, derived: MissionDerived,

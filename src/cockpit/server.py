@@ -50,6 +50,7 @@ from services.asb_aero import AsbAeroRejected, score_geometry as asb_score_svc  
 from services.optimize import optimize as optimize_svc  # noqa: E402
 from domain_packs.bwb.design_space import DesignSpace  # noqa: E402
 from domain_packs.bwb import objective_presets as presets  # noqa: E402
+from domain_packs.bwb import intake as intake_pack  # noqa: E402
 
 app = FastAPI(title="Astra Aero Design Cockpit")
 
@@ -986,6 +987,173 @@ def get_render(session_id: str, version: int, view: str):
     if not os.path.exists(path):
         raise HTTPException(404, "render not found")
     return FileResponse(path, media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 — requirements intake (three-tier list) and concept gallery.
+# The intake is its own versioned artifact under the session
+# (intake/v<N>/intake.json); saving it never touches stage validity. The
+# "generate" endpoint is the only bridge: intake -> plan version -> candidates.
+# ---------------------------------------------------------------------------
+
+def _intake_dir(sid: str) -> str:
+    return _session_path(sid, "intake")
+
+
+def _intake_latest_version(sid: str) -> int:
+    idx = os.path.join(_intake_dir(sid), "index.json")
+    if not os.path.exists(idx):
+        return 0
+    with open(idx) as f:
+        return json.load(f).get("latest", 0)
+
+
+def _load_intake(sid: str) -> tuple:
+    """(intake, version). A fresh session gets a derived default list (v0,
+    unsaved) so the screen never opens empty."""
+    n = _intake_latest_version(sid)
+    if n == 0:
+        return intake_pack.derive(intake_pack.default_intake()), 0
+    path = os.path.join(_intake_dir(sid), f"v{n}", "intake.json")
+    with open(path) as f:
+        return intake_pack.Intake.model_validate(json.load(f)), n
+
+
+def _save_intake(sid: str, intake: intake_pack.Intake) -> int:
+    root = _intake_dir(sid)
+    n = _intake_latest_version(sid) + 1
+    vdir = os.path.join(root, f"v{n}")
+    os.makedirs(vdir, exist_ok=True)
+    with open(os.path.join(vdir, "intake.json"), "w") as f:
+        f.write(intake.model_dump_json(indent=2))
+    with open(os.path.join(root, "index.json"), "w") as f:
+        json.dump({"latest": n}, f, indent=2)
+    return n
+
+
+@app.get("/stage1")
+def stage1_page():
+    return FileResponse(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "static", "stage1.html"),
+        media_type="text/html")
+
+
+@app.get("/api/stage1/intake")
+def stage1_intake(session: Optional[str] = None) -> Dict[str, Any]:
+    sid = _ensure_session(session)
+    intake, version = _load_intake(sid)
+    return {"session_id": sid, "version": version,
+            "intake": intake.model_dump()}
+
+
+class IntakeParseReq(BaseModel):
+    session_id: Optional[str] = None
+    brief: str
+
+
+@app.post("/api/stage1/parse")
+def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
+    """Deterministic brief parse — the LLM parse arrives via chat/MCP; this
+    keeps the standalone cockpit honest (matched fields only)."""
+    sid = _ensure_session(req.session_id)
+    intake = intake_pack.derive(intake_pack.parse_brief(req.brief))
+    version = _save_intake(sid, intake)
+    _queue_explanation(
+        sid, "stage1_intake",
+        f"Stage-1 brief parsed (intake v{version}): "
+        + ", ".join(f"{r.label}={r.value}" for r in intake.rows
+                    if r.origin == "you_said") + ".",
+        {"intake_version": version})
+    return {"session_id": sid, "version": version, "intake": intake.model_dump()}
+
+
+class IntakeEditReq(BaseModel):
+    session_id: Optional[str] = None
+    edits: List[Dict[str, Any]]
+
+
+@app.post("/api/stage1/intake")
+def stage1_intake_save(req: IntakeEditReq) -> Dict[str, Any]:
+    sid = _ensure_session(req.session_id)
+    intake, _ = _load_intake(sid)
+    intake = intake_pack.derive(intake_pack.apply_edits(intake, req.edits))
+    version = _save_intake(sid, intake)
+    return {"session_id": sid, "version": version, "intake": intake.model_dump()}
+
+
+class IntakeGenerateReq(BaseModel):
+    session_id: Optional[str] = None
+
+
+@app.post("/api/stage1/generate")
+def stage1_generate(req: IntakeGenerateReq) -> Dict[str, Any]:
+    """Intake -> plan version -> tier-0 concept candidates for the gallery."""
+    sid = _ensure_session(req.session_id)
+    intake, iv = _load_intake(sid)
+    if iv == 0:
+        iv = _save_intake(sid, intake)
+    if intake.feasibility and intake.feasibility.verdict == "error":
+        raise HTTPException(409, "requirements do not size — fix the intake first")
+
+    def row_num(rid: str, fallback: float) -> float:
+        r = next((x for x in intake.rows if x.id == rid), None)
+        return r.number if r and r.number is not None else fallback
+
+    launch_row = next((x for x in intake.rows if x.id == "launch"), None)
+    launch = launch_row.value.strip().lower() if launch_row else "hand"
+    if launch not in ("hand", "catapult", "runway"):
+        launch = "hand"
+    endurance = next((x.number for x in intake.rows
+                      if x.id == "endurance" and x.number), None)
+    mission = MissionSpec(
+        payload_kg=min(max(row_num("payload", 1.0), 0.01), 10.0),
+        cruise_speed_ms=min(max(row_num("cruise_speed", 18.0), 8.0), 60.0),
+        cruise_altitude_m=min(max(row_num("altitude", 100.0), 0.0), 4000.0),
+        mtow_kg=min(row_num("mtow_cap", 0.0), 25.0) or None,
+        endurance_min=endurance,
+        launch=launch)
+    # Plan sizing comes from the SAME inverse solve the intake's feasibility
+    # ran — never defaults.derive's naive planform, which rejects envelope
+    # corners (tiny aircraft) that solve_requirements repairs deterministically.
+    req_ds = intake_pack.to_requirements(intake).model_copy(
+        update={"cruise_speed_ms": mission.cruise_speed_ms})
+    res = solve_requirements(req_ds)
+    atmo = atmosphere_at(mission.cruise_altitude_m)
+    derived = MissionDerived(
+        mission=mission, atmosphere=atmo, mtow_kg=req_ds.mtow_kg,
+        air_density_kgm3=atmo.density_kgm3, weight_n=req_ds.mtow_kg * 9.81,
+        wing_loading_kgm2=res.panel.wing_loading_kgm2,
+        s_ref_target_m2=res.panel.s_ref_m2,
+        required_cl=res.panel.cl_cruise,
+        reynolds_mac=(mission.cruise_speed_ms * res.params.mean_aero_chord_m()
+                      / atmo.kinematic_viscosity_m2s),
+        params=res.params,
+        assumptions=(["Sized by the stage-1 intake (inverse solve at "
+                      "best-L/D cruise)"] + res.notes))
+    version = _write_plan_version(sid, derived,
+                                  f"stage-1 intake v{iv} locked",
+                                  invalidate_from="fast_aero")
+    synced = _current_requirements(sid).model_dump()
+    synced.update({
+        "mtow_kg": derived.mtow_kg,
+        "cruise_speed_ms": mission.cruise_speed_ms,
+        "cruise_altitude_m": mission.cruise_altitude_m,
+        "launch": mission.launch,
+        "span_max_m": (row_num("span_max", 0.0) or None),
+        "v_stall_max_ms": (row_num("v_stall_max", 0.0) or None),
+    })
+    ds.save_requirements(sid, synced)
+    try:
+        batch = cand_svc.generate(sid, regenerate=True)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(409, str(e))
+    _queue_explanation(
+        sid, "stage1_generate",
+        f"Stage-1 concepts generated from intake v{iv} (plan v{version}): "
+        + ", ".join(c["title"] for c in batch["candidates"]) + ".",
+        {"plan_version": version, "intake_version": iv})
+    return {"session_id": sid, "plan_version": version, "intake_version": iv,
+            "candidates": batch["candidates"]}
 
 
 # static frontend (mounted last so /api/* wins)

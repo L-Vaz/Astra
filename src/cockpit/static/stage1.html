@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astra — Stage 1 · Plan</title>
+<link rel="stylesheet" href="stage1.css?v=1">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">ASTRA</div>
+  <nav id="stage-switch" aria-label="Pipeline stage">
+    <button class="stage-pill active" data-stage="1">Stage 1 · Plan</button>
+    <button class="stage-pill" data-stage="2" title="MDO on the chosen design — classic cockpit for now">Stage 2 · Optimize</button>
+    <button class="stage-pill" data-stage="3" title="VSPAERO / CFD verification — classic cockpit for now">Stage 3 · Verify</button>
+  </nav>
+  <div id="session-chip" class="chip">session: —</div>
+</header>
+
+<!-- ======================= requirements screen ======================= -->
+<main id="screen-req">
+  <section class="card" id="brief-card">
+    <p class="microlabel">Your mission brief — freeform, edit anytime</p>
+    <textarea id="brief" rows="3"
+      placeholder="I'm building a drone for supervising a farm. It should fly at around 100 m, span under 2 m, carry my 180 g camera, and stay up for at least 45 minutes. Hand launched."></textarea>
+    <div class="row-actions">
+      <span id="parse-note" class="dim"></span>
+      <button id="btn-parse" class="secondary">Parse brief</button>
+    </div>
+  </section>
+
+  <section class="card" id="list-card">
+    <div class="card-head">
+      <span class="card-title">Requirement list <span id="intake-version" class="chip">v0</span></span>
+      <span class="dim">tap lock to fix · tap value to type · tap i for the physics</span>
+    </div>
+    <p class="microlabel">Mission — from your brief</p>
+    <div id="tier-mission"></div>
+    <p class="microlabel">Vehicle constraints</p>
+    <div id="tier-vehicle"></div>
+    <button id="btn-add" class="ghost-add">+ Add constraint — max chord, materials, anything</button>
+    <p class="microlabel">Derived — always computed · open i to see what moves each one</p>
+    <div id="tier-derived"></div>
+  </section>
+
+  <section class="card" id="feas-card">
+    <div id="feas-icon">●</div>
+    <div id="feas-body">
+      <p id="feas-headline">—</p>
+      <p id="feas-detail" class="dim"></p>
+      <p id="feas-implied" class="mono dim"></p>
+    </div>
+    <button id="btn-generate" class="primary">Generate concepts →</button>
+  </section>
+</main>
+
+<!-- ======================= gallery screen ======================= -->
+<main id="screen-gallery" class="hidden">
+  <div id="viewport">
+    <canvas id="canvas3d"></canvas>
+
+    <div id="design-head">
+      <button id="design-title">
+        <span id="design-name">—</span> <span class="chev">▾</span>
+      </button>
+      <div id="design-details">
+        <p id="design-sub" class="dim"></p>
+        <table id="design-metrics"></table>
+        <p id="design-notes" class="dim"></p>
+      </div>
+    </div>
+
+    <div id="viewbtns">
+      <button data-view="iso" class="vb active">Iso</button>
+      <button data-view="top" class="vb">Top</button>
+      <button data-view="front" class="vb">Front</button>
+      <button data-view="side" class="vb">Side</button>
+      <button id="btn-proj" class="vb">Persp</button>
+    </div>
+
+    <button id="cand-prev" class="navarrow" aria-label="Previous design">‹</button>
+    <button id="cand-next" class="navarrow" aria-label="Next design">›</button>
+
+    <div id="gallery-foot">
+      <span id="dots"></span>
+      <span id="counter" class="dim">— / —</span>
+    </div>
+    <div id="busy" class="hidden"><div class="spinner"></div><span id="busy-msg">working…</span></div>
+  </div>
+
+  <footer id="gallery-bar">
+    <button id="btn-back-req" class="secondary">⚙ Requirements and plan</button>
+    <button id="btn-regen" class="secondary">+ New concepts</button>
+    <div class="spacer"></div>
+    <button id="btn-stage2" class="primary">Take this design to Stage 2 →</button>
+  </footer>
+</main>
+
+<div id="toast" class="hidden"></div>
+<script type="module" src="stage1.js?v=1"></script>
+<noscript>Stage 1 needs JavaScript.</noscript>
+</body>
+</html>
