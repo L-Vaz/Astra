@@ -941,15 +941,17 @@ def run_command(script_path: str, out_file: str, err_file: str, working_dir: str
     print(f"Executing script {script_path} in {working_dir}")
     os.chmod(script_path, 0o777)
     openfoam_dir = os.getenv("WM_PROJECT_DIR")
-    if not openfoam_dir:
-        raise RuntimeError(
-            "WM_PROJECT_DIR is not set. Please source OpenFOAM environment before running Foam-Agent "
-            "(e.g., source env/common.sh and env/foamagent.sh)."
-        )
-
-    bashrc_path = os.path.join(openfoam_dir, "etc", "bashrc")
+    if openfoam_dir:
+        bashrc_path = os.path.join(openfoam_dir, "etc", "bashrc")
+    else:
+        # An unsourced parent shell is fine: the bashrc is sourced inside the
+        # subprocess below. Same FOAM_BASHRC convention as services/bwb_mesh.
+        bashrc_path = os.environ.get("FOAM_BASHRC", "/opt/openfoam10/etc/bashrc")
     if not os.path.exists(bashrc_path):
-        raise RuntimeError(f"OpenFOAM bashrc not found at: {bashrc_path}")
+        raise RuntimeError(
+            f"OpenFOAM bashrc not found at: {bashrc_path}. Source the OpenFOAM "
+            "environment or set FOAM_BASHRC."
+        )
 
     script_path = os.path.abspath(script_path)
     working_dir = os.path.abspath(working_dir)

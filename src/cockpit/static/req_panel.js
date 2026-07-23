@@ -42,7 +42,7 @@ function schemaBounds(key, meta) {
     : facet.exclusiveMaximum != null ? facet.exclusiveMaximum - meta.step : meta.uiMax;
   if (meta.uiMin != null) min = Math.max(min, meta.uiMin);
   if (meta.uiMax != null) max = Math.min(max, meta.uiMax);
-  return { min, max };
+  return { min: +min.toFixed(6), max: +max.toFixed(6) };  // strip float noise
 }
 
 function metTolerances() {

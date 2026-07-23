@@ -301,6 +301,7 @@ dependencies:
   - zstd=1.5.7
   - pip:
       - accelerate==1.2.1
+      - aerosandbox==4.2.8
       - aiohappyeyeballs==2.4.6
       - aiohttp==3.11.12
       - airportsdata==20250224
@@ -323,6 +324,7 @@ dependencies:
       - boto3==1.37.1
       - botocore==1.37.1
       - cachetools==6.2.1
+      - casadi==3.7.2
       - cffi==2.0.0
       - click==8.1.8
       - cloudpickle==3.1.1
@@ -439,6 +441,7 @@ dependencies:
       - nbconvert==7.16.6
       - nbformat==5.10.4
       - nest-asyncio==1.6.0
+      - neuralfoil==0.3.3
       - ninja==1.11.1.4
       - notebook-shim==0.2.4
       - notebook==7.3.2

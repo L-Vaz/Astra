@@ -17,6 +17,7 @@ Live code is authoritative. When sources disagree, trust live code, then this fi
 Run from the repository root in the configured WSL environment:
 
 ```bash
+python verification/doctor.py
 python foambench_main.py --output ./output --prompt_path ./user_requirement.txt
 python verification/verify_golden.py --no-llm
 python verification/verify_golden.py
@@ -24,7 +25,7 @@ python verification/verify_revisions.py
 python verification/verify_gates.py
 ```
 
-The last two verification scripts require a completed golden case. Full CFD verification can use API credentials and take substantial time; use the deterministic `--no-llm` golden run for a quick pipeline check.
+`doctor` is a seconds-fast environment preflight (paths, both Python envs, OpenFOAM, FAISS, credentials) — run it first on a fresh or changed environment. The last two verification scripts require a completed golden case. Full CFD verification can use API credentials and take substantial time; use the deterministic `--no-llm` golden run for a quick pipeline check.
 
 ## Code map
 

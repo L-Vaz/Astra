@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra Aero Design Cockpit</title>
 <link rel="stylesheet" href="cockpit.css?v=rq1">
+<link rel="stylesheet" href="mdo.css?v=1">
 <script type="importmap">
 {
   "imports": {
@@ -67,6 +68,7 @@
     <div id="dim-overlay" class="overlay-box"></div>
     <div id="viewport-actions">
       <button id="btn-suggest" class="vb" title="Browse equation-sized design candidates (baseline + 4 objectives)">✦ Suggest designs</button>
+      <button id="btn-mdo" class="vb" title="Optimize this wing: AI searches thousands of shapes (AeroSandbox + differential evolution) and keeps the best">✦ Optimize (MDO)</button>
       <button id="btn-verify" class="vb secondary" title="Run a VSPAERO vortex-lattice sweep on the built geometry">Verify with solver</button>
     </div>
     <button id="cand-prev" class="cand-nav hidden" title="Previous design (←)">‹</button>
@@ -116,8 +118,10 @@
 </div>
 
 <div id="toast-stack"></div>
+<div id="mdo-root"></div>
 
 <script type="module" src="cockpit.js?v=atm1"></script>
+<script defer src="mdo.js?v=1"></script>
 <noscript>The cockpit needs JavaScript.</noscript>
 </body>
 </html>

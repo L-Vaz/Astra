@@ -37,6 +37,8 @@ dependencies = [
     "anthropic>=0.20",
     "uvicorn>=0.30",
     "pyvista>=0.44",
+    "aerosandbox>=4.2",
+    "neuralfoil>=0.3",
 ]
 
 [project.optional-dependencies]

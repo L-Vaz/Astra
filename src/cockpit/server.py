@@ -12,7 +12,9 @@ import argparse
 import json
 import math
 import os
+import queue
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -23,7 +25,7 @@ for p in (_SRC, _REPO_ROOT):
         sys.path.insert(0, p)
 
 from fastapi import FastAPI, HTTPException  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
@@ -44,6 +46,10 @@ from services import design_session as ds  # noqa: E402
 from services.geometry import GeometryRejected, build_geometry as build_geometry_svc  # noqa: E402
 from services.intent import build_enriched_requirement  # noqa: E402
 from services.vspaero import FastAeroRejected, run_fast_aero as fast_aero_svc  # noqa: E402
+from services.asb_aero import AsbAeroRejected, score_geometry as asb_score_svc  # noqa: E402
+from services.optimize import optimize as optimize_svc  # noqa: E402
+from domain_packs.bwb.design_space import DesignSpace  # noqa: E402
+from domain_packs.bwb import objective_presets as presets  # noqa: E402
 
 app = FastAPI(title="Astra Aero Design Cockpit")
 
@@ -790,6 +796,143 @@ def candidates_stl(session_id: str, key: str):
         raise HTTPException(404, f"candidate '{key}' has no built STL yet")
     return FileResponse(path, media_type="model/stl",
                         filename=f"candidate_{key}.stl")
+
+
+# ---------------------------------------------------------------------------
+# MDO — AeroSandbox fast optimize tier, exposed with few, plain-language options.
+# The nine penalty weights collapse to three priorities (efficiency / stability /
+# buildable); everything else is defaulted and hidden. Winners land in the same
+# candidate navigator as the equation lenses, promotable via VSPAERO -> CFD.
+# ---------------------------------------------------------------------------
+class MdoProposeReq(BaseModel):
+    session_id: str
+
+
+@app.post("/api/mdo/propose")
+def mdo_propose(req: MdoProposeReq) -> Dict[str, Any]:
+    """Auto-fill the MDO panel: quick-pick presets, default priorities/weights, a
+    suggested search spread, and the plain-language questions that customise it."""
+    return presets.propose(_plan_derived(req.session_id))
+
+
+class MdoScoreReq(BaseModel):
+    session_id: str
+    params: Optional[Dict[str, Any]] = None
+    efficiency: float = 0.5
+    stability: float = 0.5
+    buildable: float = 0.5
+    cg_frac_mac: float = 0.25
+
+
+@app.post("/api/mdo/score")
+def mdo_score(req: MdoScoreReq) -> Dict[str, Any]:
+    """Live MDO score of the current wing under the chosen priorities — the number
+    the panel shows updating as the user drags a priority."""
+    derived = _plan_derived(req.session_id)
+    if derived is None:
+        raise HTTPException(400, "no plan for this session — set a mission first")
+    raw = req.params or _current_params(req.session_id)
+    if raw is None:
+        raise HTTPException(400, "no current geometry to score")
+    try:
+        params = BWBParams.model_validate(raw)
+    except ValidationError as e:
+        return {"feasible": False, "score": None, "reject_reason": "geometry out of gate",
+                "errors": [er.get("msg", str(er)) for er in e.errors()]}
+    weights = presets.weights_from_priorities(req.efficiency, req.stability, req.buildable)
+    try:
+        payload = asb_score_svc(params, derived, weights=weights, cg_frac_mac=req.cg_frac_mac)
+    except AsbAeroRejected as e:
+        raise HTTPException(422, str(e))
+    return {
+        "score": payload["score"], "feasible": payload["feasible"],
+        "reject_reason": payload["reject_reason"],
+        "l_over_d": payload["aero"]["l_over_d"],
+        "static_margin": payload["breakdown"]["static_margin"],
+        "penalties": {k: v["contribution"]
+                      for k, v in payload["breakdown"]["penalties"].items()},
+        "weights": payload["weights"],
+    }
+
+
+class MdoOptimizeReq(BaseModel):
+    session_id: str
+    efficiency: float = 0.5
+    stability: float = 0.5
+    buildable: float = 0.5
+    spread: float = Field(default=0.15, gt=0, le=0.5)
+    freeze: List[str] = Field(default_factory=list)
+    seed: int = 0
+    maxiter: int = Field(default=24, ge=1)
+    popsize: int = Field(default=12, ge=4)
+    top_n: int = Field(default=9, ge=1)
+    cg_frac_mac: float = 0.25
+
+
+@app.post("/api/mdo/optimize")
+def mdo_optimize(req: MdoOptimizeReq):
+    """Run the differential-evolution search around the current wing, streaming the
+    gallery (per-generation top-N candidates + best score) as Server-Sent Events.
+    On completion, winners are written to the candidate navigator (source='mdo')."""
+    derived = _plan_derived(req.session_id)
+    if derived is None:
+        raise HTTPException(400, "no plan for this session — set a mission first")
+    raw = _current_params(req.session_id)
+    try:
+        base = BWBParams.model_validate(raw) if raw else derived.params
+    except ValidationError:
+        raise HTTPException(400, "current geometry is out of gate — fix it before optimising")
+    d2 = derived.model_copy(update={"params": base})  # search around the current wing
+    space = DesignSpace.from_base(base, spread=req.spread, frozen=req.freeze)
+    weights = presets.weights_from_priorities(req.efficiency, req.stability, req.buildable)
+
+    events: "queue.Queue" = queue.Queue()
+    holder: Dict[str, Any] = {}
+
+    def on_gen(gen, best, n_evals, tiles):
+        events.put({"type": "generation", "gen": gen, "best": best,
+                    "n_evals": n_evals, "tiles": tiles})
+
+    def run():
+        try:
+            res = optimize_svc(d2, space=space, weights=weights,
+                               cg_frac_mac=req.cg_frac_mac, seed=req.seed,
+                               maxiter=req.maxiter, popsize=req.popsize,
+                               top_n=req.top_n, on_generation=on_gen)
+            winners = [w.model_dump() for w in res.top]
+            if winners:
+                cand_svc.add_mdo_candidates(req.session_id, winners)
+            holder["result"] = res
+        except Exception as e:  # noqa: BLE001 — surfaced to the client as an SSE error
+            holder["error"] = str(e)
+        finally:
+            events.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = events.get()
+            if ev.get("type") == "done":
+                break
+            yield f"data: {json.dumps(ev)}\n\n"
+        if "result" in holder:
+            r = holder["result"]
+            payload = {
+                "type": "result",
+                "winner": (r.winner.model_dump() if r.winner else None),
+                "top": [{"rank": t.rank, "key": f"mdo_{t.rank}", "score": t.score,
+                         "l_over_d": t.l_over_d, "static_margin": t.static_margin,
+                         "params": t.params} for t in r.top],
+                "reference": r.reference, "n_evals": r.n_evals,
+                "n_feasible": r.n_feasible,
+                "candidate_keys": [f"mdo_{t.rank}" for t in r.top],
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+        else:
+            yield f"data: {json.dumps({'type': 'error', 'message': holder.get('error', 'unknown')})}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 class LocksRequest(BaseModel):

@@ -21,6 +21,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from domain_packs.bwb.aero_estimates import estimate
 from domain_packs.bwb.schema import BWBParams, GeometryReport, MissionDerived
 from domain_packs.bwb.variants import DesignCandidate, generate_candidates
 
@@ -279,3 +280,68 @@ def discard(sid: str, key: str, reason: str = "") -> Dict[str, Any]:
 
 def stl_path(sid: str, key: str) -> str:
     return os.path.join(_cand_dir(sid, key), "geometry", "bwb.stl")
+
+
+# ---------------------------------------------------------------------------
+# MDO winners (Slice 2): write optimiser results into the same candidate batch
+# ---------------------------------------------------------------------------
+
+def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Write differential-evolution winners as tier-0 candidates (source='mdo').
+
+    Each winner dict carries `params` (a BWBParams dump) and `mdo` (the score
+    breakdown, for evidence). We attach the analytic panel via `estimate()` so the
+    records are indistinguishable in shape from lens candidates — build / screen /
+    promote all work unchanged, and the VSPAERO confirmation path is untouched.
+
+    Re-running replaces any previous `mdo_*` records for the current plan; lens
+    candidates in the batch are preserved. No OpenVSP here: geometry is built later,
+    on demand, exactly as for lens candidates."""
+    derived = _plan_derived(sid)
+    idx_path = _index_path(sid)
+
+    existing_keys: List[str] = []
+    if os.path.exists(idx_path):
+        with open(idx_path) as f:
+            existing_keys = json.load(f).get("keys", [])
+    kept = [k for k in existing_keys if not k.startswith("mdo_")]
+
+    new_keys: List[str] = []
+    for w in winners:
+        params = BWBParams.model_validate(w["params"])
+        panel = estimate(params, derived.atmosphere,
+                         derived.mission.cruise_speed_ms, derived.weight_n,
+                         derived.mission.launch)
+        rank = int(w.get("rank", len(new_keys) + 1))
+        key = f"mdo_{rank}"
+        score = w.get("score", w.get("mdo", {}).get("score"))
+        record = {
+            "key": key,
+            "title": f"MDO winner #{rank}",
+            "objective": "Maximise the MDO score: L/D minus stability, trim, and "
+                         "geometry penalties (structures dormant).",
+            "is_baseline": False,
+            "source": "mdo",
+            "status": "candidate",
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "params": params.model_dump(),
+            "panel": panel.model_dump(),
+            "provenance": [
+                f"Found by differential-evolution MDO search (rank {rank}, "
+                f"score {score:.3f} vs base).",
+                "Fast tier: AeroSandbox VLM + NeuralFoil; confirm with VSPAERO then CFD.",
+            ],
+            "constraint_notes": [],
+            "tradeoffs": [],
+            "evidence": {"equation": {"passed": True}, "mdo": w.get("mdo", {})},
+            "artifacts": {},
+        }
+        _save_candidate(sid, record)
+        new_keys.append(key)
+
+    os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+    with open(idx_path, "w") as f:
+        json.dump({"plan_version": _plan_version(sid),
+                   "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "keys": kept + new_keys}, f, indent=2)
+    return list_candidates(sid)

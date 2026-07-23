@@ -875,6 +875,11 @@ async def set_requirements(request: SetRequirementsRequest, ctx: Context) -> Set
 # ---------------------------------------------------------------------------
 
 from services.vspaero import FastAeroRejected, run_fast_aero as fast_aero_svc
+from services.asb_aero import AsbAeroRejected, score_geometry as asb_score_svc
+from services.optimize import optimize as optimize_svc
+from services import candidates as cand_svc
+from domain_packs.bwb.design_space import DesignSpace
+from domain_packs.bwb.objective import ObjectiveWeights
 from services.bwb_mesh import MeshRejected, generate_mesh as mesh_svc
 from services.simulate import SimulationFailed, compose_requirement, run_simulation as sim_svc
 from services.flow_conditions import (
@@ -934,6 +939,141 @@ async def run_fast_aero(request: FastAeroRequest, ctx: Context) -> Dict[str, Any
         raise
     except Exception as e:
         await ctx.error(f"run_fast_aero failed: {e}")
+        raise
+
+
+class ScoreGeometryRequest(BaseModel):
+    session_id: str
+    cg_frac_mac: float = Field(
+        default=0.25,
+        description="CG position behind the MAC leading edge (fraction of MAC). "
+                    "Fixed design assumption; static margin emerges from the planform.")
+
+
+@mcp.tool(name="score_current_geometry")
+async def score_current_geometry(request: ScoreGeometryRequest, ctx: Context) -> Dict[str, Any]:
+    """Fast MDO score of the session's current geometry (AeroSandbox VLM + NeuralFoil).
+
+    Seconds-fast, in-process, no OpenVSP subprocess: returns L/D at the trimmed cruise
+    CL, static margin, lateral-directional (Cn_beta) and pitch (Cm_alpha) stability,
+    trim effort, and geometry penalties, combined into the MDO score with an
+    inspectable per-term breakdown. This is the read-only screening tier that sits
+    between geometry and CFD — it does NOT alter the pipeline or invalidate mesh/CFD.
+    Structural penalties are present but dormant (weight 0) until the beam surrogate
+    lands. VSPAERO and OpenFOAM remain the higher-fidelity gates."""
+    try:
+        geo_dir = _require_stage(request.session_id, "geometry")
+        plan_dir = _require_stage(request.session_id, "plan")
+        report = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
+        derived = MissionDerived.model_validate(
+            _load_json(os.path.join(plan_dir, "mission_derived.json")))
+        outdir = os.path.join(ds.sessions_root(), request.session_id, "asb_aero")
+        await ctx.info("Scoring current geometry with AeroSandbox (fast VLM + NeuralFoil)")
+        payload = asb_score_svc(report.params, derived,
+                                cg_frac_mac=request.cg_frac_mac, outdir=outdir)
+        aero, bd = payload["aero"], payload["breakdown"]
+        return {
+            "session_id": request.session_id,
+            "score": payload["score"],
+            "feasible": payload["feasible"],
+            "reject_reason": payload["reject_reason"],
+            "l_over_d": aero["l_over_d"],
+            "static_margin": bd["static_margin"],
+            "alpha_trim_deg": aero["alpha_trim_deg"],
+            "cn_beta_per_rad": aero["cn_beta_per_rad"],
+            "cm_alpha_per_rad": aero["cm_alpha_per_rad"],
+            "penalties": {k: v["contribution"] for k, v in bd["penalties"].items()},
+            "warnings": aero["warnings"],
+            "artifact_dir": outdir,
+        }
+    except AsbAeroRejected as e:
+        await ctx.error(str(e))
+        raise
+    except Exception as e:
+        await ctx.error(f"score_current_geometry failed: {e}")
+        raise
+
+
+class OptimizeAroundWingRequest(BaseModel):
+    session_id: str
+    spread: float = Field(default=0.15, gt=0, le=0.5,
+                          description="search half-width per parameter, as a fraction "
+                                      "of the schema's hard range, centred on the base wing")
+    freeze: List[str] = Field(default_factory=list,
+                              description="BWBParams fields to hold fixed at the base value")
+    seed: int = Field(default=0, description="fixed for reproducible searches")
+    maxiter: int = Field(default=40, ge=1)
+    popsize: int = Field(default=15, ge=4)
+    top_n: int = Field(default=5, ge=1)
+    cg_frac_mac: float = Field(default=0.25)
+    # optional active-penalty weight overrides (structural weights stay dormant at 0)
+    w6_latdir: Optional[float] = Field(default=None, ge=0)
+    w7_pitch: Optional[float] = Field(default=None, ge=0)
+    w8_trim: Optional[float] = Field(default=None, ge=0)
+    w9_geometry: Optional[float] = Field(default=None, ge=0)
+
+
+@mcp.tool(name="optimize_around_wing")
+async def optimize_around_wing(request: OptimizeAroundWingRequest, ctx: Context) -> Dict[str, Any]:
+    """MDO search around the session's base wing (AeroSandbox fast tier + differential
+    evolution). Explores the 12-variable BWBParams within +/- `spread` of the base,
+    maximising L/D minus stability/trim/geometry penalties (structural penalties
+    dormant). The base wing sets the reference-relative lateral-directional floor, so
+    no winner is less directionally stable than it. Ranked winners are written into the
+    candidate navigator (source='mdo') alongside the equation lenses, promotable through
+    the existing VSPAERO -> CFD confirmation path. Read-only w.r.t. the CFD pipeline:
+    it proposes candidates, it does not build geometry or invalidate mesh/CFD."""
+    try:
+        geo_dir = _require_stage(request.session_id, "geometry")
+        plan_dir = _require_stage(request.session_id, "plan")
+        report = GeometryReport.model_validate(
+            _load_json(os.path.join(geo_dir, "geometry_report.json")))
+        derived = MissionDerived.model_validate(
+            _load_json(os.path.join(plan_dir, "mission_derived.json")))
+
+        space = DesignSpace.from_base(report.params, spread=request.spread,
+                                      frozen=request.freeze)
+        wkw = {k: v for k, v in {
+            "w6_latdir": request.w6_latdir, "w7_pitch": request.w7_pitch,
+            "w8_trim": request.w8_trim, "w9_geometry": request.w9_geometry,
+        }.items() if v is not None}
+        weights = ObjectiveWeights(**wkw)
+
+        await ctx.info(f"MDO search: {len(space.free_names())} free params, "
+                       f"popsize={request.popsize}, maxiter={request.maxiter} "
+                       f"(~1s per candidate)")
+        result = optimize_svc(
+            derived, space=space, weights=weights, cg_frac_mac=request.cg_frac_mac,
+            seed=request.seed, maxiter=request.maxiter, popsize=request.popsize,
+            top_n=request.top_n)
+
+        # seed the lens batch (idempotent) so the navigator shows both, then write winners
+        try:
+            cand_svc.generate(request.session_id)
+        except Exception as e:  # lens generation is best-effort context, never fatal
+            await ctx.info(f"(lens candidates not generated: {e})")
+        winners = [w.model_dump() for w in result.top]
+        if winners:
+            cand_svc.add_mdo_candidates(request.session_id, winners)
+
+        return {
+            "session_id": request.session_id,
+            "winner": result.winner.model_dump() if result.winner else None,
+            "top": [{"rank": w["rank"], "key": f"mdo_{w['rank']}", "score": w["score"],
+                     "l_over_d": w["l_over_d"], "static_margin": w["static_margin"]}
+                    for w in winners],
+            "candidate_keys": [f"mdo_{w['rank']}" for w in winners],
+            "n_evals": result.n_evals,
+            "n_feasible": result.n_feasible,
+            "converged": result.converged,
+            "reference": result.reference,
+        }
+    except AsbAeroRejected as e:
+        await ctx.error(str(e))
+        raise
+    except Exception as e:
+        await ctx.error(f"optimize_around_wing failed: {e}")
         raise
 
 
