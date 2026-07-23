@@ -168,6 +168,14 @@ button.secondary:hover, .ghost-add:hover { border-color: var(--accent); }
 .navarrow:hover { border-color: var(--accent); }
 #cand-prev { left: 12px; } #cand-next { right: 12px; }
 
+#stale-chip {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  font: inherit; font-size: 12px; cursor: pointer;
+  background: var(--warn-bg); color: var(--warn);
+  border: 1px solid #6b5420; border-radius: 999px; padding: 5px 14px;
+}
+#stale-chip:hover { border-color: var(--warn); }
+
 #gallery-foot {
   position: absolute; bottom: 10px; left: 0; right: 0;
   display: flex; justify-content: center; align-items: center; gap: 10px;

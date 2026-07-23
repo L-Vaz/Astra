@@ -22,6 +22,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from domain_packs.bwb.aero_estimates import estimate
+from domain_packs.bwb.requirements import DesignRequirements
 from domain_packs.bwb.schema import BWBParams, GeometryReport, MissionDerived
 from domain_packs.bwb.variants import DesignCandidate, generate_candidates
 
@@ -95,7 +96,17 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
     if os.path.exists(idx) and not regenerate:
         return list_candidates(sid)
 
-    cands = generate_candidates(derived)
+    # Vehicle constraints (span/stall caps) ride along so lens sizing happens
+    # inside the same box the requirements check used.
+    requirements = None
+    payload = ds.latest_requirements(sid)
+    if payload:
+        try:
+            requirements = DesignRequirements.model_validate(payload)
+        except Exception:
+            requirements = None  # legacy payloads without the full field set
+
+    cands = generate_candidates(derived, requirements)
     keys = []
     for c in cands:
         record = {

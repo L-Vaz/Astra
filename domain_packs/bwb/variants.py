@@ -19,6 +19,7 @@ from .aero_estimates import (AeroEstimate, LAUNCH_VSTALL_MAX, cl_max_3d,
 from .defaults import MAX_CRUISE_CL
 from .inverse import MIN_TIP_CHORD as _MIN_TIP_CHORD  # noqa: F401 (re-export)
 from .inverse import ShapeFractions, _feasible_planform, solve_planform  # noqa: F401
+from .requirements import DesignRequirements
 from .schema import BWBParams, MissionDerived
 
 _TIP_RE_WARN = 1.5e5
@@ -95,19 +96,26 @@ LENSES: List[_Lens] = [
 # ---------------------------------------------------------------------------
 
 def _solve_planform(s_ref: float, lens: _Lens,
-                    notes: Optional[List[str]] = None) -> BWBParams:
+                    notes: Optional[List[str]] = None,
+                    span_cap: float = 3.0) -> BWBParams:
     """Build a valid BWBParams with lens proportions hitting s_ref exactly.
     Uses inverse._feasible_planform (solve_planform plus defensive schema-gate
     repairs) so envelope corners — tiny or heavy-and-slow aircraft — yield the
     closest valid planform with a note instead of a ValidationError."""
     shape = ShapeFractions(**{k: getattr(lens, k) for k in ShapeFractions.model_fields})
-    return _feasible_planform(s_ref, lens.ar, shape, 3.0, notes)
+    return _feasible_planform(s_ref, lens.ar, shape, span_cap, notes)
 
 
 def _size_wing(lens: _Lens, derived: MissionDerived,
-               provenance: List[str], notes: List[str]) -> BWBParams:
+               provenance: List[str], notes: List[str],
+               span_cap: float = 3.0,
+               stall_cap: Optional[float] = None) -> BWBParams:
     """Choose S for the lens: either baseline wing loading, or iterate S so
-    cruise CL approaches CL*, bounded by stall-at-launch and MAX_CRUISE_CL."""
+    cruise CL approaches CL*, bounded by the stall cap and MAX_CRUISE_CL.
+
+    span_cap / stall_cap carry the user's vehicle constraints (stage-1 intake
+    or requirements store); the effective stall cap is the tighter of the
+    user's requirement and the launch-method tolerance."""
     atmosphere = derived.atmosphere
     rho = atmosphere.density_kgm3
     v = derived.mission.cruise_speed_ms
@@ -128,10 +136,21 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
             provenance.append(
                 f"Baseline wing loading kept: {derived.wing_loading_kgm2:.1f} kg/m^2 "
                 f"-> S = {s:.3f} m^2")
-        return _solve_planform(s, lens, notes)
+        # wing-loading lenses must still honour the stall floor — a user's
+        # stall requirement binds every candidate, not just CL*-sized ones
+        params0 = _solve_planform(s, lens, None, span_cap)
+        launch_cap = LAUNCH_VSTALL_MAX[launch]
+        v_cap = min(launch_cap, stall_cap) if stall_cap else launch_cap
+        s_floor = max(2.0 * w / (rho * v_cap ** 2 * cl_max_3d(params0)),
+                      w / (q * MAX_CRUISE_CL))
+        if s_floor > s:
+            notes.append(f"Wing grown to {s_floor:.3f} m^2 to honour "
+                         f"stall <= {v_cap:g} m/s")
+            s = s_floor
+        return _solve_planform(s, lens, notes, span_cap)
 
     # --- size toward CL*: S and CL* are coupled through CD0, so iterate ---
-    params = _solve_planform(s, lens, None)
+    params = _solve_planform(s, lens, None, span_cap)
     cl_star = 0.0
     for _ in range(8):
         est = estimate(params, atmosphere, v, w, launch)
@@ -141,7 +160,7 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
             s = s_new
             break
         s = s_new
-        params = _solve_planform(s, lens, None)
+        params = _solve_planform(s, lens, None, span_cap)
     s_unconstrained = s
     provenance.append(
         f"Best-L/D lift coefficient CL* = sqrt(pi*e*AR*CD0) = {cl_star:.3f}")
@@ -149,21 +168,28 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
         f"Wing sized so cruise CL = CL*: S = W/(q*CL*) = {s_unconstrained:.3f} m^2 "
         f"(wing loading {derived.mtow_kg / s_unconstrained:.1f} kg/m^2)")
 
-    # constraints: cruise CL cap and stall speed at launch
+    # constraints: cruise CL cap and the effective stall cap
     s_min_cl = w / (q * MAX_CRUISE_CL)
     clmax = cl_max_3d(params)
-    v_cap = LAUNCH_VSTALL_MAX[launch]
+    launch_cap = LAUNCH_VSTALL_MAX[launch]
+    v_cap = min(launch_cap, stall_cap) if stall_cap else launch_cap
     s_min_stall = 2.0 * w / (rho * v_cap ** 2 * clmax)
     s_bound = max(s_min_cl, s_min_stall)
     if s_bound > s:
-        binder = "stall-at-launch" if s_min_stall >= s_min_cl else "cruise-CL cap"
+        if s_min_stall >= s_min_cl:
+            binder = ("stall-at-launch" if v_cap == launch_cap
+                      else "your stall requirement")
+            reason = (f"{launch} launch tolerates stall <= {launch_cap} m/s"
+                      if v_cap == launch_cap
+                      else f"you require stall <= {v_cap} m/s")
+        else:
+            binder, reason = "cruise-CL cap", f"cruise CL capped at {MAX_CRUISE_CL}"
         s = s_bound
         notes.append(
             f"Range-optimal wing loading {derived.mtow_kg / s_unconstrained:.1f} kg/m^2 "
-            f"is unreachable: {binder} constraint ({launch} launch tolerates stall "
-            f"<= {v_cap} m/s) caps wing loading at {derived.mtow_kg / s:.1f} kg/m^2. "
-            f"A faster launch method would unlock the rest.")
-    return _solve_planform(s, lens, notes)
+            f"is unreachable: {binder} constraint ({reason}) caps wing loading "
+            f"at {derived.mtow_kg / s:.1f} kg/m^2.")
+    return _solve_planform(s, lens, notes, span_cap)
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +256,21 @@ def _drag_provenance(panel: AeroEstimate) -> List[str]:
     ]
 
 
-def generate_candidates(derived: MissionDerived) -> List[DesignCandidate]:
-    """Baseline + one candidate per lens, each scored on the same panel."""
+def generate_candidates(derived: MissionDerived,
+                        requirements: Optional["DesignRequirements"] = None,
+                        ) -> List[DesignCandidate]:
+    """Baseline + one candidate per lens, each scored on the same panel.
+
+    `requirements` carries the user's vehicle constraints (span/stall caps)
+    so every lens is sized inside the same box the stage-1 feasibility check
+    used — without it, lenses would silently fall back to schema-wide caps."""
     atmosphere = derived.atmosphere
     v = derived.mission.cruise_speed_ms
     w = derived.weight_n
     launch = derived.mission.launch
+    span_cap = min(requirements.span_max_m, 3.0) \
+        if requirements and requirements.span_max_m else 3.0
+    stall_cap = requirements.v_stall_max_ms if requirements else None
 
     base_panel = estimate(derived.params, atmosphere, v, w, launch)
     baseline = DesignCandidate(
@@ -251,7 +286,7 @@ def generate_candidates(derived: MissionDerived) -> List[DesignCandidate]:
     for lens in LENSES:
         provenance: List[str] = [lens.objective]
         notes: List[str] = []
-        params = _size_wing(lens, derived, provenance, notes)
+        params = _size_wing(lens, derived, provenance, notes, span_cap, stall_cap)
         panel = estimate(params, atmosphere, v, w, launch)
         provenance += _drag_provenance(panel)
         out.append(DesignCandidate(

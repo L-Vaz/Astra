@@ -15,6 +15,7 @@ const S = {
   planVersion: null,
   candidates: [],
   candIdx: 0,
+  galleryIntakeVersion: null,   // which intake version the designs came from
   openInfo: new Set(),
 };
 
@@ -139,7 +140,22 @@ async function saveEdits(edits) {
     S.intake = out.intake;
     S.intakeVersion = out.version;
     renderIntake();
+    updateStaleChip();
   } catch (e) { toast(`save failed: ${e.message}`); }
+}
+
+function updateStaleChip() {
+  const stale = S.candidates.length > 0
+    && S.galleryIntakeVersion !== null
+    && S.intakeVersion !== S.galleryIntakeVersion;
+  const chip = $('stale-chip');
+  chip.classList.toggle('hidden', !stale);
+  if (stale) {
+    $('stale-text').textContent =
+      `designs from intake v${S.galleryIntakeVersion} — list is now v${S.intakeVersion}`;
+  }
+  $('btn-gallery').classList.toggle('hidden', S.candidates.length === 0);
+  $('btn-gallery').textContent = stale ? 'View designs (stale)' : 'View designs';
 }
 
 let addCount = 0;
@@ -367,7 +383,9 @@ async function generateConcepts(regenerate) {
     const out = await api('/api/stage1/generate', { session_id: S.sid });
     S.planVersion = out.plan_version;
     S.candidates = out.candidates.filter((c) => c.status !== 'discarded');
+    S.galleryIntakeVersion = out.intake_version;
     showCandidate(0);
+    updateStaleChip();
     toast(`${S.candidates.length} concepts from intake v${out.intake_version}`);
   } catch (e) {
     toast(`generate failed: ${e.message}`, 4200);
@@ -414,15 +432,18 @@ async function boot() {
       $('parse-note').textContent =
         `${said} requirement${said === 1 ? '' : 's'} from your words — the rest are cited defaults`;
       renderIntake();
+      updateStaleChip();
     } catch (e) { toast(`parse failed: ${e.message}`); $('parse-note').textContent = ''; }
   });
   $('btn-add').addEventListener('click', addRow);
   $('btn-generate').addEventListener('click', () => generateConcepts(true));
+  $('btn-gallery').addEventListener('click', () => showScreen('gallery'));
   $('btn-back-req').addEventListener('click', () => showScreen('req'));
   $('btn-regen').addEventListener('click', () => generateConcepts(true));
   $('btn-stage2').addEventListener('click', takeToStage2);
   $('cand-prev').addEventListener('click', () => showCandidate(S.candIdx - 1));
   $('cand-next').addEventListener('click', () => showCandidate(S.candIdx + 1));
+  $('stale-chip').addEventListener('click', () => generateConcepts(true));
   document.addEventListener('keydown', (e) => {
     if ($('screen-gallery').classList.contains('hidden')) return;
     if (e.key === 'ArrowLeft') showCandidate(S.candIdx - 1);

@@ -59,7 +59,8 @@
       <p id="feas-detail" class="dim"></p>
       <p id="feas-implied" class="mono dim"></p>
     </div>
-    <button id="btn-generate" class="primary">Generate concepts →</button>
+    <button id="btn-gallery" class="secondary hidden">View designs</button>
+  <button id="btn-generate" class="primary">Generate concepts →</button>
   </section>
 </main>
 
@@ -89,6 +90,9 @@
 
     <button id="cand-prev" class="navarrow" aria-label="Previous design">‹</button>
     <button id="cand-next" class="navarrow" aria-label="Next design">›</button>
+
+    <button id="stale-chip" class="hidden" title="The requirement list changed after these designs were generated">
+      ▲ <span id="stale-text"></span> · Regenerate</button>
 
     <div id="gallery-foot">
       <span id="dots"></span>

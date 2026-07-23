@@ -156,6 +156,13 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
                 notes.append(f"Wing grown to {s:.3f} m^2: AR gate (10) at the "
                              f"{span:.2f} m minimum span")
             continue
+        if ar_actual < _AR_GATE[0]:           # span pinned, area too large
+            s = span ** 2 / (_AR_GATE[0] * 1.001)
+            if notes is not None:
+                notes.append(f"Wing area capped at {s:.3f} m^2 by the AR gate "
+                             f"(2.5) at the {span:.2f} m span cap — wing "
+                             f"loading rises accordingly")
+            continue
         if root > 1.2:                        # fat chord: raise AR, else cap area
             if span < span_cap - 1e-9 and ar < _AR_GATE[1] - 1e-9:
                 ar = min(_AR_GATE[1], ar + 0.25)

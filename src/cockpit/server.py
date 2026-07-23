@@ -315,8 +315,13 @@ def _current_requirements(sid: str) -> DesignRequirements:
     predating the requirements store (targets all None)."""
     saved = ds.latest_requirements(sid)
     if saved:
-        return DesignRequirements.model_validate(
-            {k: v for k, v in saved.items() if k in _REQ_FIELDS})
+        try:
+            return DesignRequirements.model_validate(
+                {k: v for k, v in saved.items() if k in _REQ_FIELDS})
+        except ValidationError:
+            # a poisoned payload (out-of-range value saved by an older writer)
+            # must not brick the session — fall through to plan synthesis
+            pass
     plan = _plan_derived(sid)
     if plan:
         return DesignRequirements(
@@ -1133,14 +1138,16 @@ def stage1_generate(req: IntakeGenerateReq) -> Dict[str, Any]:
     version = _write_plan_version(sid, derived,
                                   f"stage-1 intake v{iv} locked",
                                   invalidate_from="fast_aero")
+    # sync the VALIDATED requirements (req_ds already clamped span/stall into
+    # schema range) — never raw row values, which may be out of range
     synced = _current_requirements(sid).model_dump()
     synced.update({
-        "mtow_kg": derived.mtow_kg,
+        "mtow_kg": req_ds.mtow_kg,
         "cruise_speed_ms": mission.cruise_speed_ms,
         "cruise_altitude_m": mission.cruise_altitude_m,
         "launch": mission.launch,
-        "span_max_m": (row_num("span_max", 0.0) or None),
-        "v_stall_max_ms": (row_num("v_stall_max", 0.0) or None),
+        "span_max_m": req_ds.span_max_m,
+        "v_stall_max_ms": req_ds.v_stall_max_ms,
     })
     ds.save_requirements(sid, synced)
     try:
