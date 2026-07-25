@@ -17,7 +17,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 @pytest.fixture()
 def ds(tmp_path, monkeypatch):
     monkeypatch.setenv("ASTRA_SESSIONS_DIR", str(tmp_path / "sessions"))
-    from services import design_session
+    # design_session itself is pure filesystem, but importing it goes through
+    # services/__init__.py -> src/utils.py, which loads FAISS and the LLM service.
+    # Skip rather than ERROR where that environment is absent (S0-2).
+    try:
+        from services import design_session
+    except (FileNotFoundError, ImportError) as exc:
+        pytest.skip(f"services layer unavailable ({type(exc).__name__}: {exc})")
     return design_session
 
 

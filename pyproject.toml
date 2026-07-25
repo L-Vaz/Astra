@@ -55,6 +55,22 @@ Homepage = "https://github.com/csml-rpi/Foam-Agent"
 Repository = "https://github.com/csml-rpi/Foam-Agent"
 Issues = "https://github.com/csml-rpi/Foam-Agent/issues"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# --strict-markers turns a mistyped marker into an error instead of a silent no-op.
+addopts = "--strict-markers --strict-config"
+markers = [
+    "slow: long-running sweeps (large hypothesis profiles, full-envelope grids)",
+    "wsl: needs the WSL FoamAgent env (imports src/, loads FAISS ~30s)",
+    "js: runs a Node ES-module parity check under tests/js/",
+]
+# A shrinking suite must not look like a passing one. tests/conftest.py prints the
+# collected count and any opted-out modules on every full run, and fails the run if
+# the count drops below this floor. Module-level skips remove their tests from
+# collection, so this floor covers only the environment-independent core (the tests
+# that collect even without the services layer). Raise it when tests are added.
+minimum_collected_tests = "95"
+
 [tool.setuptools.packages.find]
 include = ["src", "src.*", "domain_packs", "domain_packs.*"]
 namespaces = true

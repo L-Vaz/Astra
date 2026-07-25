@@ -15,13 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("ASTRA_SESSIONS_DIR", str(tmp_path / "sessions"))
-    # services.design_session reads the env var at call time — safe to import once
-    from fastapi.testclient import TestClient
+def client(cockpit_client):
+    """Delegates to the shared fixture in tests/conftest.py (S0-11).
 
-    from cockpit import server as cockpit_server
-    return TestClient(cockpit_server.app)
+    Kept as a local alias so every test signature in this module stays unchanged.
+    """
+    return cockpit_client
 
 
 def _bootstrap(client):

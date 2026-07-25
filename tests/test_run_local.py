@@ -6,8 +6,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from services.run_local import run_allrun_and_collect_errors
-from utils import run_command
+# See tests/test_flow_conditions.py for why this guard exists (S0-2).
+try:
+    from services.run_local import run_allrun_and_collect_errors
+    from utils import run_command
+except (FileNotFoundError, ImportError) as exc:
+    pytest.skip(f"services layer unavailable ({type(exc).__name__}: {exc})",
+                allow_module_level=True)
 
 
 def _configure_fake_openfoam(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

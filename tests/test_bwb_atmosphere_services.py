@@ -10,8 +10,13 @@ from domain_packs.bwb.schema import GateResult, GeometryReport, MissionSpec
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from services.intent import build_enriched_requirement  # noqa: E402
-from services import vspaero  # noqa: E402
+# See tests/test_flow_conditions.py for why this guard exists (S0-2).
+try:
+    from services.intent import build_enriched_requirement  # noqa: E402
+    from services import vspaero  # noqa: E402
+except (FileNotFoundError, ImportError) as exc:
+    pytest.skip(f"services layer unavailable ({type(exc).__name__}: {exc})",
+                allow_module_level=True)
 
 
 @pytest.fixture

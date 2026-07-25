@@ -19,7 +19,12 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.schema import BWBParams, MissionSpec
-from services import candidates as cand  # noqa: E402
+# See tests/test_flow_conditions.py for why this guard exists (S0-2).
+try:
+    from services import candidates as cand  # noqa: E402
+except (FileNotFoundError, ImportError) as exc:
+    pytest.skip(f"services layer unavailable ({type(exc).__name__}: {exc})",
+                allow_module_level=True)
 from services import design_session as ds  # noqa: E402
 
 

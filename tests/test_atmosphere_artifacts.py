@@ -4,10 +4,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import pytest
+
 from domain_packs.bwb.defaults import derive  # noqa: E402
 from domain_packs.bwb.schema import MissionSpec  # noqa: E402
-from services import evaluate  # noqa: E402
-from services.flow_conditions import build_flow_contract  # noqa: E402
+
+# See tests/test_flow_conditions.py for why this guard exists: importing `services`
+# needs credentials/optional deps a domain_packs-only run may lack, and an unguarded
+# failure aborts collection for the ENTIRE suite rather than skipping this module.
+try:
+    from services import evaluate  # noqa: E402
+    from services.flow_conditions import build_flow_contract  # noqa: E402
+except (FileNotFoundError, ImportError) as exc:
+    pytest.skip(f"services layer unavailable ({type(exc).__name__}: {exc})",
+                allow_module_level=True)
 
 
 def test_evaluation_records_atmosphere_and_yplus_viscosity(monkeypatch, tmp_path):

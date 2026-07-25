@@ -9,18 +9,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.schema import MissionSpec
-from services.flow_conditions import (  # noqa: E402
-    FlowConditionMismatch,
-    build_flow_contract,
-    enforce_flow_contract_path,
-    enforce_openfoam_viscosity,
-    load_flow_contract,
-    run_contracted_solver,
-    validate_openfoam_viscosity,
-    write_flow_contract,
-)
-from nodes import input_writer_node as writer_node  # noqa: E402
-from services import simulate as simulate_service  # noqa: E402
+
+# Importing `services` pulls in src/utils.py, which builds the LLM service and loads
+# the FAISS retriever at module scope. Both need environment an aero-only test run may
+# not have: a Codex/ChatGPT OAuth cache (src/utils.py:412-458) or sentence-transformers.
+# Without this guard that failure is a COLLECTION ERROR, which aborts the ENTIRE pytest
+# run instead of skipping this one module — so a missing credential silently costs you
+# every other test in the suite. Skip loudly, at module level, instead.
+try:
+    from services.flow_conditions import (  # noqa: E402
+        FlowConditionMismatch,
+        build_flow_contract,
+        enforce_flow_contract_path,
+        enforce_openfoam_viscosity,
+        load_flow_contract,
+        run_contracted_solver,
+        validate_openfoam_viscosity,
+        write_flow_contract,
+    )
+    from nodes import input_writer_node as writer_node  # noqa: E402
+    from services import simulate as simulate_service  # noqa: E402
+except (FileNotFoundError, ImportError) as exc:  # credentials / optional deps absent
+    pytest.skip(
+        f"services layer unavailable in this environment "
+        f"({type(exc).__name__}: {exc}); run verification/doctor.py",
+        allow_module_level=True)
 
 
 @pytest.fixture
