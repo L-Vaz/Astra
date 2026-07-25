@@ -96,8 +96,9 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             f"{len(opted_out)} file(s) skipped — services layer unavailable: "
             + ", ".join(opted_out))
         terminalreporter.write_line(
-            "their tests are NOT in the count above; run in the WSL FoamAgent env "
-            "for full coverage (see verification/doctor.py)")
+            "their tests are NOT in the count above. Causes differ — the services "
+            "layer needs the WSL FoamAgent env, and some modules additionally need "
+            "LLM credentials. Run verification/doctor.py to see which is missing.")
 
     floor = int(config.getini("minimum_collected_tests") or 0)
     if floor and collected < floor:
