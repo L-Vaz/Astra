@@ -105,12 +105,51 @@ def test_custom_row_lands_in_vehicle_tier():
     assert row.tier == "vehicle" and row.custom and row.number == pytest.approx(0.35)
 
 
-def test_lock_toggle_roundtrip():
+def test_lock_flag_persists():
+    """The lock flag survives a round-trip through apply_edits.
+
+    RENAMED from test_lock_toggle_roundtrip. That name implied the lock feature works;
+    this test only ever proved the FLAG is stored. Locks are currently inert — the
+    solver never reads `status` — so the old name made a dead feature look verified.
+    The real contract is asserted (and expected to fail) below.
+    """
     ik = I.derive(I.parse_brief(BRIEF))
     ik = I.derive(I.apply_edits(ik, [{"id": "payload", "status": "variable"}]))
     assert _row(ik, "payload").status == "variable"
     ik = I.derive(I.apply_edits(ik, [{"id": "payload", "status": "fixed"}]))
     assert _row(ik, "payload").status == "fixed"
+
+
+def _derived_signature(ik: I.Intake) -> tuple:
+    """Every computed value in the derived tier, for equality comparison."""
+    return tuple(
+        (r.id, None if r.number is None else round(r.number, 9))
+        for r in ik.rows if r.tier == "derived"
+    )
+
+
+def _intake_with_all_locks(status: str) -> I.Intake:
+    ik = I.default_intake()
+    for row in ik.rows:
+        if row.status != "derived":
+            row.status = status
+    return ik
+
+
+@pytest.mark.xfail(strict=True,
+                   reason="S3-E1: lock state is never read outside display code, so "
+                          "'fixed' and 'variable' produce identical derived values. "
+                          "Either make locks constrain the solve or stop presenting "
+                          "them as constraints.")
+def test_locking_a_row_constrains_the_solve():
+    """Locking every editable row must change the outcome versus freeing every row.
+
+    This is the contract the UI advertises: a lock means 'the solver may not move
+    this'. Measured today: the two signatures are byte-identical.
+    """
+    free = I.derive(_intake_with_all_locks("variable"))
+    fixed = I.derive(_intake_with_all_locks("fixed"))
+    assert _derived_signature(free) != _derived_signature(fixed)
 
 
 def test_tiny_aircraft_derives_without_error():

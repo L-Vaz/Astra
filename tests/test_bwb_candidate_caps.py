@@ -1,6 +1,7 @@
 """Vehicle constraints (span/stall caps) must reach candidate generation."""
 import pytest
 
+from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX
 from domain_packs.bwb.atmosphere import atmosphere_at
 from domain_packs.bwb.inverse import solve_requirements
 from domain_packs.bwb.requirements import DesignRequirements
@@ -48,6 +49,16 @@ def test_without_requirements_schema_cap_applies():
 
 
 def test_tighter_stall_cap_grows_candidate_wings():
+    """A tighter stall cap must not SHRINK any wing.
+
+    NOTE: this proves the area moves in the right direction. It does NOT prove the
+    resulting design meets the cap — see the parametrized adherence test below. The
+    original version of this test also asserted `v_stall_ms <= 8.3` here, which passed
+    only because (mtow 2 kg, default 3.0 m span) is a benign combination; a solver fuzz
+    over 648,000 legal requirement sets later showed the cap is breached in 33.1% of
+    the envelope. That assertion was false confidence and has been moved, honestly
+    marked, into test_every_candidate_honours_the_effective_stall_cap.
+    """
     base_req = DesignRequirements(mtow_kg=2.0, cruise_speed_ms=18.0,
                                   cruise_altitude_m=100.0, launch="hand")
     tight_req = base_req.model_copy(update={"v_stall_max_ms": 8.0})
@@ -63,8 +74,42 @@ def test_tighter_stall_cap_grows_candidate_wings():
         if c.params.planform_area_m2() > base[key].params.planform_area_m2() + 1e-6:
             grew += 1
     assert grew >= 1, "a 8 m/s stall cap should bind at least one lens"
-    for c in tight.values():
-        assert c.panel.v_stall_ms <= 8.0 + 0.3  # small tolerance: clmax refines
+
+
+# Measured violating cases from the solver fuzz (verification/fuzz_inverse_solver.py,
+# seed 20260725) and the API probe. Each is a requirement set a user can legitimately
+# express, for which every generated concept breaches the effective stall cap.
+_STALL_CAP_CASES = [
+    pytest.param(dict(mtow_kg=20.0, launch="hand", span_max_m=0.9),
+                 id="heavy-tight-span"),           # measured 29.3-30.2 vs 10.5
+    pytest.param(dict(mtow_kg=25.0, launch="hand", v_stall_max_ms=5.0),
+                 id="heavy-tight-stall"),          # measured 13.4-14.4 vs 5.0
+    pytest.param(dict(mtow_kg=2.0, launch="hand", span_max_m=0.8),
+                 id="light-min-span"),             # measured 1 of 5 violating
+    pytest.param(dict(mtow_kg=0.5, launch="hand", span_max_m=0.8,
+                      v_stall_max_ms=5.0),
+                 id="fuzz-minimal-reproducer"),    # measured 5.24 vs 5.00
+]
+
+
+@pytest.mark.xfail(strict=True,
+                   reason="S4-C1: variants._size_wing applies the stall area floor, "
+                          "then inverse._feasible_planform's AR-gate and root-chord "
+                          "repairs shrink the area back below it. Fix lands in Stage 4.")
+@pytest.mark.parametrize("kw", _STALL_CAP_CASES)
+def test_every_candidate_honours_the_effective_stall_cap(kw):
+    """The cap the user sees is min(their stall row, the launch method's tolerance).
+
+    A concept that cannot be launched by the stated method is not a concept.
+    """
+    req = DesignRequirements(cruise_speed_ms=18.0, cruise_altitude_m=100.0, **kw)
+    cap = min(req.v_stall_max_ms or float("inf"), LAUNCH_VSTALL_MAX[req.launch])
+    breaches = [
+        (c.key, round(c.panel.v_stall_ms, 2))
+        for c in generate_candidates(_derived(req), req)
+        if c.panel.v_stall_ms > cap + 0.05
+    ]
+    assert not breaches, f"cap {cap} m/s breached by {breaches}"
 
 
 def test_user_stall_note_names_the_requirement():
