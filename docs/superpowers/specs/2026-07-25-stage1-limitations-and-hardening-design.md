@@ -1,0 +1,265 @@
+# Astra Stage-1 limitations ledger — design spec
+
+Status: proposed (2026-07-25). Companion to
+[`plans/2026-07-25-stage1-hardening.md`](../plans/2026-07-25-stage1-hardening.md),
+which owns the ordered work items and their tests. **This document owns three things
+the plan deliberately does not carry:**
+
+1. the **model-fidelity ledger** — every constant and model in the Stage-1 physics
+   core, its status (cited / engineering judgment / known-biased / not modelled), its
+   measured sensitivity or bias, and the exact wording the user must be shown;
+2. the **honesty-vs-defect-vs-capability taxonomy** and the decision rules that put a
+   finding in one bucket rather than another;
+3. the **golden-update policy** — the procedure that makes a physics change a decision
+   instead of an accident.
+
+Nothing here restates a work item. Every ledger row names the plan item that acts on it.
+
+## Why this document exists
+
+`CLAUDE.md` carries one MUST-preserve rule that Stage 1 currently violates in at least
+nine places:
+
+> Cite physics and numerical choices to official sources or label them explicitly as
+> engineering judgment.
+
+`domain_packs/bwb/aero_estimates.py:24` opens a block headed
+`# --- declared engineering constants (each echoed into assumptions) ---`, which is the
+right intent. But four of the five constants under it carry a single-clause comment and
+no source, one comment (`:29-31`) asserts a calibration that inverting the numbers
+disproves, and one field description (`:74`) names a load distribution the formula does
+not compute. The pack also mixes rigor levels: `AtmosphereState`
+(`domain_packs/bwb/atmosphere.py:53-117`) validates finiteness, positivity, and
+cross-consistency, while `AeroEstimate` in the same pack accepts `oswald_e=99`.
+
+A ledger is the cheapest durable fix. It gives every disclosure string one reviewed
+home, so the same sentence is not re-invented in `aero_estimates.assumptions`, the
+cockpit ⓘ chips, and a docstring — and it gives the golden-update policy something
+concrete to require.
+
+## Scope
+
+The Stage-1 tier-0 equation core and the deterministic path around it:
+
+- `domain_packs/bwb/aero_estimates.py` — every L/D, CD0, Oswald e, CLmax, stall speed,
+  and neutral point the user sees.
+- `domain_packs/bwb/variants.py` — the five lens concepts and their provenance text.
+- `domain_packs/bwb/inverse.py`, `domain_packs/bwb/intake.py`,
+  `domain_packs/bwb/schema.py`, `domain_packs/bwb/requirements.py`.
+
+Out of scope: tier-1 VSPAERO, tier-2 OpenFOAM, the AeroSandbox MDO tier (its own spec,
+`2026-07-21-mdo-parametric-optimizer-design.md`), and the inherited LangGraph spine.
+
+## Taxonomy and decision rules
+
+Every finding lands in exactly one bucket. The bucket decides who fixes it, how
+expensive it is, and what its test asserts.
+
+| Bucket | Rule | Test asserts |
+| --- | --- | --- |
+| **DEFECT** | The output is wrong, or a documented contract is broken. A correct fix changes a number, a status, or an HTTP code. | the corrected value or invariant |
+| **HONESTY** | The computation is defensible at this tier, but a string, flag, field description, or docstring states something the computation does not support. A correct fix changes no number. | the string/flag, **plus** a consistency check that the claim matches the computation |
+| **CAPABILITY** | The user reasonably expects a behaviour that does not exist. A correct fix is new modelling and needs a source. | an `xfail(strict=True)` placeholder, plus a "not modelled" disclosure test that holds meanwhile |
+
+Three rules resolve the ambiguous cases:
+
+**Rule 1 — a claim is honesty, a computation is a defect.** `easy_launch`'s
+`max(5.5, 0.8 * baseline)` floor (`variants.py:130`) raising the wing loading is a
+defect. The unconditional sentence
+`"Wing loading set to 5.5 kg/m^2 (below baseline 2.6)"` (`variants.py:132-134`) is a
+separate honesty item, and it ships first because it is a conditional and it cannot
+regress a number.
+
+**Rule 2 — where the label and the formula disagree, change whichever is not load-bearing.**
+`root_bending_index_nm` computes `W*b/8` (uniform load) while claiming "elliptic"
+(`aero_estimates.py:74`, `:220`). Every candidate comparison and every tradeoff sentence
+already rests on `W*b/8`; the label rests on nothing. Change the label. Contrast
+`skin_friction_coeff`'s laminar-Re bug (`:113-118`), where the *formula* is what
+downstream L/D depends on being right — so the formula changes and the goldens move.
+
+**Rule 3 — a disclosure is never a substitute for a fix; it is a cheaper, earlier,
+independent deliverable.** Every honesty row below names the capability or defect item
+that would actually resolve it. A row with no such item is a row where the tier-0
+behaviour is genuinely correct and only the wording was wrong.
+
+## Model-fidelity ledger
+
+Statuses: **CITED** (traceable to a named published method) · **JUDGMENT** (an Astra
+engineering choice, no source) · **BIASED** (correct method, measured systematic error)
+· **NOT MODELLED** (the quantity does not respond to a driver the user will assume it
+does).
+
+Percentages and case counts are probe-measured over 596,700 legal geometries /
+117,600 flight cases unless noted.
+
+### Drag
+
+| # | Item | Anchor | Status | Measured | Plan item |
+| --- | --- | --- | --- | --- | --- |
+| L1 | Turbulent flat-plate Cf `0.455/(log10 Re)^2.58` | `aero_estimates.py:116` | **CITED** — but **misattributed** to Schlichting; it is **Raymer eq. 12.27**. Schlichting's own mean-Cf form is 17.6–19.3% lower. | — | S6-F2 |
+| L2 | Laminar Cf evaluated at full-chord Re instead of `Re_transition = 0.30·Re` | `aero_estimates.py:113-118` | **BIASED** — understates the laminar segment by `1/sqrt(0.30) = 1.83×`. | CD0 optimistic **−12.4%** at Re 2e5, −10.1% at 5e5, −8.5% at 1e6, −7.1% at 2e6. Every L/D inherits it. | S6-F2 |
+| L3 | `max(re, 1e4)` Reynolds floor | `aero_estimates.py:115` | **JUDGMENT**, and it **launders invalid input**: Cf is exactly flat at `0.012892296409079974` for Re = 9999, 1000, 100, 1.0, 0.0 **and −5.0**. The floor value is **3.26× below** true Blasius at Re 1e3 — non-conservative. | — | S6-F2, S6-F9 |
+| L4 | `LAMINAR_FRACTION = 0.30` | `aero_estimates.py:25` | **JUDGMENT** — one clause of justification ("smooth small-UAV wing at Re ~5e5-1e6"), no source. | 0.30 → 0.00 moves CD0 **+22%** and `ld_max` **−11%**; → 0.60 moves `ld_max` to 19.410. | S3-F12 |
+| L5 | `INTERFERENCE_MARGIN = 1.10` | `aero_estimates.py:26` | **JUDGMENT** — the **only** allowance for prop, nacelle, gaps, camera, antennas, and servo horns. | The pack's maximum CD0 is **0.0233**, while measured small-UAV flying wings sit at **0.020–0.035** — the whole predicted band is at the optimistic edge. | S3-F12 |
+| L6 | Hoerner form factor, Raymer wetted-area fit `1.977 + 0.52·t/c` | `aero_estimates.py:121-123`, `:147` | **CITED** | — | — |
+| L7 | `mean_tc`'s invented `t_mid = 0.5·(t_root + t_tip)` | `aero_estimates.py:93` | **JUDGMENT** — an interpolation choice presented as a computed quantity; `vsp_builder.py:73` uses the same midpoint, so at least the tiers agree. | — | S3-F12 |
+
+### Induced drag / span efficiency
+
+| # | Item | Anchor | Status | Measured | Plan item |
+| --- | --- | --- | --- | --- | --- |
+| L8 | Raymer straight/swept Oswald fits, blended 0–30° | `aero_estimates.py:126-138` | **CITED** — coefficients are correct transcriptions. | Blend **is** continuous at 0° and 30° (9e−9 at the breakpoint) but **C1-discontinuous**: slope jumps 2.4× at AR 8. | — |
+| L9 | The `max(0.5, min(e, 0.95))` clamp | `aero_estimates.py:138` | **BIASED / hides a model failure** — the clamp is where 23% of the design space lives, and it **conceals** unclamped values of `e > 1` (1.123 at AR 2.5). | **23%** of the legal (AR × effective-LE-sweep) space is pinned at a clamp (11.7% at 0.500, 11.2% at 0.950) with **zero gradient** in both AR and sweep. At AR 10, every effective sweep above **25.95°** returns identical 0.500. | S6-F3 |
+| L10 | Wrong-sign sweep response below the fit crossing | `aero_estimates.py:128-137` | **BIASED** — the straight- and swept-wing fits cross at **AR = 4.800**, so for **AR 3.6–4.7** Oswald e *increases* with sweep (AR 4.0: 0.9426 at 6.2° → 0.9462 at 12°). | — | S6-F3 |
+| L11 | `sensitivity.py` differentiates a clamped quantity | `domain_packs/bwb/sensitivity.py` | **DEFECT** — finite-difference derivatives are computed through L9's zero-gradient plateaus. | — | S6-F3 |
+
+### Sweep conventions
+
+| # | Item | Anchor | Status | Measured | Plan item |
+| --- | --- | --- | --- | --- | --- |
+| L12 | `effective_le_sweep_deg` averages **angles**; `effective_c4_sweep_deg` averages **tangents** | `aero_estimates.py:97-100` vs `:103-110` | **DEFECT** — two mutually contradictory definitions. By Jensen's inequality the quarter-chord sweep **exceeds** the LE sweep, which is geometrically impossible for the aft-tapering planforms the schema guarantees. One definition feeds Oswald e (`:198`), the other feeds CLmax (`:154`). | **50,817 / 596,700 (8.5%)** of legal geometries. Worked case `span 1.8, cr 0.25, cbf 0.45, mcf 0.85, taper 0.7, sweeps 60/40` → LE 49.000, c/4 **50.493** (+1.49°), while both per-panel values are correctly below their LE sweep. | S6-F4 |
+| L13 | `tan(Λc/4) = tan(Λ_LE) − 0.25(cr−ct)/half_width` | `aero_estimates.py:105`, `:108-109` | **CITED** — the per-panel relation is derived correctly. The defect is only in how the two panels are combined (L12). | — | — |
+
+### Stall and launch
+
+| # | Item | Anchor | Status | Measured | Plan item |
+| --- | --- | --- | --- | --- | --- |
+| L14 | `CL_MAX_2D = 1.30` "NACA 4-series at Re ~7e5" | `aero_estimates.py:27` | **JUDGMENT / NOT MODELLED in Re** — section Clmax is ~0.9 at Re 1.5e5 and ~1.45 at Re 1e6, so a single value cannot serve the envelope. | — | S3-F12, S7-CAP-4 |
+| L15 | `CL_MAX_3D_FACTOR = 0.90` finite-wing knockdown | `aero_estimates.py:28` | **JUDGMENT** | — | S3-F12 |
+| L16 | `cl_max_3d` ignores Reynolds, thickness, and washout | `aero_estimates.py:151-155` | **NOT MODELLED** — and therefore `v_stall_ms` and the **entire `launch_ok` gate** are Reynolds-invariant. The most consequential blind spot for a low-Re small UAV. | **Bit-identical** `1.120849286` across Re 181,807 → 1,022,665, mean t/c 0.0639 → 0.1678, and washout 0 → 12°. Envelope: min 0.744, median 1.089, max 1.170 (= the hard cap), CoV 8.65%, **46.1% within 6% of the cap**. | S6-F5, S7-CAP-4 |
+| L17 | `math.cos(sweep)` is **even**, so forward sweep is penalised like aft sweep | `aero_estimates.py:154-155` | **DEFECT** — Raymer's `cos(Λc/4)` knockdown is an **aft-sweep** correlation. | Effective c/4 sweep goes negative in **5.4%** of the envelope (min **−31.03°**). Reproducing geometry, legal at AR 2.583: `span 0.8, root_chord 1.2` (chord 1.5× span), `cbf 0.12, mcf 0.35, taper 0.15, sweeps 15/5`. | S6-F5/F6 |
+| L18 | `LAUNCH_VSTALL_MAX = {hand: 10.5, catapult: 13.0, runway: 16.0}` claimed "calibrated so `defaults.WING_LOADING` sits at the boundary" | `aero_estimates.py:29-31` | **JUDGMENT presented as a derivation — the claim is false.** Inverting each pair gives implied CLmax **1.0169 / 0.9477 / 0.8133** — spread 0.2036, and none equals the code's own cap **1.1700**. Three independent guesses. | — | S3-F8 |
+| L19 | An unknown launch string silently disables the gate | `aero_estimates.py:208`, `:236` | **DEFECT** — `LAUNCH_VSTALL_MAX.get(launch)` → `None` → `launch_ok=None`. `estimate(..., launch="glider")` returns `limit=None, ok=None` with `v_stall 24.71`, a value that fails all three real limits. `MissionSpec.launch` is a `Literal` (`schema.py:26`) but `estimate()`'s parameter is `Optional[str]`. `:236`'s truthiness test would also skip a limit of `0.0`. | — | S6-F10 |
+| L20 | Cruise beyond stall is neither flagged nor bounded | `aero_estimates.py:200` vs `:206`; `defaults.MAX_CRUISE_CL = 0.75` applied only in `defaults.derive()` | **DEFECT** — `AeroEstimate` has no `cruise_feasible` / `stall_margin` field; `variants.py:214` checks only `launch_ok is False` and `variants.py:205` ranks on `ld_cruise`, so infeasible points compete as equals. | `cl_cruise > cl_max_3d` in **26,238 / 117,600 (22.31%)**, identically `v_ms < v_stall_ms`. `cl_cruise` reaches **136.43** (p99 20.74). Worst case reports `launch_ok=True`. | S6-F1 |
+
+### Stability and structures
+
+| # | Item | Anchor | Status | Measured | Plan item |
+| --- | --- | --- | --- | --- | --- |
+| L21 | `neutral_point_m` is an **area**-weighted planform centroid | `aero_estimates.py:158-177` | **BIASED, safety-relevant** — sound implementation (passes sign, positivity, and all three monotonic physics directions: aft with more sweep, aft with less taper, `x_np > 0` in all 596,700 cases) but it ignores that outer panels carry more lift per unit area than the low-aspect centre body. That biases `x_np` **forward** → static margin **optimistic** → the CG advice is **unconservative** on the one number that is safety-critical for a tailless aircraft. The docstring (`:160-161`) says VSPAERO supersedes it but **never states the bias direction**. | `x_np` lands outside `(0, root_chord)` in **6.8%** of the envelope (up to 2.48× the root chord, `x_np/MAC` up to 3.398), with no check on whether payload can physically sit there. | S6-F13 |
+| L22 | `STATIC_MARGIN_TARGET = 0.08` declared **twice** | `aero_estimates.py:32` and `MissionDerived.static_margin_target`, `schema.py:130` | **JUDGMENT, duplicated** — equal today, independently declared, free to drift silently. | — | S3-F12 |
+| L23 | `root_bending_index_nm` labelled "elliptic half-span load", computes `W·b/8` | `aero_estimates.py:74` (field description), `:220` (user-facing assumption), `:239` (formula) | **HONESTY** — `W·b/8` is the **uniform**-load result; the elliptic result is `W·b/(3π)`. The code is **17.8% high** relative to the loading it claims. Per Rule 2, the formula stays and the label changes. | — | S3-F7 |
+| L24 | `roll_damping_index = span²` | `aero_estimates.py:241` | **JUDGMENT**, and honestly labelled "relative" in its own field description (`:76`). No action. | — | — |
+
+### Invariants that hold — the regression floor
+
+Measured with **zero violations and zero NaN** across 117,600 cases. These are the
+contract every physics change must preserve; they are not defects and must not be
+"fixed".
+
+| # | Invariant | Anchor |
+| --- | --- | --- |
+| L25 | `ld_cruise <= ld_max` | `aero_estimates.py:204`, `:231` |
+| L26 | `cl_star <= cl_max_3d` | `:203`, `:206` |
+| L27 | `endurance_fom == cl_cruise**1.5 / cd_cruise` | `:233` |
+| L28 | `x_cg_for_target_sm_m == x_np_m - 0.08 * mac_m` | `:238` |
+| L29 | `x_np_m > 0` | `:210` |
+
+Pinned by `tests/test_bwb_aero_invariants.py` (plan item S0-9) and, after S6-AE1, by
+`AeroEstimate`'s own model validator. Note the deliberate exclusion:
+`cl_cruise <= cl_max_3d` is **not** an invariant — 22.31% of the legal envelope violates
+it (L20), so it is a flag, never a rejection.
+
+### Lens intent — what the five cards actually deliver
+
+Measured over 2,880 conditions. Direction words in `tradeoff_sentences` are **clean** (a
+41-point sweep found zero wrong-direction words) — that part of the code is correct and
+should be left alone.
+
+| # | Card | Claim | Reality | Plan item |
+| --- | --- | --- | --- | --- |
+| L30 | `easy_launch` — "Lowest stall speed" | `variants.py:77-83` | The `max(5.5, …)` floor (`:130`) **raises** loading whenever baseline loading is below 6.875 kg/m² — **64.1%** of conditions. Loading higher than baseline in **31.8%**; `v_stall` worse than baseline in **24.0%**; **highest `v_stall` of all five in 21.6%**. Worst: mtow 0.8, alt 4000, v 10, span cap 1.2 → `v_stall` 8.20 vs baseline 5.40. | S6-G1 |
+| L31 | `easy_launch` provenance — "(below baseline …)" | `variants.py:132-134` | Printed **unconditionally**; verified live output `"Wing loading set to 5.5 kg/m^2 (below baseline 2.6)"` — false in **56.0%** of conditions. The card's own tradeoff sentence then contradicts its title: `"stall +2.0 m/s (8.2 m/s — harder launch)"`. | S3-G1h |
+| L32 | `max_range` — "Cruise at the best-L/D lift coefficient" | `variants.py:64-66`, `:167-169` | Reaches CL* within 2% in only **16.2%**; median `\|CL−CL*\|/CL*` **0.612** vs baseline's 0.613. Mostly physics (an area floor binds in 2516/2880; in the 364 unconstrained conditions the fixed point is exact to 2e−5) — but the objective string is unqualified and the provenance asserts the sizing as fact, with the retraction in a *separate* `constraint_notes` entry that **nothing tests for**. | S3-G2h |
+| L33 | `max_range` vs `span_efficiency` ranking | `variants.py:62-76` | A user picking "Max range" gets **lower** cruise L/D than "Span efficiency" in **39.1%** of conditions (AR 8.5 beats sizing-to-CL* at AR 6.5) — the lens ranking is inverted across a large slice of the envelope. | S6-G2 |
+| L34 | `span_efficiency` — "at the same wing loading", "pay for it in span" | `variants.py:70-76`, `:136-138` | Broken in **14.8%** overall and **50.0%** at mtow 10 kg, because `_feasible_planform` (`inverse.py:133-192`) moves the area *after* the provenance line printed the pre-repair numbers as fact. "Pay for it in span" is false in **33.8%** (span *smaller* than baseline). It does not own induced drag either: `easy_launch` beats it in **57.3%**. | S3-G3h, S6-G2 |
+| L35 | `control_margin` — concedes only "the L/D cost" | `variants.py:84-90` | Has the **highest `v_stall` of all five in 65.9%** of conditions. | S3-G4h |
+| L36 | Five cards, fewer designs | `variants.py:259-297` | Clustering by sizing (span within 1e−4 m, area within 1%): **1 distinct sizing in 288/2880 (10.0%)**, all at `span_cap = 1.2`; 2 in 2.7%; 3 in 5.7%. At `span_cap = 1.2`: 40.0% of conditions have all five at identical AR, 56.1% at identical span, 27.1% with all five cruise L/D within 2%. Concrete: mtow 0.8, alt 4000, v 10, span_cap 1.2 → baseline/max_range/span_efficiency/control_margin all at S = 0.5754, b = 1.200, AR = 2.50, L/D 11.75–11.99 — **four cards, one design**. Worst pair: `baseline\|max_range` share sizing in 47.6%. **Cluster on sizing, not on the 12-parameter vector**: the full-parameter distance never drops below 0.15 (sweep/thickness/twist always differ), so it cannot detect the collapse. | S3-G5, S6-G5 |
+| L37 | Dihedral | `variants.py:58` | **2.0° in all five concepts** — every `_Lens` inherits the default. The gull-wing / dihedral-distribution shape that motivated the whole design is unreachable in Stage 1. | S7-CAP-2 |
+
+### Intake and requirement fidelity
+
+| # | Item | Anchor | Status | Plan item |
+| --- | --- | --- | --- | --- |
+| L38 | Six of twelve editable rows drive **zero** computation | `intake.py:200-208` and the `mission_type` / `endurance` / `regulatory` rows | **NOT MODELLED** — editing each leaves all seven derived values bit-identical. The rows that do drive math: `payload`, `altitude`, `launch`, `span_max`, `v_stall_max`, `mtow_cap`. The `endurance` row already half-admits it (`intake.py:276`). | S3-E2 |
+| L39 | Custom rows are recorded and never constrain anything | `intake.py:326-333` | **NOT MODELLED** — and the info string promises they are "passed to Stage 2 as a constraint when recognised", which nothing implements. | S3-E3, S7-CAP-5 |
+| L40 | Lock toggles are inert | `intake.py:238` (the only write); no reader outside display code | **NOT MODELLED** — all-fixed and all-variable derive byte-identical values. | S3-E1, S7-CAP-3 |
+| L41 | Driver chips name rows that cannot move the number | UI ⓘ metadata | **HONESTY** — `static_margin`'s listed drivers are `wind` and `mission_type`, but it is the hardcoded constant `aero_estimates.py:32`. `clmax`'s listed driver is `airfoil`, but `cl_max_3d = 1.30 · 0.90 · cos(sweep)` responds **only** to sweep. | S3-E4 |
+| L42 | Clamping is silent on both paths | `intake.py:353-371`, `src/cockpit/server.py:1114-1118` | **DEFECT + HONESTY** — no `warnings` or `clamped` field exists; the row keeps the typed value and the verdict still reads "feasible". Ten probed divergences, including the sign flip altitude **−500 → +500** and span **100 m → 3.0 m**. | S3-D2 |
+| L43 | Units are converted in the brief path but not the edit path | `intake.py:254-257` vs `:320` | **DEFECT** — the same string means different things depending on how it arrives. | S2-D1 |
+
+## Required disclosure wording
+
+One reviewed sentence per limitation, reused verbatim in
+`aero_estimates.estimate()`'s `assumptions` list (`:213-224`), the matching pydantic
+field description, and the cockpit ⓘ text. The plan's honesty items land these strings;
+their tests assert them.
+
+| Ledger row | Wording |
+| --- | --- |
+| L1, L2 | `"Mixed flat-plate skin friction (Raymer eq. 12.27 turbulent + Blasius laminar), {LAMINAR_FRACTION:.0%} laminar run assumed at the transition Reynolds number"` |
+| L4 | `"CD0 assumes a {LAMINAR_FRACTION:.0%} laminar run — engineering judgment. With no laminar run, CD0 would be ~22% higher and best L/D ~11% lower."` |
+| L5 | `"+{INTERFERENCE_MARGIN-1:.0%} interference margin is the only allowance for prop, nacelle, gaps, camera, antennas and servo horns — engineering judgment, and at the optimistic edge of measured small-UAV flying wings (CD0 0.020-0.035)."` |
+| L9, L10 | `"Oswald e = {e:.3f} from Raymer fits (AR {ar:.2f}, effective LE sweep {sweep:.1f} deg)"` — and when clamped, append `" — at the {floor|ceiling} of the fit's valid range, so e is insensitive to AR and sweep here."` |
+| L16 | `"Section CLmax {CL_MAX_2D} (NACA 4-series, Re~7e5) x {CL_MAX_3D_FACTOR} finite-wing x cos(aft sweep). Independent of Reynolds number, thickness and washout — so stall speed and the launch check are too."` |
+| L18 | `"Launch '{launch}' tolerates stall up to {limit} m/s — engineering judgment, not derived from the pack's wing-loading table."` |
+| L20 | When `cruise_feasible` is False: `"Requested cruise {v:.1f} m/s is BELOW this wing's stall speed {v_stall:.1f} m/s — this design cannot fly the requested cruise point."` |
+| L21 | `"Neutral point = area-weighted planform quarter-MAC. It ignores the outer panels' higher lift per unit area, which biases x_np forward and the static margin OPTIMISTIC — treat the CG position as a lower bound on required nose-heaviness until VSPAERO confirms it."` |
+| L23 | `"Root bending proxy W*b/8 — uniform half-span load, a conservative comparative index. Not elliptic loading (that value is W*b/(3*pi), ~18% lower). No structural sizing."` |
+| L38, L39, L40 | `"Recorded only — not evaluated at this tier."` |
+| L42 | `"You typed {typed}; using {used} ({limit_name})."` |
+
+## Golden-update policy
+
+The Stage-1 physics core has no committed reference values today, which is why a
+12% CD0 bias survived unnoticed. The plan pins a 22-field reference panel plus component
+goldens (items S0-7, S0-8). This policy is what gives them force.
+
+**The reference case** (probe-measured, exact):
+`BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28, mid_chord_frac=0.6,
+taper_outer=0.4, sweep_inner_deg=35, sweep_outer_deg=18, root_thickness_pct=14,
+tip_thickness_pct=10, root_twist_deg=1.0, tip_twist_deg=-3.0, dihedral_deg=3.0)` at
+`atmosphere_at(0.0)`, `v_ms=18.0`, `weight_n=34.335`, `launch="hand"`.
+
+**Rules.**
+
+1. Goldens live in `tests/data/aero_golden.json` at full repr precision and are compared
+   at `rel=1e-12`. A tolerance that loose enough to absorb a physics change is not a
+   golden.
+2. `verification/verify_aero_goldens.py --update` is the **only** way to change them, and
+   it may be run only in the same change as a new ledger row (or an amendment to an
+   existing one) naming: the physical reason, the source or the explicit judgment label,
+   and the measured magnitude of the shift.
+3. A pull request containing a golden diff without a ledger entry is rejected. No
+   exceptions for "small" diffs — L2's 12% bias would have looked like a small diff at
+   any single Reynolds number.
+4. Regenerating goldens obliges the author to re-check every threshold calibrated
+   against the old values: `defaults.MAX_CRUISE_CL`, the MDO reference score recorded in
+   `plans/2026-07-21-mdo-parametric-optimizer.md`, and
+   `verification/verify_asb_aero.py`'s documented trend tolerances (L/D ±25%,
+   α_trim ±2°, CL_alpha ±20%, x_np ±10% MAC).
+5. The five invariants (L25–L29) are **never** regenerated. If a change breaks one, the
+   change is wrong, not the invariant.
+
+## Deliberate non-goals
+
+- **Not replacing the Raymer Oswald fits.** The transcriptions are correct (L8); the
+  problems are clamping behaviour (L9) and a wrong-sign band below AR 4.8 (L10). A
+  replacement formulation valid at low AR is separate, sourced work; until then the
+  limitation is disclosed and its extent is measured in the suite.
+- **Not modelling propulsion, energy, or endurance.** `CLAUDE.md` scopes Astra
+  aerodynamics-first; `endurance_fom` (`aero_estimates.py:61`) is the aerodynamic proxy
+  that exists, and `MissionSpec.endurance_min` is documented "recorded goal only"
+  (`schema.py:22-25`). L38's disclosure stands in for it.
+- **Not inventing a Reynolds scaling for section CLmax.** L14/L16 need a sourced
+  correlation (a Re-scaled NACA 4-series dataset, or NeuralFoil — already a dependency,
+  `pyproject.toml`). Inventing one would violate the citation rule while appearing to
+  satisfy it, which is worse than the current disclosed constant.
+- **Not unifying the three geometry discretizations.** JS interpolates linearly between
+  19 stations, OpenVSP lofts a spline over ~30 U stations with a round tip cap,
+  AeroSandbox uses 3 xsecs. Bounded by a measured ≤0.31% projected-area difference; the
+  bound is documented and asserted, the discretizations stay.
+- **Not rewriting the JS mirror.** Probe verdict: faithful. `stage1.js` and `cockpit.js`
+  station tables are bit-identical across all 6 fields × 19 stations and 2,997 preview
+  floats; planform area/MAC/AR agree with `schema.py` to 0.0 error across all five
+  copies. Deduplication and parity tests only.
