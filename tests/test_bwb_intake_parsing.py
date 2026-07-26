@@ -35,6 +35,11 @@ def _edit(rid: str, value):
     return I.apply_edits(I.default_intake(), [{"id": rid, "value": value}])
 
 
+def _messages(warnings) -> list:
+    """Warnings are structured (S3-D2); most assertions here are about the prose."""
+    return [w.message for w in warnings]
+
+
 # ===================================================================================
 # S2-D1 — one sign-, unit- and magnitude-aware parser
 # ===================================================================================
@@ -250,7 +255,8 @@ def test_a_keyword_cannot_reach_across_a_clause_for_its_number():
 def test_ambiguous_span_is_reported():
     ik = I.parse_brief("span 2 m but also span 5 m")
     assert _row(ik, "span_max").number == pytest.approx(2.0), "keep the first"
-    assert any("2 m" in w and "5 m" in w for w in ik.warnings), ik.warnings
+    assert any("2 m" in m and "5 m" in m for m in _messages(ik.warnings)), ik.warnings
+    assert {w.kind for w in ik.warnings} == {"ambiguous"}
 
 
 @pytest.mark.parametrize("brief,expected", [
@@ -273,7 +279,8 @@ def test_all_launch_keywords_resolve_deterministically(brief, expected):
 def test_multiple_launch_families_are_reported():
     ik = I.parse_brief("hand launch or catapult")
     assert _row(ik, "launch").value == "catapult"
-    assert any("catapult" in w and "hand" in w for w in ik.warnings), ik.warnings
+    assert any("catapult" in m and "hand" in m for m in _messages(ik.warnings)), \
+        ik.warnings
 
 
 def test_an_explicit_stall_beats_the_launch_default():
@@ -317,13 +324,15 @@ def test_unusable_stored_numbers_fall_back_to_defaults(rid, number):
     assert I.usable_number(ik, rid) is None
     requirements = I.to_requirements(ik)      # must not raise
     assert requirements.mtow_kg > 0
-    assert any(rid.split("_")[0] in w or _row(ik, rid).label.lower() in w
-               for w in I.unusable_row_warnings(ik))
+    rejected = [w for w in I.substitution_warnings(ik) if w.row_id == rid]
+    assert rejected and rejected[0].kind == "rejected", I.substitution_warnings(ik)
 
 
 def test_an_unparsed_row_is_reported_as_unusable():
     ik = I.derive(_edit("span_max", "wide enough"))
-    assert any("could not read" in w for w in I.unusable_row_warnings(ik))
+    unparsed = [w for w in ik.warnings if w.kind == "unparsed"]
+    assert unparsed and unparsed[0].row_id == "span_max"
+    assert "could not read" in unparsed[0].message
 
 
 # ===================================================================================
@@ -344,7 +353,8 @@ def test_brief_overriding_an_edit_is_reported():
     edited = I.apply_edits(I.default_intake(), [{"id": "span_max", "value": "1.4 m"}])
     merged = I.merge_brief(edited, "2.2 m span")
     assert _row(merged, "span_max").number == pytest.approx(2.2), "the brief wins"
-    assert any("1.4" in w and "2.2" in w for w in merged.warnings), merged.warnings
+    assert any("1.4" in m and "2.2" in m for m in _messages(merged.warnings)), \
+        merged.warnings
 
 
 def test_a_silent_brief_does_not_disturb_a_stored_row():

@@ -101,6 +101,11 @@ button.secondary:hover, .ghost-add:hover { border-color: var(--accent); }
 .badge.you { background: var(--accent-bg); color: var(--accent); }
 .badge.assumed { background: var(--warn-bg); color: var(--warn); }
 .badge.derived { background: var(--panel2); color: var(--dim); }
+/* S3-D2: the value in force, when it is not the value typed. Deliberately loud —
+   the old screen showed a replaced requirement with no mark at all. */
+.badge.warn { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+/* S3-E2/E3: a row that changes no number. Deliberately quiet. */
+.badge.muted { background: var(--panel2); color: var(--dim); font-style: italic; }
 .req-info {
   margin: 0 2px 8px 60px; padding: 8px 12px; background: var(--panel2);
   border-radius: var(--radius); font-size: 12px; color: var(--dim); line-height: 1.6;
@@ -124,6 +129,12 @@ button.secondary:hover, .ghost-add:hover { border-color: var(--accent); }
 #feas-body { flex: 1; }
 #feas-headline { margin: 0; font-weight: 600; }
 #feas-detail, #feas-implied { margin: 2px 0 0; font-size: 12px; }
+.warn-list {
+  margin: 6px 0 0; padding: 0 0 0 18px; font-size: 12px; color: var(--warn);
+  line-height: 1.5;
+}
+.warn-list li { margin: 2px 0; }
+.warn-list .dim { color: var(--dim); }
 
 /* ---------- gallery ---------- */
 #screen-gallery { flex: 1; display: flex; flex-direction: column; min-height: 0; }

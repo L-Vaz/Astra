@@ -636,7 +636,7 @@ the strings are reviewed once and reused.
   `src/cockpit/static/stage1.{html,js}`
 - Create: `tests/test_bwb_disclosure.py`, `tests/test_bwb_lens_intent.py`
 
-- [ ] **S3-D2 — Silent clamping with no disclosure (the `warnings` channel)** · honesty · CRITICAL · cost M
+- [x] **S3-D2 — Silent clamping with no disclosure (the `warnings` channel)** · honesty · CRITICAL · cost M
   - Anchors: `intake.py:353-371` (`to_requirements` clamps mtow, stall, span,
     altitude) and `server.py:1114-1118` (clamps payload, speed, altitude, mtow) — both
     report nothing.
@@ -662,7 +662,7 @@ the strings are reviewed once and reused.
     typed and the used value, and the sign-flip case (−500 → +500) is reported as a
     rejection, not a clamp.
 
-- [ ] **S3-E1 — The lock toggles change nothing** · honesty · HIGH · cost S
+- [x] **S3-E1 — The lock toggles change nothing** · honesty · HIGH · cost S
   - Anchors: `intake.py:238` is the only write of `status`; nothing outside display
     code reads it. All-fixed and all-variable derive byte-identical values.
   - Fix: relabel in the UI. The column becomes "Lock (display only)" with an ⓘ that
@@ -674,7 +674,7 @@ the strings are reviewed once and reused.
     test.
   - Done when: nothing in the UI or schema implies locks constrain anything.
 
-- [ ] **S3-E2 / E3 — Six of twelve editable rows and all custom rows drive zero computation** · honesty · HIGH · cost S
+- [x] **S3-E2 / E3 — Six of twelve editable rows and all custom rows drive zero computation** · honesty · HIGH · cost S
   - Anchors: verified inert — `mission_type`, `endurance`, `regulatory`, `structure`,
     `airfoil` (`intake.py:203-205`), `wind` (`intake.py:206-208`): editing each leaves
     all seven derived values bit-identical. Rows that **do** drive math: `payload`,
@@ -693,7 +693,7 @@ the strings are reviewed once and reused.
     fails and forces the flag to be updated).
   - Done when: every row states whether it changes a number, and the claim is tested.
 
-- [ ] **S3-E4 — Some ⓘ "driver chips" are fiction** · honesty · MED · cost S
+- [x] **S3-E4 — Some ⓘ "driver chips" are fiction** · honesty · MED · cost S
   - Anchors: `static_margin`'s listed drivers are `wind` and `mission_type`, but static
     margin is the hardcoded constant `aero_estimates.py:32`
     (`STATIC_MARGIN_TARGET = 0.08`). `clmax`'s listed driver is `airfoil`, but
@@ -709,7 +709,7 @@ the strings are reviewed once and reused.
     sweep is the oracle, so the chips can never drift again.
   - Done when: every chip names a row that measurably moves that number.
 
-- [ ] **S3-F7 — `root_bending_index_nm` is labelled "elliptic" but computes uniform load** · honesty · HIGH · cost S
+- [x] **S3-F7 — `root_bending_index_nm` is labelled "elliptic" but computes uniform load** · honesty · HIGH · cost S
   - Anchors: `aero_estimates.py:74` (field description
     `"~W*b/8, elliptic half-span load"`), `:220` (user-facing assumption
     `"Root bending proxy W*b/8 (elliptic half-span loading)"`), `:239` (the
@@ -729,7 +729,7 @@ the strings are reviewed once and reused.
     formula are pinned together.
   - Done when: no user-visible string says "elliptic".
 
-- [ ] **S3-F8 — `LAUNCH_VSTALL_MAX`'s documented calibration is false** · honesty · MED · cost S
+- [x] **S3-F8 — `LAUNCH_VSTALL_MAX`'s documented calibration is false** · honesty · MED · cost S
   - Anchors: `aero_estimates.py:29-31` claims the values are "calibrated so the pack's
     own wing-loading table (`defaults.WING_LOADING`) sits at the boundary". Inverting
     each pair gives implied CLmax **1.0169** (hand) / **0.9477** (catapult) /
@@ -749,7 +749,7 @@ the strings are reviewed once and reused.
     inconsistency stays measured rather than remembered.
   - Done when: the code no longer claims a derivation it does not have.
 
-- [ ] **S3-F12 — Unsourced global levers presented as physics** · honesty · HIGH · cost M
+- [x] **S3-F12 — Unsourced global levers presented as physics** · honesty · HIGH · cost M
   - Anchors: `aero_estimates.py:25` `LAMINAR_FRACTION = 0.30` (one line of
     justification; 0.30 → 0.00 moves CD0 **+22%** and `ld_max` **−11%**; → 0.60 moves
     `ld_max` to 19.410), `:26` `INTERFERENCE_MARGIN = 1.10` (the **only** allowance for
@@ -779,7 +779,7 @@ the strings are reviewed once and reused.
   - Done when: no float in the physics core lacks either a citation or a judgment label,
     and the two static-margin declarations cannot drift.
 
-- [ ] **S3-G1h — `easy_launch`'s provenance line is a literal falsehood** · honesty · CRITICAL · cost S
+- [x] **S3-G1h — `easy_launch`'s provenance line is a literal falsehood** · honesty · CRITICAL · cost S
   - Anchors: `variants.py:132-134` prints
     `"Wing loading set to {wl} kg/m^2 (below baseline {baseline})"` **unconditionally**.
     Verified live output: `"Wing loading set to 5.5 kg/m^2 (below baseline 2.6)"` —
@@ -800,7 +800,7 @@ the strings are reviewed once and reused.
     numbers it claims.**
   - Done when: no card asserts a comparison that its own panel contradicts.
 
-- [ ] **S3-G2h — `max_range`'s objective claim is unqualified and wrong 84% of the time** · honesty · HIGH · cost S
+- [x] **S3-G2h — `max_range`'s objective claim is unqualified and wrong 84% of the time** · honesty · HIGH · cost S
   - Anchors: the objective string at `variants.py:64-66`
     ("Cruise at the best-L/D lift coefficient") and the provenance assertion at
     `variants.py:167-169` ("Wing sized so cruise CL = CL*: S = W/(q*CL*)"), stated as
@@ -819,7 +819,7 @@ the strings are reviewed once and reused.
     naming the binder. `::test_max_range_provenance_reports_achieved_cl`.
   - Done when: no condition exists where the card claims CL = CL* without a retraction.
 
-- [ ] **S3-G3h / G4h — `span_efficiency` and `control_margin` overstate their promises** · honesty · MED · cost S
+- [x] **S3-G3h / G4h — `span_efficiency` and `control_margin` overstate their promises** · honesty · MED · cost S
   - Anchors: `variants.py:136-138` prints the **pre-repair** wing loading and area as
     fact, while `_feasible_planform` (`inverse.py:133-192`) subsequently moves the
     area — breaking "at the same wing loading" in **14.8%** overall and **50.0%** at
@@ -838,7 +838,7 @@ the strings are reviewed once and reused.
     `::test_control_margin_concedes_stall`.
   - Done when: no provenance string quotes a pre-repair number.
 
-- [ ] **S3-G5 — Degeneracy: the five cards collapse to fewer real designs, undetected** · honesty · HIGH · cost M
+- [x] **S3-G5 — Degeneracy: the five cards collapse to fewer real designs, undetected** · honesty · HIGH · cost M
   - Anchors: clustering by sizing (span within 1e−4 m, area within 1%): **1 distinct
     sizing in 288/2880 conditions (10.0%)** — all at `span_cap = 1.2`; 2 in 2.7%; 3 in
     5.7%. At `span_cap = 1.2` specifically, 40.0% of conditions have all five at
@@ -860,7 +860,7 @@ the strings are reviewed once and reused.
     documenting test.
   - Done when: the gallery cannot present four identical wings as four choices.
 
-- [ ] **S3-G6 — `tradeoff_sentences` rendering and threshold defects** · honesty + defect · MED · cost M
+- [x] **S3-G6 — `tradeoff_sentences` rendering and threshold defects** · honesty + defect · MED · cost M
   - Anchors: `variants.py:203-239`. Direction words are **clean** (a 41-point sweep
     found zero wrong-direction words) — do not touch them. The defects are:
     - (a) `:215` renders the hand-launch limit as "the 10 m/s launch limit" because

@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cockpit",
+      "runtimeExecutable": "wsl.exe",
+      "runtimeArgs": [
+        "bash",
+        "-lc",
+        "cd /mnt/e/AI_projects/Astra/Foam-Agent && /opt/conda/envs/FoamAgent/bin/python -m src.cockpit.server --host 0.0.0.0 --port 8765"
+      ],
+      "port": 8765,
+      "url": "http://localhost:8765"
+    }
+  ]
+}

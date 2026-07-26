@@ -1088,6 +1088,34 @@ def _intake_dir(sid: str) -> str:
     return _session_path(sid, "intake")
 
 
+def _warning(kind: str, message: str, **fields) -> Dict[str, Any]:
+    """A store- or boundary-level notice in the same shape as an IntakeWarning (S3-D2).
+
+    One channel, one shape: the screen renders "you typed X · using Y" identically
+    whether the substitution happened in the intake, at the request boundary, or
+    during a recovery from a damaged file."""
+    return intake_pack.IntakeWarning(kind=kind, message=message,
+                                     **fields).model_dump()
+
+
+def _intake_warnings(intake) -> List[Dict[str, Any]]:
+    """The disclosures for an intake AS IT IS NOW (S3-D2).
+
+    The stored warnings were computed when the file was written. A file can change
+    underneath them — S1-B3's damage model, an older build's schema, a hand-edited
+    version — so the substitution warnings are recomputed from the rows in front of us
+    and the stored ones contribute only the event kinds (an ambiguous brief, an
+    overridden edit) that nothing can recompute. Same ownership split as
+    `intake.derive`.
+    """
+    recomputed = {"clamped", "rejected", "unparsed"}
+    events = [w for w in intake.warnings if w.kind not in recomputed]
+    # refresh_disclosure also updates each row's used_value / drives_computation, so a
+    # version written before those fields existed still renders honestly.
+    fresh = intake_pack.refresh_disclosure(intake)
+    return [w.model_dump() for w in events + fresh]
+
+
 def _intake_latest_version(sid: str) -> int:
     """The version index.json DECLARES latest, or 0 if it is absent or unreadable.
 
@@ -1134,9 +1162,10 @@ def _load_intake(sid: str) -> tuple:
 
     if not on_disk:
         if declared:
-            return default, 0, [f"intake v{declared} is recorded as current but no "
-                                f"version exists on disk — starting from the "
-                                f"assumed defaults"]
+            return default, 0, [_warning(
+                "recovered",
+                f"intake v{declared} is recorded as current but no version exists on "
+                f"disk — starting from the assumed defaults")]
         return default, 0, []
 
     order = ([declared] if declared in on_disk else []) \
@@ -1152,16 +1181,20 @@ def _load_intake(sid: str) -> tuple:
             continue
         warnings = []
         if declared and version != declared:
-            warnings.append(
-                f"intake v{declared} unreadable — recovered from v{version}")
+            warnings.append(_warning(
+                "recovered",
+                f"intake v{declared} unreadable — recovered from v{version}"))
         elif not declared:
-            warnings.append(
-                f"the intake version index was unreadable — recovered from v{version}")
+            warnings.append(_warning(
+                "recovered",
+                f"the intake version index was unreadable — recovered from "
+                f"v{version}"))
         return intake, version, warnings
 
-    return default, 0, [
+    return default, 0, [_warning(
+        "recovered",
         f"no readable intake version ({', '.join(unreadable)}) — starting from the "
-        f"assumed defaults. Your saved versions are untouched on disk."]
+        f"assumed defaults. Your saved versions are untouched on disk.")]
 
 
 def _save_intake(sid: str, intake: intake_pack.Intake) -> int:
@@ -1209,12 +1242,12 @@ def stage1_page():
 def stage1_intake(session: Optional[str] = None) -> Dict[str, Any]:
     sid = _ensure_session(session)
     intake, version, warnings = _load_intake(sid)
+    # compute the disclosures BEFORE dumping: refresh_disclosure writes onto the rows
+    warnings = warnings + _intake_warnings(intake)
+    # store-level notices (a recovered version) plus the intake's own (an ambiguous
+    # brief, an unreadable value, a clamp)
     return {"session_id": sid, "version": version,
-            "intake": intake.model_dump(),
-            # store-level notices (a recovered version) plus the intake's own
-            # (an ambiguous brief, an unreadable value, a clamp)
-            "warnings": warnings + intake.warnings
-            + intake_pack.unusable_row_warnings(intake)}
+            "intake": intake.model_dump(), "warnings": warnings}
 
 
 # Request-size limits (S1-A3). Every call writes a new immutable version, so an
@@ -1271,8 +1304,9 @@ def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
         + ", ".join(f"{r.label}={r.value}" for r in intake.rows
                     if r.origin == "you_said") + ".",
         {"intake_version": version})
+    disclosures = _intake_warnings(intake)      # refreshes the rows; dump after
     return {"session_id": sid, "version": version, "intake": intake.model_dump(),
-            "warnings": intake.warnings}
+            "warnings": disclosures}
 
 
 class IntakeEditReq(BaseModel):
@@ -1293,9 +1327,9 @@ def stage1_intake_save(req: IntakeEditReq) -> Dict[str, Any]:
             # leave a version behind (S1-A3).
             raise HTTPException(422, str(exc))
         version = _save_intake(sid, intake)
+    disclosures = warnings + _intake_warnings(intake)   # refreshes the rows first
     return {"session_id": sid, "version": version, "intake": intake.model_dump(),
-            "warnings": warnings + intake.warnings
-            + intake_pack.unusable_row_warnings(intake)}
+            "warnings": disclosures}
 
 
 class IntakeGenerateReq(BaseModel):
@@ -1375,8 +1409,7 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
     # build. Every number is re-validated here before it reaches MissionSpec: unusable
     # ones fall back to the documented default and say so, rather than raising a
     # pydantic error that the route turns into a 500 (S2-B5).
-    warnings = (list(warnings) + list(intake.warnings)
-                + intake_pack.unusable_row_warnings(intake))
+    warnings = list(warnings) + _intake_warnings(intake)
 
     def row_num(rid: str, fallback: float) -> float:
         value = intake_pack.usable_number(intake, rid)
@@ -1391,14 +1424,12 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
     # no computation (it is recorded for the propulsion stage), so "loiter for 11 hours"
     # making every subsequent generate return 500 — forever, with GET still 200 so the
     # UI showed a healthy list and a dead button — was indefensible (S2-B1).
+    # usable_number already clamps into the schema range and the intake's own warnings
+    # report it (S3-D2); clamp_endurance stays as the belt-and-braces conversion for a
+    # value that reached here by some other route.
     endurance = intake_pack.usable_number(intake, "endurance")
     if endurance is not None:
-        clamped, _ = intake_pack.clamp_endurance(endurance)
-        if clamped != endurance:
-            warnings.append(
-                f"endurance goal: you asked for {endurance:g} min — recorded as "
-                f"{clamped:g} min (the schema maximum; endurance is recorded only)")
-        endurance = clamped
+        endurance, _ = intake_pack.clamp_endurance(endurance)
 
     payload_kg = min(max(row_num("payload", 1.0), 0.01), 10.0)
     mtow_kg = min(row_num("mtow_cap", 0.0), 25.0) or None
@@ -1406,9 +1437,11 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
         # Reconciled BEFORE constructing the model, so the impossible combination
         # never reaches disk (S2-D7). Raising the cap rather than rejecting keeps the
         # request working; the warning is what makes the change visible.
-        warnings.append(
-            f"MTOW cap: {mtow_kg:g} kg is below the {payload_kg:g} kg payload — "
-            f"raised the cap to {payload_kg:g} kg")
+        warnings.append(_warning(
+            "clamped", row_id="mtow_cap", typed=f"{mtow_kg:g} kg",
+            used=f"{payload_kg:g} kg", limit=f"payload {payload_kg:g} kg",
+            message=(f"MTOW cap: {mtow_kg:g} kg is below the {payload_kg:g} kg "
+                     f"payload — raised the cap to {payload_kg:g} kg")))
         mtow_kg = payload_kg
 
     mission = MissionSpec(
@@ -1443,9 +1476,13 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
     # schema range) — never raw row values, which may be out of range
     synced, overrides = _synced_requirements(sid, intake, mission, req_ds)
     for override in overrides:
-        warnings.append(
-            f"{override['field']}: replaced your saved {override['previous']} with "
-            f"{override['new']} from the Stage-1 intake")
+        warnings.append(_warning(
+            "overridden", row_id=_REQUIREMENT_SOURCE_ROWS[override["field"]],
+            typed=str(override["new"]), used=str(override["new"]),
+            limit=str(override["previous"]),
+            message=(f"{override['field']}: replaced your saved "
+                     f"{override['previous']} with {override['new']} from the "
+                     f"Stage-1 intake")))
     ds.save_requirements(sid, dict(synced, intake_overrides=overrides))
     try:
         batch = cand_svc.generate(sid, regenerate=True)

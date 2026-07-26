@@ -51,12 +51,30 @@ class IntakeRow(BaseModel):
     value: str             # display string, exactly as typed/derived
     number: Optional[float] = None   # SI value when the row is numeric
     unit: str = ""
-    status: Status = "variable"
+    status: Status = Field(
+        default="variable",
+        description=(
+            "Lock state — DISPLAY ONLY (S3-E1). The flag records your intent for a "
+            "later stage and is persisted, but nothing reads it: the solver produces "
+            "byte-identical derived values with every row 'fixed' and with every row "
+            "'variable'. Making locks constrain the solve is S7-CAP-3."))
     origin: Origin = "assumed"
     source: str = ""       # citation for assumed defaults / derived values
     info: str = ""         # definition + formula for the info panel
     drivers: List[Driver] = Field(default_factory=list)  # derived rows only
     custom: bool = False   # user-added row (recorded; mapped when recognised)
+    used_value: str = ""
+    """What the solver actually used, when that differs from `value` (S3-D2).
+
+    Empty means "the typed value was used as written". The row can then render
+    "you typed 100 m · using 3.0 m" instead of showing a requirement that is not in
+    force."""
+    drives_computation: bool = False
+    """Whether editing this row changes any derived number (S3-E2/E3).
+
+    Measured, not asserted: six of the twelve editable rows change nothing at all, and
+    `test_bwb_disclosure.py` perturbs every row and fails if this flag disagrees with
+    what actually moved."""
     unparsed: bool = False
     """The text in `value` could not be read as a number for this row (S2-D1f).
 
@@ -66,12 +84,39 @@ class IntakeRow(BaseModel):
     parse_error: str = ""
 
 
+WarningKind = Literal["clamped", "rejected", "unparsed", "ambiguous", "overridden",
+                      "recovered", "not_modelled"]
+
+
+class IntakeWarning(BaseModel):
+    """One thing the user should know about the gap between what they typed and what
+    the solver used (S3-D2).
+
+    Structured rather than a sentence because the UI has to render "you typed 100 m ·
+    using 3.0 m (schema maximum)" next to the row, and because a test can then assert
+    the CLAIM against the COMPUTATION — `used` really is what `to_requirements`
+    returns — instead of grepping prose.
+    """
+    kind: WarningKind
+    message: str
+    row_id: str = ""
+    typed: str = ""        # what the user wrote
+    used: str = ""         # what the solver actually used
+    limit: str = ""        # the bound that forced the substitution, with its source
+
+
 class Feasibility(BaseModel):
-    verdict: Literal["feasible", "binding", "error"]
+    verdict: Literal["feasible", "feasible_with_substitutions", "binding", "error"]
     headline: str
     detail: str
     implied: Dict[str, str] = Field(default_factory=dict)
     binding_row_ids: List[str] = Field(default_factory=list)
+    substitutions: int = 0
+    """How many typed values the solver replaced.
+
+    A verdict of plain "feasible" while a hard cap was silently substituted is the
+    dishonest state this exists to prevent: the screen said feasible, the user's 100 m
+    span had become 3.0 m, and nothing on the page said so."""
 
 
 class Intake(BaseModel):
@@ -79,10 +124,15 @@ class Intake(BaseModel):
     rows: List[IntakeRow]
     feasibility: Optional[Feasibility] = None
     notes: List[str] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-    """Plain-language notices about THIS intake: an ambiguous brief, a value that could
-    not be parsed, a clamp, an override of an earlier edit. Stage 3 (S3-D2) replaces the
-    strings with a structured IntakeWarning carrying typed/used/limit."""
+    warnings: List[IntakeWarning] = Field(default_factory=list)
+    """Everything the screen must say about this intake: an ambiguous brief, a value
+    that could not be parsed, a clamp, an override of an earlier edit.
+
+    Two ownerships, which is why `kind` matters. `derive()` OWNS the computed kinds
+    (clamped, rejected, unparsed) and rebuilds them from scratch on every call, so a
+    fixed row's warning disappears. The event kinds (ambiguous, overridden) record what
+    happened when a brief was parsed and survive later derives — nothing recomputes
+    them."""
 
 
 # ---------------------------------------------------------------------------
@@ -128,47 +178,105 @@ _INFO = {
                     "sizing, not an input.",
     "cruise_cl": "Lift coefficient the wing must fly at in cruise: CL = W/(q S). "
                  "Kept below 0.75 to stay clear of stall.",
-    "clmax": "Peak 3D lift coefficient before stall — a property of the sections "
-             "and planform at your Reynolds number. Enters the stall equation.",
+    "clmax": "Peak 3D lift coefficient before stall. At this tier it is "
+             "1.30 × 0.90 × cos(sweep): it responds ONLY to planform sweep, not to "
+             "the airfoil row and not to Reynolds number (S7-CAP-4). Enters the "
+             "stall equation.",
     "static_margin": "(x_np - x_cg)/MAC. Positive = nose settles back after a gust. "
-                     "Tailless BWBs target ~8% MAC (needs washout + swept tips).",
+                     "A FIXED TARGET of 8% MAC (engineering judgment, tailless BWB "
+                     "practice) — nothing on this screen changes it.",
     "ld_est": "Equation-level cruise L/D of the sized baseline planform. VSPAERO "
               "and CFD supersede this number.",
 }
 
+# ---------------------------------------------------------------------------
+# driver chips — the ⓘ panel's "to change it, change these" list (S3-E4)
+#
+# The old list was hand-kept and two of its entries were fiction: `static_margin`
+# claimed `wind` and `mission_type` as drivers while it is the hardcoded constant
+# STATIC_MARGIN_TARGET = 0.08, and `clmax` claimed `airfoil`, which moves nothing at
+# all (the airfoil row is inert — S3-E2).
+#
+# MEASURED_DRIVERS is the measured dependency set: perturb each editable row over a
+# grid of base intakes and record which derived numbers move.
+# `test_bwb_disclosure.py::test_driver_chips_match_the_measured_dependency_set`
+# re-runs that measurement on every test run and fails if this table disagrees, so the
+# chips cannot drift back into fiction. The six computing rows all reach every derived
+# number through the sizing solve, which is why the lists are identical — that IS the
+# finding, not an oversight.
+# ---------------------------------------------------------------------------
+
+_COMPUTING = ["payload", "altitude", "launch", "span_max", "v_stall_max", "mtow_cap"]
+
+MEASURED_DRIVERS = {
+    "wing_loading": _COMPUTING,
+    "s_ref": _COMPUTING,
+    "cruise_speed": _COMPUTING,
+    "cruise_cl": _COMPUTING,
+    "clmax": _COMPUTING,
+    # None. It is the constant STATIC_MARGIN_TARGET (aero_estimates.py), not an
+    # outcome of anything on this screen.
+    "static_margin": [],
+    "ld_est": _COMPUTING,
+}
+
+# The direction of effect, where there is something specific to say. Pairs without an
+# entry get the generic sentence — honest about the mechanism without inventing a
+# direction that the solve does not guarantee.
+_GENERIC_EFFECT = "changes the sizing solve, which moves this number"
+_DRIVER_EFFECTS = {
+    "wing_loading": {
+        "mtow_cap": "lower MTOW cap → lower W/S",
+        "v_stall_max": "lower stall speed → bigger wing → lower W/S",
+        "launch": "hand launch caps stall → floors wing area",
+        "payload": "less payload → less mass",
+        "altitude": "thinner air → more area for the same stall speed",
+        "span_max": "span cap limits how the area is spent",
+    },
+    "s_ref": {
+        "v_stall_max": "lower stall speed → larger area",
+        "mtow_cap": "more mass → larger area",
+        "span_max": "span cap limits how the area is spent",
+        "payload": "more payload → more mass → larger area",
+        "launch": "a tighter launch cap floors the area",
+        "altitude": "thinner air → larger area",
+    },
+    "cruise_speed": {
+        "mtow_cap": "heavier → faster best-L/D speed",
+        "v_stall_max": "bigger wing → slower best-L/D speed",
+        "altitude": "thinner air → faster",
+        "payload": "heavier → faster",
+        "span_max": "span cap changes AR, and AR sets CL*",
+        "launch": "a tighter launch cap enlarges the wing → slower",
+    },
+    "cruise_cl": {
+        "v_stall_max": "bigger wing → lower cruise CL",
+        "mtow_cap": "heavier → higher cruise CL",
+        "payload": "heavier → higher cruise CL",
+    },
+    "clmax": {
+        # CLmax = CL_MAX_2D * CL_MAX_3D_FACTOR * cos(sweep) — it responds ONLY to
+        # planform sweep, which these rows move through the sizing solve. Notably NOT
+        # to the airfoil row, which the old chip claimed.
+        row: "changes the solved planform sweep, and CLmax scales with cos(sweep)"
+        for row in _COMPUTING
+    },
+    "ld_est": {
+        "span_max": "more span → higher AR → higher L/D",
+        "v_stall_max": "tight stall cap → area floor → lower L/D",
+        "mtow_cap": "heavier → higher cruise CL → lower L/D",
+        "payload": "heavier → higher cruise CL → lower L/D",
+        "altitude": "thinner air → different Reynolds and cruise CL",
+        "launch": "a tighter launch cap enlarges the wing → lower L/D",
+    },
+}
+
 _DERIVED_DRIVERS = {
-    "wing_loading": [
-        Driver(row_id="mtow_cap", effect="lower MTOW cap → lower W/S"),
-        Driver(row_id="v_stall_max", effect="lower stall speed → bigger wing → lower W/S"),
-        Driver(row_id="launch", effect="hand launch caps stall → floors wing area"),
-        Driver(row_id="payload", effect="less payload → less mass"),
-    ],
-    "s_ref": [
-        Driver(row_id="v_stall_max", effect="lower stall speed → larger area"),
-        Driver(row_id="mtow_cap", effect="more mass → larger area"),
-        Driver(row_id="span_max", effect="span cap limits how the area is spent"),
-    ],
-    "cruise_speed": [
-        Driver(row_id="mtow_cap", effect="heavier → faster best-L/D speed"),
-        Driver(row_id="v_stall_max", effect="bigger wing → slower best-L/D speed"),
-        Driver(row_id="altitude", effect="thinner air → faster"),
-    ],
-    "cruise_cl": [
-        Driver(row_id="v_stall_max", effect="bigger wing → lower cruise CL"),
-        Driver(row_id="mtow_cap", effect="heavier → higher cruise CL"),
-    ],
-    "clmax": [
-        Driver(row_id="airfoil", effect="higher-lift sections → higher CLmax"),
-        Driver(row_id="altitude", effect="denser air → higher Reynolds → better CLmax"),
-    ],
-    "static_margin": [
-        Driver(row_id="wind", effect="gustier → larger margin"),
-        Driver(row_id="mission_type", effect="aerobatic → smaller, surveillance → larger"),
-    ],
-    "ld_est": [
-        Driver(row_id="span_max", effect="more span → higher AR → higher L/D"),
-        Driver(row_id="v_stall_max", effect="tight stall cap → area floor → lower L/D"),
-    ],
+    derived_id: [Driver(row_id=row,
+                        effect=_DRIVER_EFFECTS.get(derived_id, {}).get(
+                            row, _GENERIC_EFFECT))
+                 for row in rows]
+    for derived_id, rows in MEASURED_DRIVERS.items()
 }
 
 
@@ -515,10 +623,13 @@ def parse_brief(text: str) -> Intake:
         distinct = sorted({v for _, v in matches})
         if len(distinct) > 1:
             unit = CANONICAL_UNIT[dimension]
-            intake.warnings.append(
-                f"{rows[rid].label.lower()}: the brief gives "
-                f"{', '.join(f'{v:g} {unit}' for v in distinct)} — used "
-                f"{value:g} {unit}")
+            intake.warnings.append(IntakeWarning(
+                kind="ambiguous", row_id=rid,
+                typed=", ".join(f"{v:g} {unit}" for v in distinct),
+                used=f"{value:g} {unit}",
+                message=(f"{rows[rid].label}: the brief gives "
+                         f"{', '.join(f'{v:g} {unit}' for v in distinct)} — used "
+                         f"{value:g} {unit} (the first one)")))
         if rid == "endurance":
             value, note = clamp_endurance(value)
             _set(rows[rid], display.format(v=value), value)
@@ -531,9 +642,12 @@ def parse_brief(text: str) -> Intake:
     if matched_launches:
         launch = matched_launches[0]
         if len(matched_launches) > 1:
-            intake.warnings.append(
-                f"launch: the brief mentions {', '.join(matched_launches)} — used "
-                f"{launch} (most specific wins)")
+            intake.warnings.append(IntakeWarning(
+                kind="ambiguous", row_id="launch",
+                typed=", ".join(matched_launches), used=launch,
+                message=(f"Launch and recovery: the brief mentions "
+                         f"{', '.join(matched_launches)} — used {launch} (the most "
+                         f"specific method wins)")))
         _set(rows["launch"], launch)
         cap = LAUNCH_VSTALL_MAX[launch]
         stall_row = rows["v_stall_max"]
@@ -578,9 +692,11 @@ def merge_brief(current: Intake, text: str) -> Intake:
         if row.origin != "you_said":
             continue                       # the brief is silent: keep what is stored
         if target.origin == "edited" and target.value != row.value:
-            merged.warnings.append(
-                f"{target.label.lower()}: your brief says {row.value} — replacing "
-                f"your earlier edit of {target.value}")
+            merged.warnings.append(IntakeWarning(
+                kind="overridden", row_id=target.id, typed=target.value,
+                used=row.value,
+                message=(f"{target.label}: your brief says {row.value} — replacing "
+                         f"your earlier edit of {target.value}")))
         for field in _PARSED_FIELDS:
             setattr(target, field, getattr(row, field))
     return merged
@@ -681,8 +797,12 @@ def apply_edits(current: Intake, edits: List[Dict[str, Any]]) -> Intake:
                 id=rid, tier="vehicle", label=str(e["label"]), value="",
                 status="fixed" if e.get("status") != "variable" else "variable",
                 origin="edited", source="your addition", custom=True,
-                info=_INFO.get(rid, "Custom requirement — recorded and passed to "
-                                    "Stage 2 as a constraint when recognised."))
+                # The old text promised this row was "passed to Stage 2 as a
+                # constraint when recognised". No custom row id is recognised
+                # anywhere, so the promise was empty (S3-E3).
+                info=_INFO.get(rid, "Custom requirement — recorded on this list only. "
+                                    "It is not evaluated at this tier and does not "
+                                    "constrain the solver."))
             _set_row_value(custom, str(e.get("value", "")),
                            origin_when_assumed="edited",
                            source_when_assumed="your addition")
@@ -698,39 +818,146 @@ def _row(intake: Intake, rid: str) -> Optional[IntakeRow]:
     return next((r for r in intake.rows if r.id == rid), None)
 
 
-def usable_number(intake: Intake, rid: str) -> Optional[float]:
-    """The row's number when it can be used at all, else None (S2-B5).
+# The range each row's number must land in, and its source. ONE table, read by both
+# the solver path (`usable_number`) and the disclosure (`substitution_warnings`), so
+# the clamp the user is told about is by construction the clamp that happened — a
+# second, hand-maintained copy of these bounds is exactly how a disclosure goes stale.
+#
+# `below` says what a value under the floor means: "clamp" it up, or "reject" it and
+# fall back to the documented default. An MTOW cap of 0 is rejected rather than
+# clamped because 0.01 kg is not what the user meant; the payload-fraction estimate is.
+ROW_LIMITS = {
+    "payload":      (0.01, 10.0, "clamp", "MissionSpec payload range"),
+    "mtow_cap":     (0.0, 25.0, "reject", "MissionSpec MTOW range / 25 kg class limit"),
+    "altitude":     (0.0, 4000.0, "clamp", "the pack's ISA table (0-4000 m)"),
+    "v_stall_max":  (5.0, 20.0, "clamp", "DesignRequirements stall range"),
+    "span_max":     (0.8, 3.0, "clamp", "BWBParams span range"),
+    "endurance":    (ENDURANCE_MIN_MIN, ENDURANCE_MIN_MAX, "clamp",
+                     "MissionSpec endurance range"),
+    "cruise_speed": (8.0, 60.0, "clamp", "MissionSpec cruise-speed range"),
+}
 
-    "Usable" is deliberately weak: finite and non-negative. Out-of-range but sensible
-    values are still clamped downstream (and disclosed by S3-D2); what this rejects is
-    input no clamp can rescue — a negative mass, a NaN, an unreadable string — where
-    the honest move is the documented default rather than a 500 or a sign flip.
 
-    A stored intake is a file, and S1-B3 shows files get damaged; nothing downstream
-    may assume the number in one is sane.
+def _format(rid: str, value: float) -> str:
+    unit = CANONICAL_UNIT.get(ROW_DIMENSION.get(rid, ""), "")
+    return f"{value:g} {unit}".strip()
+
+
+def resolved_number(intake: Intake, rid: str) -> tuple:
+    """(value the solver will use, disclosure or None) for one numeric row (S3-D2).
+
+    The single place a typed number becomes a used number. Everything the app says
+    about substitution is derived from this function's second return value, so the
+    claim cannot drift from the computation.
     """
     row = _row(intake, rid)
-    if row is None or row.number is None:
-        return None
-    if not math.isfinite(row.number) or row.number < 0:
-        return None
-    return row.number
+    if row is None:
+        return None, None
+    if row.unparsed:
+        return None, IntakeWarning(
+            kind="unparsed", row_id=rid, typed=row.value, used="the assumed default",
+            message=(f"{row.label}: could not read \"{row.value}\" "
+                     f"({row.parse_error}) — using the assumed default instead"))
+    number = row.number
+    if number is None:
+        return None, None
+
+    lo, hi, below, source = ROW_LIMITS.get(rid, (None, None, "clamp", ""))
+    if not math.isfinite(number) or number < 0:
+        # Includes the probed sign flip: altitude -500 used to become +500. A negative
+        # altitude is a REJECTION, not a clamp — the user did not ask for 500 m.
+        return None, IntakeWarning(
+            kind="rejected", row_id=rid, typed=row.value, used="the assumed default",
+            limit=source,
+            message=(f"{row.label}: {row.value} is not a usable value — using the "
+                     f"assumed default instead"))
+    if lo is not None and number < lo:
+        if below == "reject":
+            return None, IntakeWarning(
+                kind="rejected", row_id=rid, typed=row.value,
+                used="the assumed default", limit=source,
+                message=(f"{row.label}: {_format(rid, number)} cannot size an "
+                         f"aircraft — using the assumed default instead"))
+        return lo, IntakeWarning(
+            kind="clamped", row_id=rid, typed=row.value, used=_format(rid, lo),
+            limit=f"{_format(rid, lo)} minimum ({source})",
+            message=(f"{row.label}: you typed {row.value} — using "
+                     f"{_format(rid, lo)}, the lowest this tier supports "
+                     f"({source})"))
+    if hi is not None and number > hi:
+        return hi, IntakeWarning(
+            kind="clamped", row_id=rid, typed=row.value, used=_format(rid, hi),
+            limit=f"{_format(rid, hi)} maximum ({source})",
+            message=(f"{row.label}: you typed {row.value} — using "
+                     f"{_format(rid, hi)}, the highest this tier supports "
+                     f"({source})"))
+    return number, None
 
 
-def unusable_row_warnings(intake: Intake) -> List[str]:
-    """Plain-language notice for every numeric row whose value cannot be used."""
+def usable_number(intake: Intake, rid: str) -> Optional[float]:
+    """The value the solver uses for a row, or None when there is nothing usable.
+
+    Weak on purpose (S2-B5): a negative mass, a NaN or an unreadable string yields
+    None so the caller applies its documented default, rather than a 500 or a sign
+    flip. Out-of-range but sensible values are clamped, and every substitution is
+    disclosed by `substitution_warnings`."""
+    return resolved_number(intake, rid)[0]
+
+
+def effective_stall_cap(intake: Intake) -> tuple:
+    """(cap, source) — the stall speed actually in force, which is the tighter of the
+    typed cap and the launch method's limit."""
+    launch_row = _row(intake, "launch")
+    launch = (launch_row.value.strip().lower() if launch_row else "hand")
+    if launch not in LAUNCH_VSTALL_MAX:
+        launch = "hand"
+    typed = usable_number(intake, "v_stall_max")
+    launch_cap = LAUNCH_VSTALL_MAX[launch]
+    if typed is None or launch_cap < typed:
+        return launch_cap, f"{launch} launch"
+    return typed, "your stall cap"
+
+
+def substitution_warnings(intake: Intake) -> List[IntakeWarning]:
+    """Every gap between what the rows say and what the solver uses."""
     out = []
-    for rid in ROW_DIMENSION:
-        row = _row(intake, rid)
-        if row is None:
-            continue
-        if row.unparsed:
-            out.append(f"{row.label.lower()}: could not read {row.value!r} "
-                       f"({row.parse_error}) — using the assumed default instead")
-        elif row.number is not None and usable_number(intake, rid) is None:
-            out.append(f"{row.label.lower()}: {row.value!r} is not a usable "
-                       f"number — using the assumed default instead")
+    for rid in ROW_LIMITS:
+        _, warning = resolved_number(intake, rid)
+        if warning is not None:
+            out.append(warning)
+
+    # The launch method silently overrides a looser stall cap: typing 99 m/s clamps to
+    # 20 and then flies against a 10.5 m/s hand-launch limit. Two substitutions deep,
+    # and neither was visible.
+    typed = usable_number(intake, "v_stall_max")
+    cap, source = effective_stall_cap(intake)
+    stall_row = _row(intake, "v_stall_max")
+    if typed is not None and stall_row is not None and cap < typed - 1e-9:
+        out.append(IntakeWarning(
+            kind="clamped", row_id="v_stall_max", typed=stall_row.value,
+            used=_format("v_stall_max", cap), limit=f"{source} ({cap:g} m/s)",
+            message=(f"{stall_row.label}: {source} limits you to {cap:g} m/s, which "
+                     f"is tighter than the {typed:g} m/s in this row")))
     return out
+
+
+def refresh_disclosure(intake: Intake) -> List[IntakeWarning]:
+    """Bring every row's disclosure fields up to date; return the substitutions.
+
+    Cheap (no solve), so a stored intake written by an older build can be shown
+    honestly the moment it is READ — otherwise `drives_computation` is False on every
+    row of an existing session and the screen labels the six rows that do drive the
+    design "recorded only", which is the E2/E3 disclosure pointing the wrong way.
+    """
+    substitutions = substitution_warnings(intake)
+    by_row = {w.row_id: w for w in substitutions}
+    for row in intake.rows:
+        if row.status == "derived":
+            continue
+        row.drives_computation = row.id in COMPUTING_ROWS
+        warning = by_row.get(row.id)
+        row.used_value = warning.used if warning else ""
+    return substitutions
 
 
 def to_requirements(intake: Intake) -> DesignRequirements:
@@ -743,23 +970,33 @@ def to_requirements(intake: Intake) -> DesignRequirements:
     launch = (launch_row.value.strip().lower() if launch_row else "hand")
     if launch not in ("hand", "catapult", "runway"):
         launch = "hand"
-    stall = usable_number(intake, "v_stall_max")
-    if stall is not None:
-        stall = min(max(stall, 5.0), 20.0)
-    span = usable_number(intake, "span_max")
-    if span is not None:
-        span = min(max(span, 0.8), 3.0)
     return DesignRequirements(
         mtow_kg=mtow, cruise_speed_ms=18.0,
-        cruise_altitude_m=min(max(usable_number(intake, "altitude") or 100.0,
-                                  0.0), 4000.0),
-        launch=launch, v_stall_max_ms=stall, span_max_m=span)
+        cruise_altitude_m=usable_number(intake, "altitude") or 100.0,
+        launch=launch,
+        v_stall_max_ms=usable_number(intake, "v_stall_max"),
+        span_max_m=usable_number(intake, "span_max"))
+
+
+# Kinds derive() owns and rebuilds every call. The rest record a past event (an
+# ambiguous brief, an overridden edit) and must survive.
+_RECOMPUTED_KINDS = {"clamped", "rejected", "unparsed"}
+
+# The six editable rows that measurably move a derived number. The other six
+# (mission_type, endurance, regulatory, structure, airfoil, wind) and every custom row
+# change nothing at all — verified by perturbing each row and comparing all seven
+# derived values (S3-E2/E3). `test_bwb_disclosure.py` re-measures this on every run, so
+# the day one of them starts mattering the flag cannot stay wrong.
+COMPUTING_ROWS = {"payload", "altitude", "launch", "span_max", "v_stall_max",
+                  "mtow_cap"}
 
 
 def derive(intake: Intake) -> Intake:
     """Recompute the derived tier + feasibility. Cruise speed is solved to the
     best-L/D fixed point: V = sqrt(2W / rho S CL*), iterated with the sizing."""
     intake.rows = [r for r in intake.rows if r.status != "derived"]
+    intake.warnings = [w for w in intake.warnings
+                       if w.kind not in _RECOMPUTED_KINDS]
     # Assumed defaults track their basis: an untouched MTOW cap follows the
     # payload row (payload / payload-fraction), so parsing "180 g camera"
     # doesn't leave a stale 3.3 kg default behind.
@@ -787,6 +1024,11 @@ def derive(intake: Intake) -> Intake:
             verdict="error", headline="Could not size these requirements",
             detail=str(e))
         return intake
+
+    # What the screen must say about the gap between typed and used (S3-D2). Computed
+    # AFTER the solve so a row that could not be sized is still described.
+    substitutions = refresh_disclosure(intake)
+    intake.warnings += substitutions
 
     p = res.panel
 
@@ -826,17 +1068,26 @@ def derive(intake: Intake) -> Intake:
     binding_rows = {"stall_at_launch": ["launch"], "stall_requirement": ["v_stall_max"],
                     "span_cap": ["span_max"], "cruise_cl_cap": ["mtow_cap"],
                     "ar_gate": [], "physics_limit": []}
+    count = len(substitutions)
     if res.binding_constraint is None and not unmet:
+        # "Feasible" while a typed value was quietly replaced is the dishonest verdict
+        # this state exists to prevent (S3-D2d).
         intake.feasibility = Feasibility(
-            verdict="feasible", headline="Feasible — requirements close",
-            detail="Sized at best-L/D cruise. " + "; ".join(res.notes[:2]),
-            implied=implied)
+            verdict="feasible_with_substitutions" if count else "feasible",
+            headline=("Feasible — but not with every number you typed" if count
+                      else "Feasible — requirements close"),
+            detail=(("Sized at best-L/D cruise, after replacing "
+                     f"{count} value{'s' if count != 1 else ''} you typed. ")
+                    if count else "Sized at best-L/D cruise. ")
+                   + "; ".join(res.notes[:2]),
+            implied=implied, substitutions=count,
+            binding_row_ids=[w.row_id for w in substitutions if w.row_id])
     else:
         intake.feasibility = Feasibility(
             verdict="binding",
             headline=f"Limited by {BINDING_LABELS.get(res.binding_constraint, 'a constraint')}",
             detail=res.binding_explanation,
-            implied=implied,
+            implied=implied, substitutions=count,
             binding_row_ids=binding_rows.get(res.binding_constraint or "", []))
     intake.notes = res.notes
     return intake

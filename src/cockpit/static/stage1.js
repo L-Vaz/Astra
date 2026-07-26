@@ -17,6 +17,7 @@ const S = {
   candIdx: 0,
   galleryIntakeVersion: null,   // which intake version the designs came from
   openInfo: new Set(),
+  warnings: [],                 // structured disclosures from the last response (S3-D2)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -56,6 +57,23 @@ function badgeFor(row) {
   return `<span class="badge assumed">assumed · ${esc(row.source)}</span>`;
 }
 
+/* S3-D2: a row whose typed value is not the value in force must say so, next to the
+   value itself. Ten probed inputs diverged silently — span 100 m was used as 3.0 m
+   with the verdict still reading "feasible". */
+function substitutionFor(row) {
+  if (!row.used_value) return '';
+  return `<span class="badge warn" title="the solver used a different value">
+            using ${esc(row.used_value)}</span>`;
+}
+
+/* S3-E2/E3: six of the twelve editable rows and every custom row change no number at
+   all. They were presented identically to the six that do. */
+function recordedOnlyFor(row) {
+  if (row.status === 'derived' || row.drives_computation) return '';
+  return '<span class="badge muted" title="recorded on this list; not evaluated at '
+    + 'this tier">recorded only</span>';
+}
+
 function renderIntake() {
   for (const el of Object.values(TIER_EL)) $(el).innerHTML = '';
   for (const row of S.intake.rows) {
@@ -68,7 +86,7 @@ function renderIntake() {
     div.innerHTML = `
       <div class="req-main">
         <button class="icon-btn ${derived ? 'derived-hidden' : ''} ${row.status === 'fixed' ? 'locked' : ''}"
-                data-act="lock" title="${row.status === 'fixed' ? 'Fixed — tap to free' : 'Variable — tap to fix'}">
+                data-act="lock" title="${row.status === 'fixed' ? 'Lock (display only) — tap to free' : 'Lock (display only) — tap to fix'}">
           ${row.status === 'fixed' ? '🔒' : '🔓'}</button>
         <button class="icon-btn" data-act="info" title="What is this?">ⓘ</button>
         <span class="label">${esc(row.label)}</span>
@@ -76,10 +94,24 @@ function renderIntake() {
           ? `<span class="req-value readonly">${esc(row.value)}</span>`
           : `<input class="req-value" value="${esc(row.value)}">`}
         ${badgeFor(row)}
+        ${substitutionFor(row)}
+        ${recordedOnlyFor(row)}
       </div>`;
     const info = document.createElement('div');
     info.className = 'req-info' + (S.openInfo.has(row.id) ? '' : ' hidden');
-    let html = esc(row.info || 'Custom requirement — recorded and passed downstream.');
+    let html = esc(row.info || 'Custom requirement — recorded on this list only. It is '
+      + 'not evaluated at this tier and does not constrain the solver.');
+    if (!derived && !row.drives_computation) {
+      html += '<br><b>Recorded only.</b> Editing this row does not change any number '
+        + 'on this screen — it is kept on the record for a later stage.';
+    }
+    if (row.status !== 'derived') {
+      html += '<br><b>Lock is display only.</b> It records your intent; the solver '
+        + 'produces identical values whether this row is locked or free.';
+    }
+    if (row.used_value) {
+      html += `<br><b>In force:</b> ${esc(row.used_value)} — not the value typed above.`;
+    }
     if (row.drivers && row.drivers.length) {
       html += '<br><b>To change it, change these:</b><div class="driver-chips">'
         + row.drivers.map((d) =>
@@ -122,16 +154,39 @@ function renderFeasibility() {
   const card = $('feas-card');
   card.classList.remove('ok', 'warn');
   if (!f) { $('feas-headline').textContent = '—'; return; }
-  card.classList.add(f.verdict === 'feasible' ? 'ok' : 'warn');
-  $('feas-icon').textContent = f.verdict === 'feasible' ? '✔' : '▲';
-  $('feas-headline').textContent = f.headline;
+  /* "feasible" is reserved for a solve that used every number the user typed.
+     A substitution downgrades the card, because a green tick over a replaced
+     requirement is the exact dishonesty S3-D2 exists to remove. */
+  const clean = f.verdict === 'feasible';
+  card.classList.add(clean ? 'ok' : 'warn');
+  $('feas-icon').textContent = clean ? '✔' : '▲';
+  $('feas-headline').textContent = f.headline
+    + (f.substitutions ? ` · ${f.substitutions} value`
+       + `${f.substitutions === 1 ? '' : 's'} replaced` : '');
   $('feas-detail').textContent = f.detail || '';
   $('feas-implied').textContent = Object.entries(f.implied || {})
     .map(([k, v]) => `${k} ${v}`).join(' · ');
+  renderWarnings();
   $('btn-generate').disabled = f.verdict === 'error';
   if (f.binding_row_ids && f.binding_row_ids.length) {
     $('feas-detail').textContent += ' (tap a derived ⓘ for the levers)';
   }
+}
+
+/* Warnings arrive on every intake response (S3-D2). They are structured, so the list
+   can show what was typed, what is in force, and which bound forced it. */
+function renderWarnings() {
+  const el = $('feas-warnings');
+  if (!el) return;
+  const items = S.warnings || [];
+  el.classList.toggle('hidden', items.length === 0);
+  el.innerHTML = items.map((w) => {
+    const detail = w.typed && w.used
+      ? `<span class="mono dim"> (you typed ${esc(w.typed)} · using ${esc(w.used)}`
+        + `${w.limit ? ` · limit ${esc(w.limit)}` : ''})</span>`
+      : '';
+    return `<li data-kind="${esc(w.kind)}">${esc(w.message)}${detail}</li>`;
+  }).join('');
 }
 
 async function saveEdits(edits) {
@@ -139,6 +194,7 @@ async function saveEdits(edits) {
     const out = await api('/api/stage1/intake', { session_id: S.sid, edits });
     S.intake = out.intake;
     S.intakeVersion = out.version;
+    S.warnings = out.warnings || [];
     renderIntake();
     updateStaleChip();
   } catch (e) { toast(`save failed: ${e.message}`); }
@@ -416,6 +472,7 @@ async function boot() {
     S.sid = out.session_id;
     S.intake = out.intake;
     S.intakeVersion = out.version;
+    S.warnings = out.warnings || [];
     $('session-chip').textContent = `session: ${S.sid}`;
     renderIntake();
   } catch (e) { toast(`load failed: ${e.message}`, 5000); }
@@ -428,6 +485,7 @@ async function boot() {
       const out = await api('/api/stage1/parse', { session_id: S.sid, brief });
       S.intake = out.intake;
       S.intakeVersion = out.version;
+      S.warnings = out.warnings || [];
       const said = S.intake.rows.filter((r) => r.origin === 'you_said').length;
       $('parse-note').textContent =
         `${said} requirement${said === 1 ? '' : 's'} from your words — the rest are cited defaults`;

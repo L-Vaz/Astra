@@ -55,6 +55,11 @@ def _versions(sid: str) -> list:
                   if n.startswith("v") and n[1:].isdigit())
 
 
+def _messages(response) -> list:
+    """Warnings are structured objects since S3-D2; most assertions want the prose."""
+    return [w["message"] for w in response.json().get("warnings", [])]
+
+
 def _index_latest(sid: str) -> int:
     with open(os.path.join(_intake_root(sid), "index.json")) as f:
         return json.load(f)["latest"]
@@ -235,12 +240,12 @@ def test_corrupt_intake_recovers_to_previous_version(stage1_session):
     read = client.get(f"/api/stage1/intake?session={sid}")
     assert read.status_code == 200, read.text
     assert read.json()["version"] == 1
-    assert any("v2" in w for w in read.json()["warnings"]), read.json()["warnings"]
+    assert any("v2" in m for m in _messages(read)), read.json()["warnings"]
 
     edit = client.post("/api/stage1/intake", json={
         "session_id": sid, "edits": [{"id": "payload", "value": "3.5 kg"}]})
     assert edit.status_code == 200, edit.text
-    assert any("v2" in w for w in edit.json()["warnings"])
+    assert any("v2" in m for m in _messages(edit))
 
     generate = client.post("/api/stage1/generate", json={"session_id": sid})
     assert generate.status_code == 200, generate.text
@@ -272,8 +277,8 @@ def test_all_versions_corrupt_returns_default_with_warning(stage1_session):
     body = response.json()
     assert body["version"] == 0
     assert body["intake"]["rows"], "the screen must not open empty"
-    assert body["warnings"] and "v1" in body["warnings"][0] \
-        and "v2" in body["warnings"][0], body["warnings"]
+    recovery = next(m for m in _messages(response) if "no readable" in m)
+    assert "v1" in recovery and "v2" in recovery, recovery
 
 
 def test_index_pointing_at_missing_version_recovers(stage1_session):

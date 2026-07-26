@@ -26,6 +26,11 @@ import pytest
 pytestmark = pytest.mark.wsl
 
 
+def _messages(response) -> list:
+    """Warnings are structured objects since S3-D2; most assertions want the prose."""
+    return [w["message"] for w in response.json().get("warnings", [])]
+
+
 def _intake_path(sid: str, version: int) -> str:
     import services.design_session as ds
     return os.path.join(ds.session_dir(sid), "intake", f"v{version}", "intake.json")
@@ -102,8 +107,9 @@ def test_negative_row_number_does_not_500(stage1_session, rid, number):
 
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
-    assert any(w for w in response.json()["warnings"]), \
-        "a substituted value must be reported"
+    rejected = [w for w in response.json()["warnings"]
+                if w["row_id"] == rid and w["kind"] == "rejected"]
+    assert rejected, f"a substituted value must be reported: {_messages(response)}"
 
 
 @pytest.mark.parametrize("number", [float("nan"), float("inf")],
@@ -128,7 +134,7 @@ def test_an_unreadable_edit_is_flagged_and_does_not_500(stage1_session):
     row = next(r for r in saved.json()["intake"]["rows"] if r["id"] == "span_max")
     assert row["unparsed"] is True
     assert row["value"] == "wide enough", "the user's text must survive"
-    assert any("could not read" in w for w in saved.json()["warnings"])
+    assert any("could not read" in m for m in _messages(saved))
     assert client.post("/api/stage1/generate",
                        json={"session_id": sid}).status_code == 200
 
@@ -146,7 +152,7 @@ def test_payload_above_mtow_cap_is_reconciled_not_persisted(stage1_session):
 
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
-    assert any("payload" in w for w in response.json()["warnings"])
+    assert any("payload" in m for m in _messages(response)), _messages(response)
 
     mission = _mission(sid, response.json()["plan_version"])
     assert mission["mission"]["mtow_kg"] >= mission["mission"]["payload_kg"]
@@ -187,8 +193,8 @@ def test_brief_overriding_an_edit_is_reported(stage1_session):
     reparsed = client.post("/api/stage1/parse",
                            json={"session_id": sid, "brief": "2.2 m span"})
     assert _rows(reparsed.json())["span_max"]["number"] == pytest.approx(2.2)
-    assert any("1.4" in w and "2.2" in w for w in reparsed.json()["warnings"]), \
-        reparsed.json()["warnings"]
+    assert any("1.4" in m and "2.2" in m for m in _messages(reparsed)), \
+        _messages(reparsed)
 
 
 def test_replace_true_starts_from_defaults(stage1_session):
@@ -243,8 +249,7 @@ def test_an_explicit_intake_row_still_overrides(stage1_session):
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
     assert ds.latest_requirements(sid)["span_max_m"] == pytest.approx(1.6)
-    assert any("span_max_m" in w for w in response.json()["warnings"]), \
-        response.json()["warnings"]
+    assert any("span_max_m" in m for m in _messages(response)), _messages(response)
 
 
 def test_generate_override_is_recorded_in_the_requirements_version(stage1_session):

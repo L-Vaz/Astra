@@ -19,17 +19,53 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from .atmosphere import AtmosphereState
+from .constants import STATIC_MARGIN_TARGET as _STATIC_MARGIN_TARGET
 from .schema import BWBParams
 
-# --- declared engineering constants (each echoed into assumptions) ----------
-LAMINAR_FRACTION = 0.30       # smooth small-UAV wing at Re ~ 5e5-1e6
-INTERFERENCE_MARGIN = 1.10    # excrescences, gaps, antennas on CD0
-CL_MAX_2D = 1.30              # NACA 4-series section at Re ~ 7e5
-CL_MAX_3D_FACTOR = 0.90       # finite-wing knockdown before sweep effect
-# Highest stall speed each launch method tolerates, m/s — calibrated so the
-# pack's own wing-loading table (defaults.WING_LOADING) sits at the boundary
+# --- declared engineering constants -----------------------------------------
+#
+# Each of these is either cited to a source or explicitly labelled engineering
+# judgment, with the measured sensitivity of the numbers the user sees (S3-F12). They
+# are global levers: one line changes every drag figure and every L/D in the product,
+# and "it looked about right" is not something a reader can check.
+
+# ENGINEERING JUDGMENT (Astra): fraction of the chord assumed to run laminar.
+# A smooth small-UAV wing at Re 5e5-1e6 can hold laminar flow over roughly the first
+# third of the chord, but the real value depends on surface finish, trip location and
+# turbulence level — none of which this tier models.
+# MEASURED SENSITIVITY: 0.30 -> 0.00 raises CD0 by 22% and drops ld_max by 11%;
+# 0.30 -> 0.60 raises ld_max to 19.41 (from 17.10) on the reference geometry.
+LAMINAR_FRACTION = 0.30
+
+# ENGINEERING JUDGMENT (Astra): the ONLY allowance for prop, nacelle, gaps, camera,
+# antennas and servo horns. Raymer tabulates interference separately per component;
+# this collapses all of it into one factor. The pack's maximum CD0 is 0.0233 while
+# measured small-UAV flying wings sit at 0.020-0.035, so this whole band is at the
+# optimistic edge of the real range.
+INTERFERENCE_MARGIN = 1.10
+
+# NACA 4-series section CLmax at Re ~ 7e5 (Abbott & von Doenhoff section data).
+# Fixed at that Reynolds number: cl_max_3d is bit-identical across Re 1.8e5-1.0e6,
+# which is the dominant low-Re effect this tier does not model (S6-F5 / S7-CAP-4).
+CL_MAX_2D = 1.30
+
+# Raymer: finite-wing knockdown from section CLmax to wing CLmax, before sweep.
+CL_MAX_3D_FACTOR = 0.90
+
+# ENGINEERING JUDGMENT (Astra): the highest stall speed each launch method tolerates,
+# m/s. NOT derived from defaults.WING_LOADING — inverting these against that table
+# implies CLmax 1.02 (hand) / 0.95 (catapult) / 0.81 (runway), three different values,
+# none of which equals this pack's own CL_MAX_2D * CL_MAX_3D_FACTOR = 1.17. The
+# previous comment claimed they were "calibrated so the pack's own wing-loading table
+# sits at the boundary"; they are three independent judgments. Revisit against
+# Sadraey §5 / Raymer §5 before treating them as calibrated.
+# `test_bwb_disclosure.py::test_the_implied_clmax_values_disagree_with_the_packs_own_cap`
+# keeps that inconsistency measured rather than remembered.
 LAUNCH_VSTALL_MAX = {"hand": 10.5, "catapult": 13.0, "runway": 16.0}
-STATIC_MARGIN_TARGET = 0.08   # fraction of MAC, tailless BWB
+
+# Declared once, in constants.py — schema.MissionDerived reads the same object, so the
+# CG this places and the margin it reports cannot drift apart (S3-F12c).
+STATIC_MARGIN_TARGET = _STATIC_MARGIN_TARGET
 
 
 class AeroEstimate(BaseModel):
@@ -71,7 +107,10 @@ class AeroEstimate(BaseModel):
     x_cg_for_target_sm_m: float
 
     # proxies
-    root_bending_index_nm: float = Field(description="~W*b/8, elliptic half-span load")
+    root_bending_index_nm: float = Field(
+        description=("W*b/8 — uniform half-span load, a conservative comparative "
+                     "index (NOT elliptic; the elliptic value is W*b/(3*pi), ~18% "
+                     "lower). No structural sizing."))
     tip_re: float
     roll_damping_index: float = Field(description="relative, ~span^2")
 
@@ -110,8 +149,16 @@ def effective_c4_sweep_deg(params: BWBParams) -> float:
     return math.degrees(math.atan((b1 * t1 + b2 * t2) / (b1 + b2)))
 
 
-def skin_friction_coeff(re: float, laminar_fraction: float = LAMINAR_FRACTION) -> float:
-    """Mixed laminar/turbulent flat-plate Cf (area-fraction blend)."""
+def skin_friction_coeff(re: float, laminar_fraction: Optional[float] = None) -> float:
+    """Mixed laminar/turbulent flat-plate Cf (area-fraction blend).
+
+    The default is resolved from the module constant at CALL time, not bound into the
+    signature at import time. Bound as a default argument, LAMINAR_FRACTION stopped
+    being the lever its own comment claims it is: changing it — including in a
+    sensitivity test — moved nothing (S3-F12).
+    """
+    if laminar_fraction is None:
+        laminar_fraction = LAMINAR_FRACTION
     re = max(re, 1e4)
     cf_turb = 0.455 / (math.log10(re) ** 2.58)          # Schlichting
     cf_lam = 1.328 / math.sqrt(re)                       # Blasius
@@ -210,18 +257,33 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
     x_np = neutral_point_m(params)
     mass_kg = weight_n / 9.81
 
+    # Each assumption states its own sensitivity where one has been measured (S3-F12b):
+    # "assumes a 30% laminar run" means nothing to a reader who cannot tell whether
+    # that is worth 1% or 11% of the L/D on the card.
     assumptions = [
-        f"Mixed flat-plate skin friction, {LAMINAR_FRACTION:.0%} laminar run assumed",
-        f"Hoerner form factor + Raymer wetted-area fit; +{INTERFERENCE_MARGIN - 1:.0%} interference margin",
-        f"Oswald e = {e:.3f} from Raymer fits (AR {ar:.2f}, effective LE sweep {sweep_eff:.1f} deg)",
-        f"Section CLmax {CL_MAX_2D} (NACA 4-series, Re~7e5) x {CL_MAX_3D_FACTOR} finite-wing x cos(sweep)",
+        f"Mixed flat-plate skin friction, {LAMINAR_FRACTION:.0%} laminar run assumed "
+        f"(engineering judgment — at 0% laminar, CD0 is ~22% higher and L/D max ~11% "
+        f"lower)",
+        f"Hoerner form factor + Raymer wetted-area fit; +{INTERFERENCE_MARGIN - 1:.0%} "
+        f"interference margin — the only allowance for prop, gaps, antennas and "
+        f"camera (engineering judgment; measured small-UAV flying wings sit at "
+        f"CD0 0.020-0.035)",
+        f"Oswald e = {e:.3f} from Raymer fits (AR {ar:.2f}, effective LE sweep "
+        f"{sweep_eff:.1f} deg)",
+        f"Section CLmax {CL_MAX_2D} (NACA 4-series, Re~7e5) x {CL_MAX_3D_FACTOR} "
+        f"finite-wing x cos(sweep) — fixed at that Reynolds number, so CLmax here "
+        f"does not respond to speed or altitude",
         "Neutral point = planform quarter-MAC estimate; VSPAERO x_np supersedes it",
-        f"Static margin target {STATIC_MARGIN_TARGET:.0%} MAC when placing the CG",
-        "Root bending proxy W*b/8 (elliptic half-span loading); no structural sizing",
+        f"Static margin target {STATIC_MARGIN_TARGET:.0%} MAC when placing the CG "
+        f"(engineering judgment, tailless-BWB practice)",
+        "Root bending proxy W*b/8 — UNIFORM half-span load, a conservative "
+        "comparative index. Not elliptic loading: the elliptic result is W*b/(3*pi), "
+        "about 18% lower. No structural sizing.",
     ]
     if launch:
         assumptions.append(
-            f"Launch '{launch}' tolerates stall up to {launch_limit} m/s (engineering default)")
+            f"Launch '{launch}' tolerates stall up to {launch_limit} m/s — engineering "
+            f"judgment, not derived from the pack's wing-loading table")
 
     return AeroEstimate(
         s_ref_m2=s, aspect_ratio=ar, span_m=params.span_m, mac_m=mac,

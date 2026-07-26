@@ -9,6 +9,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from .atmosphere import AtmosphereState, atmosphere_at
+from .constants import STATIC_MARGIN_TARGET
 
 
 class MissionSpec(BaseModel):
@@ -142,7 +143,10 @@ class MissionDerived(BaseModel):
     reynolds_mac: float
     turbulence_model: str = "kOmegaSST"
     y_plus_target: float = 50.0
-    static_margin_target: float = 0.08
+    # One declaration, in constants.py (S3-F12c). This used to be a second literal
+    # 0.08 alongside aero_estimates.STATIC_MARGIN_TARGET: equal, independent, and free
+    # to drift into a CG placed for one margin and reported against another.
+    static_margin_target: float = STATIC_MARGIN_TARGET
     params: BWBParams
     assumptions: List[str] = Field(default_factory=list)
 
