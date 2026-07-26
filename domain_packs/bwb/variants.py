@@ -181,16 +181,21 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
     s = derived.s_ref_target_m2
     if not lens.size_to_cl_star:
         if lens.key == "easy_launch":
-            # deliberately lighter loading than the baseline table value — EXCEPT that
-            # the 5.5 kg/m^2 floor raises it whenever the baseline is lighter than
-            # 6.875, which is 56.0% of conditions. The floor itself is a defect and is
-            # fixed in S6-G1; here the card simply stops claiming otherwise.
-            target = 0.8 * derived.wing_loading_kgm2
-            wl = max(5.5, target)
+            # Deliberately lighter loading than the baseline. The 5.5 kg/m^2 floor was
+            # UNCONDITIONAL, so whenever the baseline sat below 6.875 kg/m^2 — 64.1% of
+            # conditions: slow, light or high-altitude — it RAISED the loading instead.
+            # Measured: loading above baseline in 31.8%, stall worse than baseline in
+            # 24.0%, and the highest stall of all five in 21.6%. The card titled
+            # "Easy launch / Lowest stall speed" was the hardest to launch (S6-G1).
+            #
+            # The floor now applies only where it LOWERS the loading. Absurdly large
+            # wings are already bounded by the span cap and the root-chord gates inside
+            # _feasible_planform, which is where a geometric bound belongs.
+            wl = 0.8 * derived.wing_loading_kgm2
             s = derived.mtow_kg / wl
             sizing = _Sizing(strategy="lighter_loading",
                              requested_wing_loading=wl,
-                             wing_loading_floor_applied=wl > target + 1e-12)
+                             wing_loading_floor_applied=False)
         else:
             sizing = _Sizing(strategy="baseline_loading",
                              requested_wing_loading=derived.wing_loading_kgm2)
@@ -365,6 +370,9 @@ def tradeoff_sentences(panel: AeroEstimate, base: AeroEstimate) -> List[str]:
     if _over(d_ld, 2):
         out.append(f"{'+' if d_ld > 0 else ''}{d_ld:.0f}% cruise L/D vs baseline "
                    f"({panel.ld_cruise:.1f} vs {base.ld_cruise:.1f})")
+    if not panel.cruise_feasible:
+        out.append(f"cannot hold the {panel.v_ms:.1f} m/s cruise — it stalls at "
+                   f"{panel.v_stall_ms:.1f} m/s, so its L/D is arithmetic, not flight")
     d_stall = panel.v_stall_ms - base.v_stall_ms
     if _over(d_stall, 0.3):
         harder = "harder" if d_stall > 0 else "easier"
@@ -512,6 +520,35 @@ def generate_candidates(derived: MissionDerived,
     return _report_degeneracy(out)
 
 
+def ranking_key(candidate: DesignCandidate) -> tuple:
+    """Sort key for the gallery: feasible designs first, then by cruise L/D (S6-F1).
+
+    22.31% of the envelope produces a cruise point BELOW the stall speed, where
+    `ld_cruise` is arithmetic rather than flight — and ranking on `ld_cruise` alone let
+    those points compete against real designs as equals. A design that cannot hold the
+    requested speed is not a better design because its ratio is larger."""
+    panel = candidate.panel
+    return (0 if (panel.cruise_feasible and not candidate.violations) else 1,
+            -panel.ld_cruise)
+
+
+def rank_candidates(candidates: List[DesignCandidate]) -> List[DesignCandidate]:
+    """Best first, with infeasible and cap-violating designs after every real one."""
+    return sorted(candidates, key=ranking_key)
+
+
+def distinct_candidates(candidates: List[DesignCandidate]) -> List[DesignCandidate]:
+    """The candidates that are actually different designs (S6-G5a).
+
+    At a tight span cap four of the five cards can be the same wing — 10.0% of
+    conditions collapse to ONE distinct sizing. Presenting them as four choices is
+    presenting a choice that does not exist; S3-G5 reports the collapse, and this is
+    what a surface uses to stop offering it. Making them genuinely distinct is real
+    design work with a real risk of producing differences tier-0 physics cannot
+    resolve, so it stays out of scope here."""
+    return [c for c in candidates if c.duplicate_of is None]
+
+
 def cap_violations(panel: AeroEstimate, span_cap: float,
                    stall_cap: Optional[float], launch: str) -> List[CapViolation]:
     """Every hard cap this finished design breaks (S4-C1/C4).
@@ -521,6 +558,13 @@ def cap_violations(panel: AeroEstimate, span_cap: float,
     outcome" guarantee: a candidate either satisfies its caps or carries one of these.
     """
     out: List[CapViolation] = []
+    if not panel.cruise_feasible:
+        out.append(CapViolation(
+            cap="cruise", required=panel.v_stall_ms, achieved=panel.v_ms, unit="m/s",
+            blocked_by="the wing area this lens arrived at",
+            message=(f"Cannot hold the {panel.v_ms:.1f} m/s cruise: it stalls at "
+                     f"{panel.v_stall_ms:.1f} m/s. The L/D shown for this design is "
+                     f"arithmetic, not flight.")))
     cap, reason = effective_stall_cap(launch, stall_cap)
     if panel.v_stall_ms > cap + 0.05:
         out.append(CapViolation(

@@ -241,6 +241,20 @@ tip_thickness_pct=10, root_twist_deg=1.0, tip_twist_deg=-3.0, dihedral_deg=3.0)`
 5. The five invariants (L25–L29) are **never** regenerated. If a change breaks one, the
    change is wrong, not the invariant.
 
+### Golden-update ledger
+
+| # | Date | Change | Physical reason | Source | Measured shift on the reference case |
+| --- | --- | --- | --- | --- | --- |
+| G1 | 2026-07-26 | Laminar Cf is evaluated at the **transition** Reynolds number (`0.30·Re`) instead of at the full-chord Re (S6-F2a) | Blasius Cf ∝ 1/√Re, so evaluating the first 30 % of the chord at the trailing-edge Re understated that segment by 1/√0.30 = 1.83× | Blasius flat-plate laminar solution; transition-point evaluation is the standard mixed-flow construction (Raymer §12.5) | Cf **+14.15 %** @ Re 2e5, **+11.24 %** @ 5e5, **+9.32 %** @ 1e6, **+7.65 %** @ 2e6; CD0 **+11.85 %**; ld_cruise **−6.31 %** (17.0037 → 15.9316); ld_max **−5.63 %**; cl_star **+5.55 %** |
+| G2 | 2026-07-26 | `effective_le_sweep_deg` averages **tangents**, matching `effective_c4_sweep_deg` (S6-F4) | Averaging one sweep in angle space and the other in tangent space made the quarter-chord sweep exceed the leading-edge sweep in 8.5 % of legal geometries — impossible when both panels taper aft | Geometric: the tangent mean is the sweep of the line joining the panel leading edges over the same span | LE sweep on the reference case 22.760° → 22.681°; oswald_e **−0.38 %** (0.819404 → 0.816260). On the F4 worked case LE 49.000° → 51.190°, restoring c/4 (50.493°) below LE |
+| G3 | 2026-07-26 | CLmax sweep knockdown uses `cos(max(Λ_c/4, 0))` (S6-F6) | `math.cos` is even, so a forward-swept quarter chord — 5.4 % of the envelope, down to −31.03° — was penalised exactly like aft sweep, while Raymer's knockdown is an aft-sweep correlation | Raymer §12.4 (aft-sweep CLmax correlation) | No change on the reference case (aft-swept); affects only the 5.4 % forward-swept slice, where CLmax rises to the unswept value |
+| G4 | 2026-07-26 | Re ≤ 0 raises instead of being floored (S6-F2c) | The `max(re, 1e4)` floor returned exactly 0.012892296409079974 for Re = 1000, 1.0, 0.0 **and −5.0** alike, so an impossible input produced a plausible Cf | — (input validation, not a model change) | The −5.0 and 0.0 rows are removed from the Cf ladder and replaced by an assertion that they raise |
+
+Thresholds re-checked per rule 4 after G1–G4: `MAX_CRUISE_CL` (0.75) is a CL cap and is
+unaffected by a CD0 change; `verify_asb_aero.py`'s L/D tolerance is ±25 % against
+VSPAERO and the 6.3 % equation-tier shift stays inside it; the MDO reference score is
+recomputed per run rather than pinned.
+
 ## Deliberate non-goals
 
 - **Not replacing the Raymer Oswald fits.** The transcriptions are correct (L8); the

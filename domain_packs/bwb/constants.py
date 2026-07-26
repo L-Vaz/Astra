@@ -13,6 +13,19 @@ Pydantic-free and import-free: safe from both the FoamAgent env (py3.12) and the
 OpenVSP venv (py3.10).
 """
 
+VSTALL_TOL_MS = 0.05
+"""Slack before a stall cap counts as breached, m/s.
+
+ENGINEERING JUDGMENT (Astra): 0.05 m/s is well inside the accuracy of any tier-0 stall
+estimate, so a breach smaller than this is noise rather than a design failure.
+
+Declared here because TWO surfaces judge the same breach and they must agree:
+`AeroEstimate.launch_ok` and `inverse._statuses`'s stall requirement. They did not —
+launch_ok compared exactly while the status allowed the tolerance, so a 10.52 m/s stall
+against a 10.5 m/s hand-launch limit produced `launch_ok=False` beside a status of
+"met", and the verdict logic keyed off the status (S6-J2).
+"""
+
 STATIC_MARGIN_TARGET = 0.08
 """Target static margin as a fraction of MAC.
 

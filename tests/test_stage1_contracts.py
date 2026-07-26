@@ -135,22 +135,43 @@ def test_solve_requirements_is_idempotent(req: DesignRequirements):
         third.params.root_chord_m, abs=1e-6)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-J2: when the user sets no stall row, _statuses emits "
-                          "met=None, so a launch-cap breach never sets a binding "
-                          "constraint. Measured: a 20 kg / 0.9 m-span design needs a "
-                          "29.6 m/s hand throw and is reported as 'all requirements "
-                          "met'. Only panel.launch_ok knows, and no surface reads it.")
 def test_launch_cap_breach_is_reported():
+    """S6-J2, landed. With no stall row the status carried met=None, so a launch-cap
+    breach could never be "unmet" and no binding constraint was ever set: a design
+    needing a 29.6 m/s hand throw was reported as "all requirements met", with
+    panel.launch_ok the only signal and no surface reading it."""
     req = DesignRequirements(mtow_kg=20.0, cruise_speed_ms=18.0,
                              cruise_altitude_m=100.0, launch="hand",
                              span_max_m=0.9)
     res = solve_requirements(req)
     cap = LAUNCH_VSTALL_MAX[req.launch]
     assert res.panel.v_stall_ms > cap, "premise: this design breaches the launch cap"
-    assert res.binding_constraint is not None, (
+    assert res.binding_constraint == "stall_at_launch", (
         f"stall {res.panel.v_stall_ms:.1f} m/s vs {cap} cap, yet the verdict is "
         f"{res.binding_explanation!r}")
+    assert "all requirements met" not in res.binding_explanation
+
+
+def test_binding_constraint_names_the_actually_breached_cap():
+    """The minimal reproducer: stall 5.24 against a 5.00 cap used to be blamed on the
+    span cap, with an explanation about aspect ratio and L/D."""
+    req = DesignRequirements(mtow_kg=0.5, cruise_speed_ms=8.0, cruise_altitude_m=0.0,
+                             launch="hand", span_max_m=0.8, v_stall_max_ms=5.0)
+    res = solve_requirements(req)
+    assert res.panel.v_stall_ms > 5.0, "premise: the stall cap is breached"
+    assert res.binding_constraint == "stall_requirement", res.binding_explanation
+    assert "stall" in res.binding_explanation
+
+
+def test_a_verdict_is_never_all_requirements_met_when_launch_ok_is_false():
+    for mtow, span_cap in ((20.0, 0.9), (25.0, 1.2), (10.0, 1.0)):
+        req = DesignRequirements(mtow_kg=mtow, cruise_speed_ms=18.0,
+                                 cruise_altitude_m=100.0, launch="hand",
+                                 span_max_m=span_cap)
+        res = solve_requirements(req)
+        if res.panel.launch_ok is False:
+            assert res.binding_constraint is not None, (mtow, span_cap)
+            assert "all requirements met" not in res.binding_explanation
 
 
 # S2-D1 (sign, units, thousands separators, exponents, magnitudes), S2-D4 (brief

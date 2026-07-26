@@ -96,18 +96,38 @@ def test_easy_launch_provenance_matches_the_numbers(batches):
     assert checked, "no card exercised the 'below baseline' branch — grid too narrow"
 
 
-def test_easy_launch_admits_when_the_floor_raised_the_loading(batches):
-    """The 56% case: the minimum practical loading is above the baseline's, so this
-    lens cannot lower the stall speed and must say so."""
-    admitted = 0
+def test_easy_launch_admits_when_it_could_not_lower_the_loading(batches):
+    """Where this lens still ends up no lighter than the baseline — now only when the
+    planform gates move the area, never because of the old 5.5 kg/m^2 floor — the card
+    must say so rather than claim a lighter wing (S3-G1h, S6-G1)."""
     for point, batch in batches:
         base, card = _card(batch, "baseline"), _card(batch, "easy_launch")
         if card.panel.wing_loading_kgm2 > base.panel.wing_loading_kgm2 + 1e-9:
-            admitted += 1
             text = " ".join(card.provenance + card.constraint_notes)
-            assert "minimum practical" in text, f"{point}: {card.provenance}"
-            assert "cannot lower the stall speed" in text, point
-    assert admitted, "the floor never bound on this grid — grid too narrow"
+            assert "did not end up lighter" in text or "minimum practical" in text, \
+                f"{point}: {card.provenance}"
+
+
+def test_easy_launch_never_stalls_worse_than_baseline(batches):
+    """S6-G1: the floor was unconditional, so in 64.1% of conditions it RAISED the
+    wing loading. Measured before the fix: stall worse than baseline in 24.0% of
+    conditions, and the worst stall of all five in 21.6% — on the card titled
+    "Easy launch / Lowest stall speed"."""
+    worse = []
+    for point, batch in batches:
+        base, card = _card(batch, "baseline"), _card(batch, "easy_launch")
+        if card.panel.v_stall_ms > base.panel.v_stall_ms + 0.01:
+            worse.append((point, round(card.panel.v_stall_ms, 2),
+                          round(base.panel.v_stall_ms, 2)))
+    assert not worse, f"easy_launch stalls worse than the baseline in {worse}"
+
+
+def test_easy_launch_is_never_the_highest_stall_of_the_five(batches):
+    worst = [point for point, batch in batches
+             if _card(batch, "easy_launch").panel.v_stall_ms
+             == max(c.panel.v_stall_ms for c in batch)
+             and len({round(c.panel.v_stall_ms, 6) for c in batch}) > 1]
+    assert not worst, f"the easy-launch card has the worst stall at {worst}"
 
 
 def test_no_card_claims_below_baseline_while_being_above_it(batches):
@@ -263,6 +283,58 @@ def test_degeneracy_is_reported_when_sizings_collapse(batches):
                 assert card.panel.span_m == pytest.approx(twin.panel.span_m, abs=1e-4)
                 assert any("Same wing as" in n for n in card.constraint_notes), point
     assert collapsed, "no collapse on this grid — grid too narrow"
+
+
+def test_gallery_never_shows_two_identical_sizings_as_two_choices(batches):
+    """S6-G5a: report the collapse (S3-G5) AND stop offering the duplicates as
+    choices. Making them genuinely distinct is deferred design work."""
+    for point, batch in batches:
+        shown = V.distinct_candidates(batch)
+        sizings = [(round(c.panel.span_m, 4), round(c.panel.s_ref_m2, 4))
+                   for c in shown]
+        assert len(sizings) == len(set(sizings)), f"{point}: duplicates offered {sizings}"
+        assert shown, "every batch must still offer at least one design"
+
+
+def test_ranking_puts_infeasible_designs_last(batches):
+    """S6-F1: `ld_cruise` is arithmetic for a point below stall, and ranking on it let
+    those points compete with real designs as equals."""
+    for point, batch in batches:
+        ranked = V.rank_candidates(batch)
+        flags = [bool(c.panel.cruise_feasible and not c.violations) for c in ranked]
+        assert flags == sorted(flags, reverse=True), point
+
+
+@pytest.mark.xfail(strict=True,
+                   reason="S6-G2: max_range's fixed AR 6.5 loses to span_efficiency's "
+                          "AR 8.5 in 39.1% of conditions, so the lens NAMED for range "
+                          "is not the one with the best cruise L/D. Fixing it means "
+                          "letting max_range optimise AR as well as area — a bounded "
+                          "experiment, deliberately not attempted here. Stage 3 "
+                          "qualified the claim instead.")
+def test_max_range_has_the_best_cruise_ld_among_the_lenses(batches):
+    for point, batch in batches:
+        lenses = [c for c in batch if not c.is_baseline and c.panel.cruise_feasible]
+        if len(lenses) < 2:
+            continue
+        best = max(lenses, key=lambda c: c.panel.ld_cruise)
+        assert best.key == "max_range", (point, best.key)
+
+
+@pytest.mark.xfail(strict=True,
+                   reason="S6-G3: easy_launch has lower induced drag than "
+                          "span_efficiency in 57.3% of conditions, so the lens named "
+                          "for span efficiency does not own it. Same bounded "
+                          "experiment as S6-G2.")
+def test_span_efficiency_has_the_lowest_induced_drag(batches):
+    import math as _math
+
+    for point, batch in batches:
+        lenses = [c for c in batch if not c.is_baseline]
+        def k(c):
+            return 1.0 / (_math.pi * c.panel.oswald_e * c.panel.aspect_ratio)
+        best = min(lenses, key=k)
+        assert best.key == "span_efficiency", (point, best.key)
 
 
 def test_the_probed_collapse_condition_reports_four_cards_as_one_wing():

@@ -14,12 +14,13 @@ Pydantic-only; safe to import from both the FoamAgent conda env (py3.12) and
 the OpenVSP venv (py3.10).
 """
 import math
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .atmosphere import AtmosphereState
 from .constants import STATIC_MARGIN_TARGET as _STATIC_MARGIN_TARGET
+from .constants import VSTALL_TOL_MS
 from .schema import BWBParams
 
 # --- declared engineering constants -----------------------------------------
@@ -33,8 +34,10 @@ from .schema import BWBParams
 # A smooth small-UAV wing at Re 5e5-1e6 can hold laminar flow over roughly the first
 # third of the chord, but the real value depends on surface finish, trip location and
 # turbulence level — none of which this tier models.
-# MEASURED SENSITIVITY: 0.30 -> 0.00 raises CD0 by 22% and drops ld_max by 11%;
-# 0.30 -> 0.60 raises ld_max to 19.41 (from 17.10) on the reference geometry.
+# MEASURED SENSITIVITY (re-measured after S6-F2's transition-Re correction, which
+# reduced this lever's leverage because the laminar segment is no longer understated):
+# 0.30 -> 0.00 raises CD0 by 9.4% and drops ld_max by 4.4%; 0.30 -> 0.60 raises ld_max
+# to 18.41 (from 16.14) on the reference geometry.
 LAMINAR_FRACTION = 0.30
 
 # ENGINEERING JUDGMENT (Astra): the ONLY allowance for prop, nacelle, gaps, camera,
@@ -99,12 +102,36 @@ class AeroEstimate(BaseModel):
     # stall / launch
     cl_max_3d: float
     v_stall_ms: float
+    cruise_feasible: bool = True
+    """False when the requested cruise speed is BELOW the stall speed (S6-F1).
+
+    22.31% of the flight envelope was in this state with nothing reporting it — the
+    same condition as cl_cruise > cl_max_3d, reaching cl_cruise 136.43 — while
+    launch_ok still read True and ranking compared these points against real ones on
+    ld_cruise as equals."""
+    stall_margin: float = 0.0
+    """(v_ms - v_stall_ms) / v_stall_ms. Negative means the cruise point is below
+    stall; 0.2 means 20% above it."""
     launch_limit_ms: Optional[float] = None
     launch_ok: Optional[bool] = None
 
+    oswald_e_clamped: Optional[str] = Field(
+        default=None,
+        description=("'floor' | 'ceiling' | None. When set, Oswald e is pinned at a "
+                     "bound and has ZERO gradient in both AR and sweep, so no "
+                     "consumer may treat it as a smooth function (S6-F3)."))
+
     # stability / control (planform estimate; VSPAERO refines x_np)
-    x_np_m: float = Field(description="neutral point aft of root LE apex")
+    x_np_m: float = Field(
+        description=("Neutral point aft of the root LE apex. AREA-weighted planform "
+                     "centroid: it ignores the higher lift-per-area of the outer "
+                     "panels, which biases x_np FORWARD and the static margin "
+                     "OPTIMISTIC. Treat the CG recommendation as a lower bound on "
+                     "required nose-heaviness until VSPAERO confirms it (S6-F13)."))
     x_cg_for_target_sm_m: float
+    cg_placement_infeasible: bool = False
+    """x_np fell outside (0, root_chord): 6.8% of the envelope, up to 2.48x the root
+    chord. The CG this implies may have nowhere to sit on the airframe (S6-F13b)."""
 
     # proxies
     root_bending_index_nm: float = Field(
@@ -115,6 +142,37 @@ class AeroEstimate(BaseModel):
     roll_damping_index: float = Field(description="relative, ~span^2")
 
     assumptions: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def output_consistency(self) -> "AeroEstimate":
+        """A panel cannot be constructed in a state the physics forbids (S6-AE1).
+
+        AtmosphereState in this same pack enforces finiteness, positivity and
+        cross-consistency; this model accepted NaN, inf, oswald_e=99 and ld_max=-99.
+
+        Scope is deliberately output-consistency, and deliberately EXCLUDES
+        `cl_cruise <= cl_max_3d`: 22% of the legal envelope violates that, and it is a
+        flag (cruise_feasible) rather than a rejection. The five cross-checks below are
+        the S0-9 invariants, which held with zero violations over 117,600 fuzzed cases
+        — asserting them here makes them structural rather than merely observed.
+        """
+        for name, value in self.model_dump().items():
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"{name} is not finite ({value!r})")
+        for name in ("s_ref_m2", "aspect_ratio", "span_m", "mac_m", "v_ms",
+                     "rho_kgm3", "weight_n", "cd0", "cd_cruise", "cl_max_3d",
+                     "v_stall_ms"):
+            if getattr(self, name) <= 0.0:
+                raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if not 0.0 < self.oswald_e <= 1.0:
+            raise ValueError(f"oswald_e must be in (0, 1], got {self.oswald_e}")
+        if self.ld_cruise > self.ld_max + 1e-9:
+            raise ValueError(
+                f"ld_cruise {self.ld_cruise} exceeds ld_max {self.ld_max} — a "
+                f"parabolic polar cannot beat its own best point")
+        if self.x_np_m <= 0.0:
+            raise ValueError(f"x_np_m must be aft of the apex, got {self.x_np_m}")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +192,24 @@ def mean_tc(params: BWBParams) -> float:
 
 
 def effective_le_sweep_deg(params: BWBParams) -> float:
-    """Half-width-weighted leading-edge sweep of the two panels."""
+    """Half-width-weighted leading-edge sweep, averaged in TANGENT space.
+
+    One convention for both sweeps (S6-F4). This function used to average ANGLES while
+    effective_c4_sweep_deg averaged tangents, and by Jensen's inequality that made the
+    quarter-chord sweep EXCEED the leading-edge sweep in 8.5% of legal geometries —
+    geometrically impossible when both panels taper aft, which the schema guarantees.
+    Worked case: span 1.8, cr 0.25, cbf 0.45, mcf 0.85, taper 0.7, sweeps 60/40 gave
+    LE 49.000 and c/4 50.493, with both PER-PANEL values correctly below their LE
+    sweep. One definition feeds Oswald e and the other feeds CLmax, so drag and stall
+    were using contradictory conventions.
+
+    Tangent averaging is the geometrically meaningful mean: it is the sweep of the line
+    joining the panel leading edges over the same span.
+    """
     b1, b2 = params.half_widths()
-    return (b1 * params.sweep_inner_deg + b2 * params.sweep_outer_deg) / (b1 + b2)
+    t1 = math.tan(math.radians(params.sweep_inner_deg))
+    t2 = math.tan(math.radians(params.sweep_outer_deg))
+    return math.degrees(math.atan((b1 * t1 + b2 * t2) / (b1 + b2)))
 
 
 def effective_c4_sweep_deg(params: BWBParams) -> float:
@@ -149,19 +222,43 @@ def effective_c4_sweep_deg(params: BWBParams) -> float:
     return math.degrees(math.atan((b1 * t1 + b2 * t2) / (b1 + b2)))
 
 
+RE_FLOOR = 1e4
+"""ENGINEERING JUDGMENT (Astra): lowest Reynolds number the correlations are applied at.
+
+Both fits — Blasius laminar and Raymer eq. 12.27 turbulent — are calibrated well above
+this, and a small-UAV tip chord can fall below it at low speed. Below the floor the value returned is the FLOOR's, not the input's,
+which is a substitution and is now visible: it used to be applied silently, so Cf came
+back at exactly 0.012892296409079974 for Re = 1000, 1.0, 0.0 and -5.0 alike, and that
+value is 3.26x below true Blasius at Re 1e3 — non-conservative (S6-F2c)."""
+
+
 def skin_friction_coeff(re: float, laminar_fraction: Optional[float] = None) -> float:
     """Mixed laminar/turbulent flat-plate Cf (area-fraction blend).
 
-    The default is resolved from the module constant at CALL time, not bound into the
-    signature at import time. Bound as a default argument, LAMINAR_FRACTION stopped
-    being the lever its own comment claims it is: changing it — including in a
-    sensitivity test — moved nothing (S3-F12).
+    The laminar segment is evaluated at the TRANSITION Reynolds number, not at the
+    full-chord one (S6-F2a). Blasius Cf ~ 1/sqrt(Re), so evaluating the first 30% of
+    the chord at the full-chord Re understated its friction by 1/sqrt(0.30) = 1.83x and
+    made CD0 systematically optimistic: measured -12.4% at Re 2e5, -10.1% at 5e5,
+    -8.5% at 1e6, -7.1% at 2e6. Every L/D in the product inherited that bias.
+
+    The turbulent fit is Raymer eq. 12.27, NOT Schlichting as the comment used to say
+    (Schlichting's own mean-Cf form is 17.6-19.3% lower) (S6-F2b).
+
+    The default laminar fraction is resolved from the module constant at CALL time, not
+    bound into the signature at import time: bound as a default argument,
+    LAMINAR_FRACTION stopped being the lever its own comment claims it is (S3-F12).
     """
     if laminar_fraction is None:
         laminar_fraction = LAMINAR_FRACTION
-    re = max(re, 1e4)
-    cf_turb = 0.455 / (math.log10(re) ** 2.58)          # Schlichting
-    cf_lam = 1.328 / math.sqrt(re)                       # Blasius
+    if not math.isfinite(re) or re <= 0.0:
+        # The old max(re, 1e4) floor laundered these: Cf came back at exactly
+        # 0.012892296409079974 for Re = 1000, 1.0, 0.0 and -5.0 alike.
+        raise ValueError(f"Reynolds number must be finite and positive, got {re!r}")
+    re = max(re, RE_FLOOR)
+    cf_turb = 0.455 / (math.log10(re) ** 2.58)          # Raymer eq. 12.27
+    # Blasius, at the transition point rather than at the trailing edge
+    re_transition = max(laminar_fraction * re, 1.0)
+    cf_lam = 1.328 / math.sqrt(re_transition)
     return laminar_fraction * cf_lam + (1.0 - laminar_fraction) * cf_turb
 
 
@@ -170,8 +267,24 @@ def form_factor(tc: float) -> float:
     return 1.0 + 2.0 * tc + 60.0 * tc ** 4
 
 
-def oswald_efficiency(ar: float, le_sweep_deg: float) -> float:
-    """Raymer straight-wing / swept-wing Oswald fits, blended 0-30 deg LE sweep."""
+OSWALD_FLOOR, OSWALD_CEILING = 0.5, 0.95
+OSWALD_FIT_CROSSING_AR = 4.800
+"""Raymer's straight- and swept-wing fits cross here. Below it the swept fit exceeds
+the straight one, so e INCREASES with sweep (wrong sign) for AR 3.6-4.7, and the
+unclamped fits give physically impossible e > 1 (1.123 at AR 2.5) which the ceiling
+hides rather than flags. Documented, measured by test, and deliberately NOT patched:
+replacing the fits would move every L/D for a model that is not obviously better
+(S6-F3, deferred as a sourced piece of work)."""
+
+
+def oswald_efficiency_detail(ar: float, le_sweep_deg: float) -> tuple:
+    """(e, clamp) where clamp is "floor" | "ceiling" | None (S6-F3).
+
+    23% of the legal (AR x sweep) space is pinned at a clamp — 11.7% at 0.500 and
+    11.2% at 0.950 — where e has ZERO gradient in both arguments. sensitivity.py takes
+    finite-difference derivatives of exactly this quantity, so a consumer that cannot
+    see the clamp reports a derivative of 0 as if it were physics.
+    """
     e_straight = 1.78 * (1.0 - 0.045 * ar ** 0.68) - 0.64
     cos_le = math.cos(math.radians(le_sweep_deg))
     e_swept = 4.61 * (1.0 - 0.045 * ar ** 0.68) * cos_le ** 0.15 - 3.1
@@ -182,7 +295,16 @@ def oswald_efficiency(ar: float, le_sweep_deg: float) -> float:
     else:
         w = le_sweep_deg / 30.0
         e = (1.0 - w) * e_straight + w * e_swept
-    return max(0.5, min(e, 0.95))
+    if e < OSWALD_FLOOR:
+        return OSWALD_FLOOR, "floor"
+    if e > OSWALD_CEILING:
+        return OSWALD_CEILING, "ceiling"
+    return e, None
+
+
+def oswald_efficiency(ar: float, le_sweep_deg: float) -> float:
+    """Raymer straight-wing / swept-wing Oswald fits, blended 0-30 deg LE sweep."""
+    return oswald_efficiency_detail(ar, le_sweep_deg)[0]
 
 
 def parasite_drag_coeff(params: BWBParams, re_mac: float) -> float:
@@ -197,9 +319,20 @@ def parasite_drag_coeff(params: BWBParams, re_mac: float) -> float:
 
 def cl_max_3d(params: BWBParams) -> float:
     """Section CLmax knocked down for finite span and quarter-chord sweep
-    (Raymer: CLmax ~ 0.9 * Clmax * cos(Lc/4))."""
-    sweep = math.radians(effective_c4_sweep_deg(params))
-    return CL_MAX_2D * CL_MAX_3D_FACTOR * math.cos(sweep)
+    (Raymer: CLmax ~ 0.9 * Clmax * cos(Lc/4)).
+
+    Independent of Reynolds number, thickness and washout — verified bit-identical
+    across Re 1.8e5-1.0e6, mean t/c 0.064-0.168 and washout 0-12 deg — so v_stall_ms
+    and the whole launch_ok gate are too. That is the most consequential blind spot for
+    a low-Re small UAV (section Clmax is ~0.9 at Re 1.5e5 and ~1.45 at 1e6). Fixing it
+    needs a sourced correlation, not an invented scaling: S7-CAP-4.
+
+    The knockdown applies to AFT sweep only (S6-F6). `math.cos` is even, so a
+    forward-swept quarter chord — which happens in 5.4% of the envelope, down to
+    -31.03 deg — was penalised exactly like aft sweep, while Raymer's correlation is an
+    aft-sweep one."""
+    sweep_deg = effective_c4_sweep_deg(params)
+    return CL_MAX_2D * CL_MAX_3D_FACTOR * math.cos(math.radians(max(sweep_deg, 0.0)))
 
 
 def neutral_point_m(params: BWBParams) -> float:
@@ -230,8 +363,27 @@ def neutral_point_m(params: BWBParams) -> float:
 
 def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
              weight_n: float,
-             launch: Optional[str] = None) -> AeroEstimate:
-    """Compute the tier-0 metric panel for one geometry at one condition."""
+             launch: Optional[Literal["hand", "catapult", "runway"]] = None
+             ) -> AeroEstimate:
+    """Compute the tier-0 metric panel for one geometry at one condition.
+
+    Validates its flight condition (S6-F9/F10). Before this: v_ms=0 raised a bare
+    ZeroDivisionError, v_ms=-5 returned a plausible-looking panel with
+    reynolds_mac=-34348 (the Reynolds floor laundered it), NaN propagated silently
+    through every field, weight_n=inf gave cl=inf, and an unrecognised launch string
+    silently DISABLED the launch gate — estimate(..., launch="glider") returned
+    limit=None, ok=None beside a stall speed that would have failed all three real
+    limits.
+    """
+    if not math.isfinite(v_ms) or v_ms <= 0.0:
+        raise ValueError(f"cruise speed must be finite and positive, got {v_ms!r}")
+    if not math.isfinite(weight_n) or weight_n <= 0.0:
+        raise ValueError(f"weight must be finite and positive, got {weight_n!r}")
+    if launch is not None and launch not in LAUNCH_VSTALL_MAX:
+        raise ValueError(
+            f"unknown launch method {launch!r}; expected one of "
+            f"{sorted(LAUNCH_VSTALL_MAX)}")
+
     s = params.planform_area_m2()
     ar = params.aspect_ratio()
     mac = params.mean_aero_chord_m()
@@ -242,7 +394,7 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
 
     cd0 = parasite_drag_coeff(params, re_mac)
     sweep_eff = effective_le_sweep_deg(params)
-    e = oswald_efficiency(ar, sweep_eff)
+    e, oswald_clamp = oswald_efficiency_detail(ar, sweep_eff)
 
     cl = weight_n / (q * s)
     k = 1.0 / (math.pi * e * ar)
@@ -252,17 +404,27 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
 
     clmax = cl_max_3d(params)
     v_stall = math.sqrt(2.0 * weight_n / (rho_kgm3 * s * clmax))
-    launch_limit = LAUNCH_VSTALL_MAX.get(launch) if launch else None
+    launch_limit = LAUNCH_VSTALL_MAX[launch] if launch is not None else None
 
     x_np = neutral_point_m(params)
     mass_kg = weight_n / 9.81
+    root_chord = params.root_chord_m
+
+    # 22.31% of the flight envelope reported a cruise point BEYOND STALL with nothing
+    # saying so — cl_cruise reached 136.43 while launch_ok stayed True (S6-F1).
+    cruise_feasible = v_ms >= v_stall
+    stall_margin = (v_ms - v_stall) / v_stall
+    # x_np lands outside (0, root_chord) in 6.8% of the envelope, up to 2.48x the root
+    # chord: a CG recommendation with nowhere to put the mass (S6-F13b).
+    cg_placement_infeasible = not (0.0 < x_np < root_chord)
 
     # Each assumption states its own sensitivity where one has been measured (S3-F12b):
     # "assumes a 30% laminar run" means nothing to a reader who cannot tell whether
     # that is worth 1% or 11% of the L/D on the card.
     assumptions = [
-        f"Mixed flat-plate skin friction, {LAMINAR_FRACTION:.0%} laminar run assumed "
-        f"(engineering judgment — at 0% laminar, CD0 is ~22% higher and L/D max ~11% "
+        f"Mixed flat-plate skin friction, {LAMINAR_FRACTION:.0%} laminar run assumed, "
+        f"with the laminar segment evaluated at the transition Reynolds number "
+        f"(engineering judgment — at 0% laminar, CD0 is ~9% higher and L/D max ~4% "
         f"lower)",
         f"Hoerner form factor + Raymer wetted-area fit; +{INTERFERENCE_MARGIN - 1:.0%} "
         f"interference margin — the only allowance for prop, gaps, antennas and "
@@ -284,6 +446,21 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         assumptions.append(
             f"Launch '{launch}' tolerates stall up to {launch_limit} m/s — engineering "
             f"judgment, not derived from the pack's wing-loading table")
+    if oswald_clamp:
+        assumptions.append(
+            f"Oswald e is AT ITS {oswald_clamp.upper()} ({e:.2f}) for this AR and "
+            f"sweep, so it is INSENSITIVE here: changing aspect ratio or sweep moves "
+            f"it by nothing at all (S6-F3)")
+    if not cruise_feasible:
+        assumptions.append(
+            f"This condition is BELOW the stall speed: cruise CL {cl:.2f} exceeds "
+            f"CLmax {clmax:.2f}, so the aircraft cannot hold {v_ms:.1f} m/s in level "
+            f"flight. The L/D shown is arithmetic, not flight.")
+    if cg_placement_infeasible:
+        assumptions.append(
+            f"Neutral point {x_np:.3f} m lies outside the root chord "
+            f"(0 to {root_chord:.3f} m), so the CG this implies may be physically "
+            f"unplaceable on the airframe")
 
     return AeroEstimate(
         s_ref_m2=s, aspect_ratio=ar, span_m=params.span_m, mac_m=mac,
@@ -294,8 +471,15 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         cl_star=cl_star, ld_max=ld_max,
         endurance_fom=cl ** 1.5 / cd,
         cl_max_3d=clmax, v_stall_ms=v_stall,
+        cruise_feasible=cruise_feasible, stall_margin=stall_margin,
         launch_limit_ms=launch_limit,
-        launch_ok=(v_stall <= launch_limit) if launch_limit else None,
+        # `is not None`, not truthiness: a limit of 0.0 would have skipped the gate.
+        # The tolerance is shared with inverse._statuses so the two surfaces cannot
+        # disagree about the same breach (constants.VSTALL_TOL_MS).
+        launch_ok=(v_stall <= launch_limit + VSTALL_TOL_MS)
+        if launch_limit is not None else None,
+        oswald_e_clamped=oswald_clamp,
+        cg_placement_infeasible=cg_placement_infeasible,
         x_np_m=x_np,
         x_cg_for_target_sm_m=x_np - STATIC_MARGIN_TARGET * mac,
         root_bending_index_nm=weight_n * params.span_m / 8.0,

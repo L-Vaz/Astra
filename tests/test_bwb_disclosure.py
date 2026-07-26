@@ -463,6 +463,8 @@ def test_laminar_fraction_sensitivity_is_still_what_the_string_claims():
         A.LAMINAR_FRACTION = original
 
     drop = (baseline.ld_max - turbulent.ld_max) / baseline.ld_max
-    assert 0.08 < drop < 0.14, (
-        f"fully turbulent costs {drop:.1%} of L/D max; the disclosure says ~11%")
+    # Re-measured after S6-F2: correcting the transition-Reynolds error REDUCED this
+    # lever's leverage, because the laminar segment is no longer understated by 1.83x.
+    assert 0.03 < drop < 0.06, (
+        f"fully turbulent costs {drop:.1%} of L/D max; the disclosure says ~4%")
     assert math.isfinite(drop)

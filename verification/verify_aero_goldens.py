@@ -59,9 +59,10 @@ REFERENCE = {
     "launch": "hand",
 }
 
-# Reynolds ladder chosen to straddle the max(re, 1e4) floor in skin_friction_coeff:
-# 0 and -5 are not physical, and the floor launders them into a plausible Cf (S6-F9).
-CF_LADDER = [-5.0, 0.0, 1e3, 9999.0, 1e4, 1e5, 2e5, 5e5, 1e6, 2e6, 5e6]
+# Reynolds ladder straddling the RE_FLOOR in skin_friction_coeff. 0 and -5 used to sit
+# here too, because the floor laundered them into a plausible Cf; since S6-F2c they
+# raise, and test_bwb_aero_goldens.py asserts that instead of pinning a value.
+CF_LADDER = [1e3, 9999.0, 1e4, 1e5, 2e5, 5e5, 1e6, 2e6, 5e6]
 FORM_FACTOR_LADDER = [0.05, 0.10, 0.14, 0.20]
 # Includes the clamp plateaus deliberately: ~23% of the legal (AR x sweep) space is
 # pinned at 0.50 or 0.95, where e has zero gradient in both AR and sweep. Pinning those

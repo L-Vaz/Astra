@@ -450,11 +450,20 @@ async function generateConcepts(regenerate) {
   try {
     const out = await api('/api/stage1/generate', { session_id: S.sid });
     S.planVersion = out.plan_version;
-    S.candidates = out.candidates.filter((c) => c.status !== 'discarded');
+    const live = out.candidates.filter((c) => c.status !== 'discarded');
+    /* S6-G5: a duplicate is the same wing as an earlier card — same span and area to
+       within 0.1 mm / 1%. Offering it as a separate choice offers a choice that does
+       not exist, so it is dropped and the collapse is reported instead. */
+    S.candidates = live.filter((c) => !c.duplicate_of);
+    const collapsed = live.length - S.candidates.length;
     S.galleryIntakeVersion = out.intake_version;
     showCandidate(0);
     updateStaleChip();
-    toast(`${S.candidates.length} concepts from intake v${out.intake_version}`);
+    toast(collapsed
+      ? `${S.candidates.length} distinct concepts (${collapsed} were the same wing — `
+        + 'the caps are doing the designing)'
+      : `${S.candidates.length} concepts from intake v${out.intake_version}`,
+    collapsed ? 5200 : undefined);
   } catch (e) {
     toast(`generate failed: ${e.message}`, 4200);
     showScreen('req');

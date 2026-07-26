@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from .aero_estimates import (LAUNCH_VSTALL_MAX, AeroEstimate, cl_max_3d,
                              estimate)
 from .atmosphere import atmosphere_at
+from .constants import VSTALL_TOL_MS
 from .defaults import DEFAULT_AR, MAX_CRUISE_CL
 from .requirements import DesignRequirements, RequirementStatus
 from .schema import BWBParams
@@ -28,7 +29,7 @@ MIN_TIP_CHORD = 0.042   # m; geometry gate is 0.040 — keep a hair of margin
 _AR_GATE = (2.5, 10.0)  # BWBParams cross-check range
 _LD_TOL = 0.05          # L/D target considered met within this
 _CL_REL_TOL = 0.02      # CL equality target considered met within 2%
-_VSTALL_TOL = 0.05      # m/s of slack before a stall cap counts as missed
+_VSTALL_TOL = VSTALL_TOL_MS   # shared with AeroEstimate.launch_ok (constants.py)
 _SPAN_TOL = 1e-6        # span cap is geometric — no engineering slack
 
 # Served to the cockpit (bootstrap.requirements_meta) so the client-side
@@ -256,6 +257,15 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
                           span_cap, notes)
 
 
+def effective_stall_cap(req: DesignRequirements) -> tuple:
+    """(cap, label) — the stall speed actually in force: the tighter of the user's
+    requirement and the launch method's tolerance (S6-J2)."""
+    launch_cap = LAUNCH_VSTALL_MAX[req.launch]
+    if req.v_stall_max_ms is not None and req.v_stall_max_ms < launch_cap:
+        return req.v_stall_max_ms, "your requirement"
+    return launch_cap, f"{req.launch} launch"
+
+
 def _statuses(req: DesignRequirements, est: AeroEstimate) -> List[RequirementStatus]:
     out: List[RequirementStatus] = []
     t = req.cl_cruise_target
@@ -269,12 +279,17 @@ def _statuses(req: DesignRequirements, est: AeroEstimate) -> List[RequirementSta
         name="ld_min", label="Cruise L/D", target=t, achieved=est.ld_cruise,
         met=None if t is None else est.ld_cruise >= t - _LD_TOL,
         margin=None if t is None else est.ld_cruise - t))
-    t = req.v_stall_max_ms
+    # The EFFECTIVE cap, not just the user's row (S6-J2). With no stall row the target
+    # was None, so `met` was None, so it could never be unmet, so no binding constraint
+    # was ever set — and a design needing a 29.6 m/s hand throw was reported as "all
+    # requirements met". The launch cap was applied as an area floor and then never
+    # checked. It is a real limit whether or not the user typed one.
+    t, cap_label = effective_stall_cap(req)
     out.append(RequirementStatus(
-        name="v_stall_max_ms", label="Stall speed", unit="m/s", target=t,
-        achieved=est.v_stall_ms,
-        met=None if t is None else est.v_stall_ms <= t + _VSTALL_TOL,
-        margin=None if t is None else t - est.v_stall_ms))
+        name="v_stall_max_ms", label=f"Stall speed ({cap_label})", unit="m/s",
+        target=t, achieved=est.v_stall_ms,
+        met=est.v_stall_ms <= t + _VSTALL_TOL,
+        margin=t - est.v_stall_ms))
     t = req.span_max_m
     out.append(RequirementStatus(
         name="span_max_m", label="Span", unit="m", target=t, achieved=est.span_m,
@@ -370,7 +385,26 @@ def solve_requirements(req: DesignRequirements,
     binding: Optional[str] = None
     explanation = "all requirements met" if not unmet else ""
     if unmet:
-        if floor == "stall":
+        # A breached stall cap is diagnosed FIRST, whatever the area floor said (S6-J2).
+        # In the minimal reproducer — stall 5.24 against a 5.00 cap — the old order
+        # blamed the span cap and talked about aspect ratio and L/D while the actual
+        # failure was the user's stall requirement, missed by 0.24 m/s.
+        stall_unmet = next((st for st in unmet if st.name == "v_stall_max_ms"), None)
+        if stall_unmet is not None:
+            cap, cap_label = effective_stall_cap(req)
+            if cap_label == "your requirement":
+                binding = "stall_requirement"
+                explanation = (
+                    f"stall {est.v_stall_ms:.2f} m/s exceeds your {cap:.2f} m/s "
+                    f"requirement — no wing this schema allows at "
+                    f"{params.span_m:.2f} m span is large enough")
+            else:
+                binding = "stall_at_launch"
+                explanation = (
+                    f"stall {est.v_stall_ms:.2f} m/s exceeds what a {req.launch} "
+                    f"launch tolerates ({cap:g} m/s) — a faster launch method, more "
+                    f"span, or less mass would be needed")
+        elif floor == "stall":
             if stall_cap == launch_cap and (req.v_stall_max_ms is None
                                             or req.v_stall_max_ms >= launch_cap):
                 binding = "stall_at_launch"

@@ -135,9 +135,25 @@ def test_golden_geometry_component(reference_params, name):
 
 @pytest.mark.parametrize("re,expected", GOLDEN_CF, ids=repr)
 def test_golden_skin_friction(re, expected):
-    """Re ladder straddling the max(re, 1e4) floor: 0 and -5 are not physical, and the
-    floor launders them into a plausible Cf (the S6-F9 defect)."""
     assert skin_friction_coeff(re) == pytest.approx(expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("re", [0.0, -5.0, float("nan"), float("inf")], ids=repr)
+def test_invalid_reynolds_raises(re):
+    """These used to return exactly 0.012892296409079974 — the floor's value — so an
+    impossible Reynolds number produced a plausible Cf (S6-F2c)."""
+    with pytest.raises(ValueError, match="Reynolds"):
+        skin_friction_coeff(re)
+
+
+def test_cf_below_the_floor_is_pinned_and_documented():
+    """0 < Re < 1e4 is out of range for both correlations; the floor's value is
+    returned and the constant is public so a caller can see it happened."""
+    from domain_packs.bwb.aero_estimates import RE_FLOOR
+
+    assert skin_friction_coeff(1e3) == pytest.approx(skin_friction_coeff(RE_FLOOR),
+                                                     rel=1e-12)
+    assert RE_FLOOR == 1e4
 
 
 @pytest.mark.parametrize("tc,expected", GOLDEN_FORM_FACTOR, ids=repr)
@@ -272,13 +288,10 @@ def test_oswald_blend_is_continuous_at_its_breakpoints():
 # 3. Known defects — each xfail flips when its plan item lands
 # ===================================================================================
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-F4: effective_le_sweep_deg averages ANGLES while "
-                          "effective_c4_sweep_deg averages TANGENTS. By Jensen's "
-                          "inequality the quarter-chord sweep exceeds the leading-edge "
-                          "sweep in 8.5% of legal geometries — geometrically impossible "
-                          "when both panels taper aft, which the schema guarantees.")
 def test_quarter_chord_sweep_never_exceeds_leading_edge_sweep():
+    """S6-F4, landed: both sweeps average in tangent space now. Averaging one in angle
+    space and the other in tangent space made c/4 exceed LE in 8.5% of legal
+    geometries — impossible when both panels taper aft."""
     p = BWBParams(**GOLDEN_SWEEP_CASE["params"])
     assert effective_c4_sweep_deg(p) <= effective_le_sweep_deg(p) + 1e-9
 
@@ -295,32 +308,42 @@ def test_clmax_responds_to_reynolds_number(reference_params):
     assert fast.cl_max_3d != slow.cl_max_3d                # the response does not
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-F1: cl_cruise > cl_max_3d in 22.31% of the envelope with "
-                          "no feasibility flag. AeroEstimate has no cruise_feasible / "
-                          "stall_margin field, and variants.py ranks on ld_cruise, so "
-                          "infeasible points compete against feasible ones as equals.")
 def test_cruise_beyond_stall_is_flagged(reference_params):
+    """S6-F1, landed: 22.31% of the envelope cruised below its own stall speed with
+    launch_ok still True and nothing on the panel saying so."""
     e = estimate(reference_params, atmosphere_at(0.0), 8.0, 8.0 * 9.81, "hand")
     assert e.cl_cruise > e.cl_max_3d, "premise: this case cruises beyond stall"
-    assert getattr(e, "cruise_feasible", None) is False
+    assert e.cruise_feasible is False
+    assert e.stall_margin < 0
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-F9: the flight condition is unvalidated. v_ms=-5 returns "
-                          "a plausible-looking panel with reynolds_mac=-34348 because "
-                          "the max(re, 1e4) floor launders it; NaN propagates silently.")
-def test_non_physical_flight_conditions_are_rejected(reference_params):
-    with pytest.raises((ValueError, AssertionError)):
-        estimate(reference_params, atmosphere_at(0.0), -5.0, REFERENCE_WEIGHT_N, "hand")
+def test_a_feasible_cruise_reports_its_margin(reference_params, reference_panel):
+    assert reference_panel.cruise_feasible is True
+    assert reference_panel.stall_margin == pytest.approx(
+        (reference_panel.v_ms - reference_panel.v_stall_ms)
+        / reference_panel.v_stall_ms, rel=1e-12)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-F10: LAUNCH_VSTALL_MAX.get(launch) returns None for an "
-                          "unknown method, so launch_ok becomes None and the gate "
-                          "silently self-disables instead of erroring.")
+@pytest.mark.parametrize("v_ms", [0.0, -5.0, float("nan"), float("inf")], ids=repr)
+def test_non_physical_speeds_are_rejected(reference_params, v_ms):
+    """S6-F9, landed. v_ms=-5 used to return a plausible panel with
+    reynolds_mac=-34348, laundered by the Reynolds floor."""
+    with pytest.raises(ValueError, match="cruise speed"):
+        estimate(reference_params, atmosphere_at(0.0), v_ms, REFERENCE_WEIGHT_N, "hand")
+
+
+@pytest.mark.parametrize("weight_n", [0.0, -10.0, float("nan"), float("inf")],
+                         ids=repr)
+def test_non_physical_weights_are_rejected(reference_params, weight_n):
+    with pytest.raises(ValueError, match="weight"):
+        estimate(reference_params, atmosphere_at(0.0), REFERENCE_SPEED_MS, weight_n,
+                 "hand")
+
+
 def test_unknown_launch_method_does_not_disable_the_gate(reference_params):
-    with pytest.raises((ValueError, KeyError)):
+    """S6-F10, landed: it returned limit=None, ok=None beside a stall speed that would
+    have failed all three real limits."""
+    with pytest.raises(ValueError, match="launch method"):
         estimate(reference_params, atmosphere_at(0.0), REFERENCE_SPEED_MS,
                  REFERENCE_WEIGHT_N, "glider")
 

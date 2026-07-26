@@ -1267,7 +1267,7 @@ assessed (see Risks).
   `domain_packs/bwb/variants.py`, `domain_packs/bwb/inverse.py`
 - Create: `tests/test_bwb_aero_properties.py`, `tests/test_bwb_inverse_properties.py`
 
-- [ ] **S6-F1 — 22.31% of the flight envelope reports a cruise point BEYOND STALL, unflagged** · defect · CRITICAL · cost M
+- [x] **S6-F1 — 22.31% of the flight envelope reports a cruise point BEYOND STALL, unflagged** · defect · CRITICAL · cost M
   - Anchors: `aero_estimates.py:200` computes `cl = weight_n/(q*s)` with no comparison
     to `clmax` at `:206`; `AeroEstimate` (`:35-78`) has **no** `cruise_feasible` or
     `stall_margin` field; `defaults.MAX_CRUISE_CL = 0.75` is applied only in
@@ -1290,7 +1290,7 @@ assessed (see Risks).
   - Done when: no panel can report `launch_ok=True` with `cruise_feasible=False`
     without both flags visible in the response.
 
-- [ ] **S6-F9 / F10 — `estimate()`'s flight condition and launch string are unvalidated** · defect · HIGH · cost S
+- [x] **S6-F9 / F10 — `estimate()`'s flight condition and launch string are unvalidated** · defect · HIGH · cost S
   - Anchors: `aero_estimates.py:184-186` (signature), `:193-207` (the arithmetic),
     `:208` (`LAUNCH_VSTALL_MAX.get(launch) if launch else None`), `:236`
     (`launch_ok=(v_stall <= launch_limit) if launch_limit else None`).
@@ -1315,7 +1315,7 @@ assessed (see Risks).
     `::test_unknown_launch_string_raises_not_silently_disables_the_gate`.
   - Done when: no input produces a silently wrong panel; every rejection names the field.
 
-- [ ] **S6-F11 — `BWBParams` has `validate_assignment=False`, so mutation bypasses revalidation** · defect · HIGH · cost S
+- [x] **S6-F11 — `BWBParams` has `validate_assignment=False`, so mutation bypasses revalidation** · defect · HIGH · cost S
   - Anchors: `domain_packs/bwb/schema.py:29-58` declares no `model_config`, so pydantic's
     default `validate_assignment=False` applies; CLAUDE.md flags mutable-by-reference
     state as a live pattern (`GraphState`).
@@ -1333,7 +1333,7 @@ assessed (see Risks).
     parametrized over the fields whose zero/extreme values break the estimators.
   - Done when: no assignment can put a `BWBParams` into a state the constructor rejects.
 
-- [ ] **S6-AE1 — `AeroEstimate` has no validator (unlike `AtmosphereState` in the same pack)** · defect · HIGH · cost M
+- [x] **S6-AE1 — `AeroEstimate` has no validator (unlike `AtmosphereState` in the same pack)** · defect · HIGH · cost M
   - Anchors: `AeroEstimate` (`aero_estimates.py:35-78`) accepts NaN, inf,
     `oswald_e=99`, `ld_max=-99`. Contrast `AtmosphereState`
     (`atmosphere.py:53-117`), which enforces finiteness, positivity, and
@@ -1353,7 +1353,7 @@ assessed (see Risks).
   - Done when: `AeroEstimate` cannot be constructed in a state the physics forbids, and
     the full suite (including MDO and sensitivity) still passes.
 
-- [ ] **S6-F2 — CD0 is systematically 8–12% optimistic; the Cf attribution is wrong; the Re floor launders invalid input** · defect + honesty · HIGH · cost M
+- [x] **S6-F2 — CD0 is systematically 8–12% optimistic; the Cf attribution is wrong; the Re floor launders invalid input** · defect + honesty · HIGH · cost M
   - Anchors: `aero_estimates.py:113-118`. The area-fraction blend evaluates the laminar
     Cf at the **full-chord** Re instead of at `Re_transition = 0.30*Re`, understating the
     laminar segment by `1/sqrt(0.30) = 1.83×`. Measured bias: **−12.4%** at Re 2e5,
@@ -1380,7 +1380,7 @@ assessed (see Risks).
   - Done when: the four measured biases are gone, the goldens are regenerated with a
     ledger entry, and no Re ≤ 0 reaches the formula.
 
-- [ ] **S6-F4 — Two mutually contradictory "effective sweep" definitions** · defect · HIGH · cost M
+- [x] **S6-F4 — Two mutually contradictory "effective sweep" definitions** · defect · HIGH · cost M
   - Anchors: `aero_estimates.py:97-100` averages **angles** (half-width weighted);
     `:103-110` averages **tangents** then takes `atan`. By Jensen's inequality this makes
     the quarter-chord sweep **exceed** the leading-edge sweep in **50,817/596,700 legal
@@ -1402,7 +1402,7 @@ assessed (see Risks).
     share one documented convention. Note this changes Oswald e (via the LE sweep) for
     every geometry — golden diff plus ledger entry.
 
-- [ ] **S6-F3 — Oswald e is pinned at a clamp over 23% of the design space, with zero gradient** · defect + honesty · HIGH · cost M
+- [x] **S6-F3 — Oswald e is pinned at a clamp over 23% of the design space, with zero gradient** · defect + honesty · HIGH · cost M
   - Anchors: `aero_estimates.py:126-138`. **23%** of the legal (AR × effective-LE-sweep)
     space is pinned at a clamp (11.7% at `e=0.500`, 11.2% at `e=0.950`) where e has
     **zero gradient** in both AR and sweep — and `domain_packs/bwb/sensitivity.py`
@@ -1434,7 +1434,7 @@ assessed (see Risks).
   - Done when: no consumer can treat a clamped e as a smooth function, and the
     wrong-sign band is measured in the suite rather than remembered.
 
-- [ ] **S6-F5 / F6 — `cl_max_3d` ignores Reynolds, thickness, and washout; and penalises forward sweep** · defect + capability · HIGH · cost L
+- [x] **S6-F5 / F6 — `cl_max_3d` ignores Reynolds, thickness, and washout; and penalises forward sweep** · defect + capability · HIGH · cost L
   - Anchors: `aero_estimates.py:151-155`, `CL_MAX_2D = 1.30` at `:27`.
     Verified **bit-identical** `cl_max_3d = 1.120849286` across Re
     181,807 → 1,022,665, mean t/c 0.0639 → 0.1678, and washout 0 → 12°. Section Clmax is
@@ -1468,7 +1468,7 @@ assessed (see Risks).
   - Done when: the even-cos bug is gone, the blind spot is disclosed in the panel the
     user sees, and the capability is an explicit xfail rather than an unknown.
 
-- [ ] **S6-F13 — `neutral_point_m` is area-weighted, biasing static margin optimistic on the one safety-critical number** · honesty · HIGH · cost S
+- [x] **S6-F13 — `neutral_point_m` is area-weighted, biasing static margin optimistic on the one safety-critical number** · honesty · HIGH · cost S
   - Anchors: `aero_estimates.py:158-177`. It **passes** sign, positivity, and all three
     monotonic physics directions (verified: aft with more sweep, aft with less taper,
     `x_np > 0` in all 596,700 cases) — the implementation is sound. But it is a pure
@@ -1491,7 +1491,7 @@ assessed (see Risks).
   - Done when: no CG recommendation is shown without its bias direction, and physically
     unplaceable CGs are flagged.
 
-- [ ] **S6-G1 — `easy_launch`'s unconditional 5.5 kg/m² floor makes it the worst-stalling design** · defect · HIGH · cost M
+- [x] **S6-G1 — `easy_launch`'s unconditional 5.5 kg/m² floor makes it the worst-stalling design** · defect · HIGH · cost M
   - Anchors: `variants.py:130` — `wl = max(5.5, 0.8 * derived.wing_loading_kgm2)`. The
     floor is unconditional, so whenever baseline wing loading is below 6.875 kg/m²
     (**64.1%** of conditions: slow, light, or high-altitude) the floor **raises** loading
@@ -1514,7 +1514,7 @@ assessed (see Risks).
   - Done when: the two measured failure rates (24.0% and 21.6%) go to zero, or the
     remaining cases are explicitly reported as "this lens cannot help here".
 
-- [ ] **S6-G2 / G3 — `max_range` and `span_efficiency` do not own their objectives** · defect · MED · cost M
+- [x] **S6-G2 / G3 — `max_range` and `span_efficiency` do not own their objectives** · defect · MED · cost M
   - Anchors: `variants.py:152-192` (`max_range` sizing) and `:70-76` / `:136-138`
     (`span_efficiency`). Measured: `max_range` reaches CL* within 2% in only **16.2%**
     (mostly physics — an area floor binds in 2516/2880; in the 364 unconstrained
@@ -1536,7 +1536,7 @@ assessed (see Risks).
   - Done when: either the two ranking properties hold, or each card's title and
     objective are provably about a metric on which it does win (asserted per card).
 
-- [ ] **S6-G5 — Make the five concepts actually distinct at tight span caps** · capability · MED · cost L
+- [x] **S6-G5 — Make the five concepts actually distinct at tight span caps** · capability · MED · cost L
   - Anchors: the degeneracy measured in S3-G5; four cards collapse to one design at
     `span_cap = 1.2`.
   - Fix: when the sizing cluster collapses, the honest options are to (a) reduce the
@@ -1590,7 +1590,7 @@ assessed (see Risks).
     do. Minimal reproducer (smallest overshoot):
     `DesignRequirements(mtow_kg=0.5, cruise_speed_ms=8.0, cruise_altitude_m=0.0,
     launch="hand", span_max_m=0.8, v_stall_max_ms=5.0)` → stall 5.24 vs cap 5.00.
-- [ ] **S6-J2 — The launch-method stall cap is enforced NOWHERE in the verdict when the user has not set a stall row** · defect · CRITICAL · cost S
+- [x] **S6-J2 — The launch-method stall cap is enforced NOWHERE in the verdict when the user has not set a stall row** · defect · CRITICAL · cost S
   - Anchors: `inverse._statuses` (`inverse.py:188-212`) emits a `v_stall_max_ms` status
     with `target=req.v_stall_max_ms`; when that is `None` the status carries
     `met=None`, so it can never be "unmet", so `solve_requirements` never sets a

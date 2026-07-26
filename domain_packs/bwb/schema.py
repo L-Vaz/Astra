@@ -6,7 +6,7 @@ pydantic-only, no OpenVSP imports here.
 import math
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .atmosphere import AtmosphereState, atmosphere_at
 from .constants import STATIC_MARGIN_TARGET
@@ -42,7 +42,16 @@ class MissionSpec(BaseModel):
 
 
 class BWBParams(BaseModel):
-    """Parametric blended-wing-body planform. Hard ranges are the geometry gate."""
+    """Parametric blended-wing-body planform. Hard ranges are the geometry gate.
+
+    `validate_assignment=True` because this model is passed by reference and mutated
+    (S6-F11): with pydantic's default, `p.centre_body_fraction = 0.0` was accepted and
+    then `effective_c4_sweep_deg` and `cl_max_3d` raised ZeroDivisionError while
+    `neutral_point_m` returned a SILENTLY WRONG 0.1727 and `mean_tc` a wrong 0.11.
+    CLAUDE.md flags mutable-by-reference state as a live pattern in this codebase, so
+    the constructor's guarantees have to survive assignment."""
+
+    model_config = ConfigDict(validate_assignment=True)
     span_m: float = Field(ge=0.8, le=3.0, description="Total span, tip to tip")
     root_chord_m: float = Field(ge=0.25, le=1.2, description="Centre-body root chord")
     centre_body_fraction: float = Field(ge=0.12, le=0.45,
