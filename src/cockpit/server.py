@@ -810,9 +810,16 @@ def candidates_generate(req: CandidatesGenerate) -> Dict[str, Any]:
     return batch
 
 
+@app.exception_handler(cand_svc.UnknownSession)
+def _unknown_session_handler(request, exc: cand_svc.UnknownSession) -> JSONResponse:
+    """A bogus session id is a 404. Every candidate route used to leak the store's
+    FileNotFoundError as a 500 (S5-H5c)."""
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
 @app.get("/api/candidates/{session_id}")
 def candidates_list(session_id: str) -> Dict[str, Any]:
-    return cand_svc.list_candidates(session_id)
+    return cand_svc.list_candidates(_validated_sid(session_id))
 
 
 class CandidateAction(BaseModel):
@@ -886,11 +893,26 @@ def candidates_discard(req: CandidateAction) -> Dict[str, Any]:
         raise HTTPException(422, str(e))
 
 
+@app.post("/api/candidates/restore")
+def candidates_restore(req: CandidateAction) -> Dict[str, Any]:
+    """Undo a discard (S5-H3b). Explicit, because promote-from-discarded is refused
+    and an un-discarded record must not keep its discard reason."""
+    _require_session(req.session_id)
+    try:
+        with ds.session_lock(req.session_id):
+            return cand_svc.restore(req.session_id, req.key)
+    except cand_svc.CandidateError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/api/candidates/stl/{session_id}/{key}")
 def candidates_stl(session_id: str, key: str):
-    path = cand_svc.stl_path(session_id, key)
-    if not os.path.exists(path):
-        raise HTTPException(404, f"candidate '{key}' has no built STL yet")
+    try:
+        path = cand_svc.stl_path(_validated_sid(session_id), key)
+    except cand_svc.UnknownSession:
+        raise
+    except cand_svc.CandidateError as e:
+        raise HTTPException(404, str(e))
     return FileResponse(path, media_type="model/stl",
                         filename=f"candidate_{key}.stl")
 

@@ -1049,7 +1049,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
   `src/services/geometry.py` (exception surface only)
 - Create: `tests/test_candidate_lifecycle.py`
 
-- [ ] **S5-H1 — No status machine: `STATUSES` is dead code** · defect · CRITICAL · cost M
+- [x] **S5-H1 — No status machine: `STATUSES` is dead code** · defect · CRITICAL · cost M
   - Anchors: `candidates.py:33`; no reader anywhere.
   - Fix: promote `STATUSES` to a real machine: a `TRANSITIONS: Dict[str, Set[str]]`
     table, a `_transition(record, new_status)` helper that validates and raises
@@ -1061,7 +1061,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
   - Done when: `status` can only change through `_transition`, proven by a source test
     asserting no other assignment to `record["status"]` exists.
 
-- [ ] **S5-H2 — `promote` has no preconditions** · defect · CRITICAL · cost S
+- [x] **S5-H2 — `promote` has no preconditions** · defect · CRITICAL · cost S
   - Anchors: `candidates.py:259-280` writes unconditionally. Confirmed unguarded
     promotions: `candidate` → promote with **no geometry evidence** (succeeds, writes
     geometry v2); `failed` → promote (a geometry-**rejected** candidate goes straight
@@ -1075,7 +1075,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_promote_override_is_recorded`.
   - Done when: nothing without passing evidence reaches the main geometry line.
 
-- [ ] **S5-H3 — Terminal states are not terminal; promotion is not idempotent** · defect · HIGH · cost S
+- [x] **S5-H3 — Terminal states are not terminal; promotion is not idempotent** · defect · HIGH · cost S
   - Anchors: `candidates.py:276-278`, `:283-289`. Confirmed broken:
     `discarded` → promote becomes `promoted` **while retaining `discard_reason`** (the
     record self-contradicts); `promoted` → discard becomes `discarded` while the
@@ -1096,7 +1096,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_repromote_appends_a_version`, `::test_build_on_discarded_is_refused`.
   - Done when: no record can hold two contradictory facts about itself.
 
-- [ ] **S5-H4 — A `failed` candidate can never recover; rejection is asymmetric** · defect · HIGH · cost S
+- [x] **S5-H4 — A `failed` candidate can never recover; rejection is asymmetric** · defect · HIGH · cost S
   - Anchors: the ratchet at `candidates.py:163`
     (`"built" if record["status"] == "candidate" else record["status"]`) and the same
     shape at `:253`. Confirmed: `failed` → build (now passing) leaves
@@ -1113,7 +1113,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_geometry_and_fast_aero_rejection_are_symmetric`.
   - Done when: status and evidence can never disagree about pass/fail.
 
-- [ ] **S5-H5 — Error paths escape as HTTP 500 instead of the intended 4xx** · defect · HIGH · cost M
+- [x] **S5-H5 — Error paths escape as HTTP 500 instead of the intended 4xx** · defect · HIGH · cost M
   - Anchors:
     - `candidates.py:203-205` — `screen()` skips the rebuild whenever
       `"geometry" in evidence`, but a **failed** build also populates that key without
@@ -1142,7 +1142,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `/api/candidates/{sid}`, `/api/candidates/stl/...`, and the mutators.
   - Done when: no Stage-1/candidate route returns 500 for a condition the caller caused.
 
-- [ ] **S5-H6 — Evidence can record a pass it did not earn** · defect · HIGH · cost S
+- [x] **S5-H6 — Evidence can record a pass it did not earn** · defect · HIGH · cost S
   - Anchors:
     - `candidates.py:239` — `all(g["passed"] for g in fast.get("gates", []))`;
       `all([])` is **True**, so an empty gates list records `passed: True` with zero
@@ -1166,7 +1166,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_geometry_with_failing_gates_is_not_recorded_valid`.
   - Done when: `passed: True` always corresponds to at least one evaluated gate.
 
-- [ ] **S5-H7 — Promote leaks a geometry version and cross-contaminates the next manifest** · defect · CRITICAL · cost M
+- [x] **S5-H7 — Promote leaks a geometry version and cross-contaminates the next manifest** · defect · CRITICAL · cost M
   - Anchors: `candidates.py:262-268` — `ds.new_version_dir` creates `geometry/v{n}` on
     disk (`design_session.py:79-86`); on `GeometryRejected`, `record_version` is never
     called so `latest` stays 0; the **next** promote gets the **same** `v1` path,
@@ -1186,7 +1186,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     the next, assert the inventory hashes match only the second candidate's files).
   - Done when: no manifest can list an artifact it did not produce.
 
-- [ ] **S5-H8 — One missing directory makes the whole batch unreadable** · defect · MED · cost S
+- [x] **S5-H8 — One missing directory makes the whole batch unreadable** · defect · MED · cost S
   - Anchors: `candidates.py:145` — a comprehension over `meta["keys"]`, so one missing
     candidate directory raises for the entire listing; `:144` —
     `meta["plan_version"]`/`meta["generated"]` `KeyError` on a legacy or truncated
@@ -1201,7 +1201,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_stl_path_raises_for_a_missing_file`.
   - Done when: a damaged batch degrades instead of disappearing.
 
-- [ ] **S5-H9 — `_candidate_derived` bypasses `MissionDerived`'s atmosphere validator** · defect · MED · cost S
+- [x] **S5-H9 — `_candidate_derived` bypasses `MissionDerived`'s atmosphere validator** · defect · MED · cost S
   - Anchors: `candidates.py:179-189` uses `model_copy(update=...)`, which in pydantic
     v2 **skips validators** — so `MissionDerived.validate_atmosphere_consistency` never
     runs and the reynolds/density invariant is bypassed for **every screened candidate**.
@@ -1212,7 +1212,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     an inconsistent update and assert it is rejected).
   - Done when: no `MissionDerived` reaches VSPAERO without its cross-check.
 
-- [ ] **S5-H10 — `add_mdo_candidates` silently destroys records** · defect · MED · cost S
+- [x] **S5-H10 — `add_mdo_candidates` silently destroys records** · defect · MED · cost S
   - Anchors: `candidates.py:325-327` and `:350-351` — the key is `f"mdo_{rank}"` and
     `rank` is unvalidated, so three winners at rank 1 produce **one** record on disk
     with `"mdo_1"` appearing three times in the index and `list_candidates` returning it
@@ -1233,7 +1233,7 @@ ratchets; `promote` (`:276`) and `discard` (`:285`) write unconditionally.
     `::test_mdo_without_a_lens_batch_is_refused_or_seeds_the_baseline`.
   - Done when: no MDO write can lose a winner.
 
-- [ ] **S5-H11 — Plan rollback resurrects a stale batch; the module docstring claims otherwise** · defect + honesty · MED · cost S
+- [x] **S5-H11 — Plan rollback resurrects a stale batch; the module docstring claims otherwise** · defect + honesty · MED · cost S
   - Anchors: `candidates.py:14-16` states "Promotion writes a normal geometry version
     on the main line, so rollback/versions keep working unchanged" — **false**. A plan
     bump forward is accidentally safe (clean `CandidateError` from `_plan_derived`) but
