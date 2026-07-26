@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+_REPO_ROOT = Path(__file__).parent.parent
 _JS_DIR = Path(__file__).parent / "js"
 _SCRIPTS = sorted(_JS_DIR.glob("*.mjs"))
 
@@ -53,3 +54,22 @@ def test_js_parity_script(script: Path):
             f"{script.name} failed (exit {proc.returncode}).\n"
             f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
         )
+
+
+def test_planform_fixture_matches_python():
+    """The Python side of the one cross-language boundary (S7-I1).
+
+    The .mjs files above assert the JS against a committed fixture. This asserts the
+    FIXTURE against schema.py, so a Python change that nobody mirrored into
+    planform.js fails here — on the Python side, where the change was made — instead
+    of waiting for someone to run node.
+    """
+    sys.path.insert(0, str(_REPO_ROOT / "verification"))
+    import generate_planform_fixture as gen
+
+    with open(gen.FIXTURE_PATH) as f:
+        committed = f.read()
+    assert committed == gen.serialise(gen.build()), (
+        "tests/js/planform_fixture.json no longer matches schema.py. Regenerate with "
+        "`python verification/generate_planform_fixture.py --write` and make sure "
+        "src/cockpit/static/planform.js mirrors the same change.")

@@ -25,6 +25,10 @@ from bwb.schema import BWBParams, GateResult, GeometryReport  # noqa: E402
 
 import openvsp as vsp  # noqa: E402
 
+# Filled in by the builder and recorded in GeometryReport, so the OpenVSP conventions
+# every downstream number depends on are stated rather than inherited (S7-I5).
+_OPENVSP_CONVENTIONS: dict = {}
+
 
 def set_parm(gid: str, name: str, group: str, val: float, warnings: list) -> None:
     pid = vsp.GetParm(gid, name, group)
@@ -67,12 +71,30 @@ def build_bwb(p: BWBParams, outdir: str, warnings: list) -> dict:
     set_parm(wid, "Twist", "XSec_0", p.root_twist_deg, warnings)
     set_parm(wid, "Twist", "XSec_1", mid_twist, warnings)
     set_parm(wid, "Twist", "XSec_2", p.tip_twist_deg, warnings)
+    # Pin the twist axis EXPLICITLY (S7-I5). It was left at OpenVSP's default;
+    # measuring four archived STLs confirmed quarter-chord (predicted vs measured
+    # bbox_m[0] matched to 1e-5), but nothing stated it, so an OpenVSP version change
+    # would have silently altered every geometry this pack has ever built.
+    for xsec in ("XSec_0", "XSec_1", "XSec_2"):
+        set_parm(wid, "Twist_Location", xsec, 0.25, warnings)
+        # Sweep is measured about the leading edge, which is the convention the JS
+        # mirror and schema.py both assume.
+        set_parm(wid, "Sweep_Location", xsec, 0.0, warnings)
 
     # airfoil thickness (NACA 4-series t/c), root -> blend -> tip
     mid_thick = (p.root_thickness_pct + p.tip_thickness_pct) / 2.0
     set_parm(wid, "ThickChord", "XSecCurve_0", p.root_thickness_pct / 100.0, warnings)
     set_parm(wid, "ThickChord", "XSecCurve_1", mid_thick / 100.0, warnings)
     set_parm(wid, "ThickChord", "XSecCurve_2", p.tip_thickness_pct / 100.0, warnings)
+
+    # Recorded in the report so a convention change is visible in the manifest rather
+    # than only in the geometry (S7-I5).
+    _OPENVSP_CONVENTIONS.update({
+        "twist_location_frac_chord": 0.25,
+        "sweep_location_frac_chord": 0.0,
+        "span_is_projected": True,
+        "tip_cap": "ROUND_END_CAP",
+    })
 
     # tessellation + closed tip cap so the STL can be watertight
     set_parm(wid, "Tess_W", "Shape", 41, warnings)
@@ -213,7 +235,13 @@ def main() -> int:
     bbox = [*flat.min(axis=0), *flat.max(axis=0)]
     span_stl = bbox[4] - bbox[1]  # y extent
     chord_stl = bbox[3] - bbox[0]  # x extent
-    span_ok = abs(span_stl - p.span_m) / p.span_m < 0.05
+    # Record the delta on EVERY build (S7-I3 step 1). The real bias is +0.22% to
+    # +1.10% — the ROUND_END_CAP tip — and a 5% gate is far too loose to see it, so a
+    # systematic, explainable bias went unmeasured. Tightening the gate to the measured
+    # band would start failing builds that pass today, so it waits for data: this
+    # accumulates that data.
+    span_delta_frac = (span_stl - p.span_m) / p.span_m
+    span_ok = abs(span_delta_frac) < 0.05
     # x extent >= root chord (sweep pushes tip back, so >= is the right test)
     chord_ok = chord_stl >= p.root_chord_m * 0.95
     bbox_ok = bool(span_ok and chord_ok)
@@ -231,12 +259,15 @@ def main() -> int:
         mean_aero_chord_m=p.mean_aero_chord_m(),
         aspect_ratio=p.aspect_ratio(),
         bbox_m=[float(x) for x in bbox],
+        span_stl_m=float(span_stl),
+        span_delta_frac=float(span_delta_frac),
         n_facets=int(len(tri)),
         watertight=watertight,
         open_edges=int(open_edges),
         gates=gates,
         warnings=warnings,
         artifacts=artifacts,
+        openvsp_conventions=_OPENVSP_CONVENTIONS,
     )
     with open(os.path.join(args.outdir, "geometry_report.json"), "w") as f:
         f.write(report.model_dump_json(indent=2))

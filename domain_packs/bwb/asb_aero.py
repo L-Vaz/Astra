@@ -85,12 +85,30 @@ def _f(x) -> float:
     return float(np.asarray(x).ravel()[0])
 
 
+MAX_TC_SNAP_ERROR = 0.50 / 4.0
+"""Worst relative t/c error the integer-percent snap can introduce (S7-I2).
+
+The snap is deliberate — NeuralFoil's NACA-4 parametrization is why this tier is fast —
+but it means the fast tier scores a slightly DIFFERENT geometry than the preview shows,
+and that was a comment rather than a bounded number. The worst case is half a percentage
+point of rounding at the thinnest legal section: BWBParams allows tip_thickness_pct down
+to 5, and the schema's own floor of 4% in the clamp below makes 4 the thinnest section
+this can produce, so 0.5/4 = 12.5%. tests/test_bwb_asb_aero.py measures it."""
+
+
 def _symmetric_naca(tc_pct: float):
     """Symmetric NACA 4-series section at the given t/c (%). Rounded to the nearest
-    integer percent — a documented low-fidelity simplification for this fast tier."""
+    integer percent — a documented low-fidelity simplification for this fast tier,
+    bounded by MAX_TC_SNAP_ERROR."""
     import aerosandbox as asb
     tc = int(round(max(4.0, min(30.0, tc_pct))))
     return asb.Airfoil(f"naca00{tc:02d}")
+
+
+def tc_snap_error(tc_pct: float) -> float:
+    """Relative t/c error the snap introduces at this section thickness."""
+    snapped = int(round(max(4.0, min(30.0, tc_pct))))
+    return abs(snapped - tc_pct) / tc_pct
 
 
 def bwbparams_to_airplane(p: BWBParams):

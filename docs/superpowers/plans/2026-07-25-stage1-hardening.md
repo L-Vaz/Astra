@@ -1680,7 +1680,7 @@ correctness.
 - Modify: `src/cockpit/static/{cockpit.js,stage1.js,aero_mirror.js}`,
   `src/cockpit/server.py`, `domain_packs/bwb/vsp_builder.py`
 
-- [ ] **S7-I1 — Five copies of the planform algebra, two of the station algebra, zero parity tests** · defect (drift risk) · HIGH · cost M
+- [x] **S7-I1 — Five copies of the planform algebra, two of the station algebra, zero parity tests** · defect (drift risk) · HIGH · cost M
   - Anchors — planform: `domain_packs/bwb/schema.py:62-88` (authoritative),
     `src/cockpit/server.py:228-249` (`_planform`),
     `src/cockpit/static/aero_mirror.js:18-41`,
@@ -1714,7 +1714,7 @@ correctness.
   - Done when: one JS implementation, one Python implementation, and a bidirectional
     fixture test between them.
 
-- [ ] **S7-I2 — `asb_aero.py` snaps t/c to integer percent, so the fast tier scores a different geometry than the preview shows** · honesty · MED · cost S
+- [x] **S7-I2 — `asb_aero.py` snaps t/c to integer percent, so the fast tier scores a different geometry than the preview shows** · honesty · MED · cost S
   - Anchors: `domain_packs/bwb/asb_aero.py:88-93` — `int(round(...))`, giving up to
     **7.7% relative thickness error** (0.060 vs 0.065 at one station). Documented as a
     deliberate simplification (and in the MDO plan) but **unbounded by any test**.
@@ -1725,7 +1725,7 @@ correctness.
   - Locks: `tests/test_bwb_asb_aero.py::test_thickness_snap_error_is_bounded`.
   - Done when: the snap error is a measured, asserted number rather than a comment.
 
-- [ ] **S7-I3 — The OpenVSP span gate is 5% while the real bias is +0.22% to +1.10%** · defect · MED · cost M · **DEFERRED, gated on a measurement campaign**
+- [x] **S7-I3 — The OpenVSP span gate is 5% while the real bias is +0.22% to +1.10%** · defect · MED · cost M · **DEFERRED, gated on a measurement campaign**
   - Anchors: `domain_packs/bwb/vsp_builder.py:216` —
     `span_ok = abs(span_stl - p.span_m) / p.span_m < 0.05`. Real OpenVSP STL span runs
     **+0.22% to +1.10%** larger than the requested `span_m` (the `ROUND_END_CAP` tip);
@@ -1746,7 +1746,7 @@ correctness.
   - Done when: the delta is recorded on every build. Tightening the gate is a separate,
     later decision with data behind it.
 
-- [ ] **S7-I4 — Latent shared bug: un-coerced `root_chord_m` in the station builder** · defect · LOW · cost S
+- [x] **S7-I4 — Latent shared bug: un-coerced `root_chord_m` in the station builder** · defect · LOW · cost S
   - Anchors: `src/cockpit/static/stage1.js:290` and `cockpit.js:284` —
     `chord: p.root_chord_m + (pf.cMid - p.root_chord_m) * f` does **not** numeric-coerce
     `p.root_chord_m`, although its neighbours do (`+p.root_twist_deg`,
@@ -1761,7 +1761,7 @@ correctness.
     output to the numeric case.
   - Done when: the station builder is type-agnostic at its boundary.
 
-- [ ] **S7-I5 — Twist and sweep rely on undocumented OpenVSP defaults in three places** · defect (latent) · MED · cost S
+- [x] **S7-I5 — Twist and sweep rely on undocumented OpenVSP defaults in three places** · defect (latent) · MED · cost S
   - Anchors: `domain_packs/bwb/vsp_builder.py:67-69` sets `Twist` but never
     `Twist_Location`. The probe empirically confirmed **quarter-chord** twist from four
     archived STLs (predicted vs measured `bbox_m[0]` matched to 1e−5) and confirmed

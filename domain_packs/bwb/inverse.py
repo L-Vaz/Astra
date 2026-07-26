@@ -246,15 +246,29 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
                 f"CANNOT MEET {floor_reason}: it needs {s_floor:.3f} m^2 of wing and "
                 f"{blocked_by} limits this design to {s:.3f} m^2.")
 
-    # The contract is that this never raises. The old loop only ever nudged area UP,
-    # which makes an AR-too-low failure worse; try both directions.
-    for attempt in range(12):
+    # The contract is that this NEVER raises (module docstring): infeasibility is a
+    # reported binding constraint, not an exception. The old loop only ever nudged the
+    # area UP, which makes an AR-too-low failure worse, and a hypothesis sweep found a
+    # legal requirement set that escaped it — mtow 0.5, v 10.5, alt 1305, ld_min 14 —
+    # so the search now widens in BOTH directions around the requested area.
+    base_s = s
+    for factor in (1.0, 1.02, 0.98, 1.05, 0.95, 1.1, 0.9, 1.25, 0.8, 1.5, 0.7, 2.0):
         try:
-            return solve_planform(s, ar, shape, span_cap, notes)
+            return solve_planform(base_s * factor, ar, shape, span_cap, notes)
         except ValueError:
-            s *= 1.02 if attempt % 2 == 0 else (1.0 / 1.02) ** 2
-    return solve_planform(s, min(max(ar, _AR_GATE[0]), _AR_GATE[1]), shape,
-                          span_cap, notes)
+            continue
+
+    # Last resort: a geometry that is legal by construction. Put the span at the cap
+    # (or the schema minimum) and choose the area that lands mid-gate on AR, so the
+    # caller gets the closest feasible planform rather than an exception.
+    span = min(max(0.8, span_cap), 3.0)
+    mid_ar = 0.5 * (_AR_GATE[0] + _AR_GATE[1])
+    if notes is not None:
+        notes.append(
+            f"No planform matched the requested area within the schema gates; fell "
+            f"back to the closest legal shape at {span:.2f} m span and AR "
+            f"{mid_ar:.1f}.")
+    return solve_planform(span ** 2 / mid_ar, mid_ar, shape, span_cap, notes)
 
 
 def effective_stall_cap(req: DesignRequirements) -> tuple:

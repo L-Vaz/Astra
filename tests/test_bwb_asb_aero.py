@@ -18,6 +18,32 @@ from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.schema import BWBParams, MissionSpec
 
 
+def test_thickness_snap_error_is_bounded():
+    """S7-I2: the fast tier snaps t/c to integer percent, so it scores a slightly
+    DIFFERENT geometry than the preview shows. The simplification is deliberate
+    (NeuralFoil's NACA-4 parametrization); what was missing is a number bounding it.
+
+    Measured over the legal thickness range in 0.01-point steps, so the worst case is
+    a measurement rather than an estimate."""
+    worst_tc, worst_error = None, 0.0
+    for step in range(400, 3001):
+        tc = step / 100.0                    # 4.00 .. 30.00 %
+        error = asb_aero.tc_snap_error(tc)
+        if error > worst_error:
+            worst_tc, worst_error = tc, error
+    assert worst_error <= asb_aero.MAX_TC_SNAP_ERROR + 1e-12, (
+        f"t/c snap error reaches {worst_error:.2%} at t/c {worst_tc}%, above the "
+        f"stated bound {asb_aero.MAX_TC_SNAP_ERROR:.2%}")
+    # and the bound is not vacuous
+    assert worst_error > 0.10, worst_error
+
+
+def test_the_probed_snap_case_is_within_the_bound():
+    """The probe's example: 0.060 requested, 0.065 at one station — 7.7% relative."""
+    assert asb_aero.tc_snap_error(6.5) == pytest.approx(0.5 / 6.5, rel=1e-12)
+    assert asb_aero.tc_snap_error(6.5) < asb_aero.MAX_TC_SNAP_ERROR
+
+
 def _derived():
     return derive(MissionSpec(payload_kg=1.0, cruise_speed_ms=18.0,
                               cruise_altitude_m=300.0, launch="hand"))

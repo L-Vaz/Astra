@@ -337,6 +337,17 @@ def test_span_efficiency_has_the_lowest_induced_drag(batches):
         assert best.key == "span_efficiency", (point, best.key)
 
 
+def test_dihedral_is_the_same_in_every_concept(batches):
+    """S7-CAP-2, documented rather than fixed: every _Lens inherits the 2.0 degree
+    default, so dihedral is identical across all five cards and is not a dimension the
+    gallery explores. Recorded here so the backlog item is measured — if a lens ever
+    starts varying it, this fails and the capability note is out of date."""
+    for point, batch in batches:
+        dihedrals = {round(c.params.dihedral_deg, 6) for c in batch
+                     if not c.is_baseline}
+        assert dihedrals == {2.0}, (point, dihedrals)
+
+
 def test_the_probed_collapse_condition_reports_four_cards_as_one_wing():
     """The concrete case from the probe: mtow 0.8, alt 4000, v 10, span cap 1.2."""
     batch = _batch(0.8, 10.0, 4000.0, 1.2, "hand")

@@ -11,6 +11,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import * as ATMOSPHERE from './atmosphere.js?v=atm1';
 import * as AERO from './aero_mirror.js?v=atm1';
+import * as PLANFORM from './planform.js?v=atm1';
 import * as REQ from './req_panel.js?v=atm1';
 import * as WHY from './why_panel.js?v=atm1';
 
@@ -83,16 +84,9 @@ const ADVANCED = ['root_chord_m', 'centre_body_fraction', 'mid_chord_frac', 'tap
   'sweep_inner_deg', 'tip_thickness_pct', 'root_twist_deg', 'tip_twist_deg', 'dihedral_deg'];
 
 /* ------------------------------------------------- deterministic math mirror */
-function planform(p) {
-  const cr = +p.root_chord_m, span = +p.span_m;
-  const cMid = cr * p.mid_chord_frac, cTip = cMid * p.taper_outer;
-  const b1 = p.centre_body_fraction * span / 2, b2 = span / 2 - b1;
-  const s = 2 * (b1 * (cr + cMid) / 2 + b2 * (cMid + cTip) / 2);
-  const trapMac = (a, b) => (2 / 3) * (a + b - a * b / (a + b));
-  const a1 = b1 * (cr + cMid) / 2, a2 = b2 * (cMid + cTip) / 2;
-  const mac = (a1 * trapMac(cr, cMid) + a2 * trapMac(cMid, cTip)) / (a1 + a2);
-  return { s, mac, ar: span * span / s, cMid, cTip, b1, b2 };
-}
+/* One copy of the planform and station algebra, in planform.js (S7-I1). This file
+   and stage1.js held literal hand copies of each other. */
+const planform = PLANFORM.planform;
 function derived(mission, p) {
   const pf = planform(p);
   const atmosphere = ATMOSPHERE.resolveAtmosphere(
@@ -270,31 +264,7 @@ function sectionLoop(chord, tc, twistDeg, xle, y, z) {
   return out; // length (2*NX-1)*3
 }
 
-function stations(p) {
-  const pf = planform(p);
-  const tanI = Math.tan(p.sweep_inner_deg * Math.PI / 180);
-  const tanO = Math.tan(p.sweep_outer_deg * Math.PI / 180);
-  const tanD = Math.tan(p.dihedral_deg * Math.PI / 180);
-  const midThick = (+p.root_thickness_pct + +p.tip_thickness_pct) / 2;
-  const midTwist = +p.root_twist_deg + (+p.tip_twist_deg - +p.root_twist_deg) * p.centre_body_fraction;
-  const st = [];
-  const N1 = 6, N2 = 12;
-  for (let i = 0; i <= N1; i++) {         // centre body: 0 .. b1
-    const f = i / N1, y = pf.b1 * f;
-    st.push({ y, chord: p.root_chord_m + (pf.cMid - p.root_chord_m) * f,
-      xle: y * tanI, z: y * tanD,
-      tc: (+p.root_thickness_pct + (midThick - p.root_thickness_pct) * f) / 100,
-      tw: +p.root_twist_deg + (midTwist - p.root_twist_deg) * f });
-  }
-  for (let i = 1; i <= N2; i++) {         // outer wing: b1 .. b/2
-    const f = i / N2, y = pf.b1 + pf.b2 * f;
-    st.push({ y, chord: pf.cMid + (pf.cTip - pf.cMid) * f,
-      xle: pf.b1 * tanI + (y - pf.b1) * tanO, z: y * tanD,
-      tc: (midThick + (+p.tip_thickness_pct - midThick) * f) / 100,
-      tw: midTwist + (+p.tip_twist_deg - midTwist) * f });
-  }
-  return st;
-}
+const stations = PLANFORM.stations;
 
 function buildPreviewGeometry(p) {
   const half = stations(p);

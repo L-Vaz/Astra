@@ -126,6 +126,21 @@ class GeometryReport(BaseModel):
     mean_aero_chord_m: float
     aspect_ratio: float
     bbox_m: List[float] = Field(description="[xmin,ymin,zmin,xmax,ymax,zmax] of the STL")
+    span_stl_m: Optional[float] = Field(
+        default=None, description="Measured y-extent of the built STL")
+    span_delta_frac: Optional[float] = Field(
+        default=None,
+        description=("(STL span - requested span) / requested span, recorded on EVERY "
+                     "build (S7-I3). The real bias is +0.22% to +1.10% from the "
+                     "ROUND_END_CAP tip, and the 5% gate is far too loose to see it. "
+                     "Tightening the gate would fail builds that pass today, so the "
+                     "delta is accumulated first and the decision taken with data."))
+    openvsp_conventions: dict = Field(
+        default_factory=dict,
+        description=("The OpenVSP conventions this build depended on — twist and sweep "
+                     "locations, whether Span is projected, the tip cap (S7-I5). They "
+                     "were previously unstated defaults, so a version change would "
+                     "have silently altered every geometry."))
     n_facets: int
     watertight: bool
     open_edges: int

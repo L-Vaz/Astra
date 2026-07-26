@@ -6,6 +6,8 @@
  * instant feedback while dragging — VSPAERO (fast) and OpenFOAM (CFD) results
  * always supersede these. Keep in sync with the Python module.
  */
+import * as PLANFORM from './planform.js?v=atm1';
+
 export const LAMINAR_FRACTION = 0.30;
 export const INTERFERENCE_MARGIN = 1.10;
 export const CL_MAX_2D = 1.30;
@@ -15,30 +17,17 @@ export const STATIC_MARGIN_TARGET = 0.08;
 
 const rad = (d) => d * Math.PI / 180;
 
+/* The planform algebra lives in planform.js — one copy in this language (S7-I1).
+   These re-exports keep the existing call sites working; `cr` is preserved as an
+   alias for `cRoot` because callers here use that name. */
 export function chords(p) {
-  const cr = +p.root_chord_m;
-  const cMid = cr * +p.mid_chord_frac;
-  return { cr, cMid, cTip: cMid * +p.taper_outer };
+  const { cRoot, cMid, cTip } = PLANFORM.chords(p);
+  return { cr: cRoot, cRoot, cMid, cTip };
 }
 
-export function halfWidths(p) {
-  const b1 = +p.centre_body_fraction * +p.span_m / 2;
-  return { b1, b2: +p.span_m / 2 - b1 };
-}
-
-export function planformArea(p) {
-  const { cr, cMid, cTip } = chords(p);
-  const { b1, b2 } = halfWidths(p);
-  return 2 * (b1 * (cr + cMid) / 2 + b2 * (cMid + cTip) / 2);
-}
-
-export function meanAeroChord(p) {
-  const { cr, cMid, cTip } = chords(p);
-  const { b1, b2 } = halfWidths(p);
-  const trapMac = (a, b) => (2 / 3) * (a + b - a * b / (a + b));
-  const a1 = b1 * (cr + cMid) / 2, a2 = b2 * (cMid + cTip) / 2;
-  return (a1 * trapMac(cr, cMid) + a2 * trapMac(cMid, cTip)) / (a1 + a2);
-}
+export const halfWidths = PLANFORM.halfWidths;
+export const planformArea = PLANFORM.planformArea;
+export const meanAeroChord = PLANFORM.meanAeroChord;
 
 function meanTc(p) {
   const { cr, cMid, cTip } = chords(p);

@@ -7,6 +7,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as PLANFORM from './planform.js?v=atm1';
 
 const S = {
   sid: null,
@@ -304,15 +305,12 @@ function setView(name) {
     b.classList.toggle('active', b.dataset.view === name));
 }
 
-/* --- parametric preview (mirrors cockpit.js) --- */
+/* --- parametric preview --- */
+/* The planform and station algebra come from planform.js (S7-I1). This file used to
+   hold a literal hand copy of cockpit.js's, with a comment asking the next author to
+   keep them in sync and nothing enforcing it. */
 const NX = 14;
-function planform(p) {
-  const cMid = p.root_chord_m * p.mid_chord_frac;
-  const cTip = cMid * p.taper_outer;
-  const b1 = p.centre_body_fraction * p.span_m / 2.0;
-  const b2 = p.span_m / 2.0 - b1;
-  return { cMid, cTip, b1, b2 };
-}
+const planform = PLANFORM.planform;
 function sectionLoop(chord, tc, twistDeg, xle, y, z) {
   const pts = [];
   const t = tc, th = twistDeg * Math.PI / 180;
@@ -331,32 +329,7 @@ function sectionLoop(chord, tc, twistDeg, xle, y, z) {
   }
   return out;
 }
-function stations(p) {
-  const pf = planform(p);
-  const tanI = Math.tan(p.sweep_inner_deg * Math.PI / 180);
-  const tanO = Math.tan(p.sweep_outer_deg * Math.PI / 180);
-  const tanD = Math.tan(p.dihedral_deg * Math.PI / 180);
-  const midThick = (+p.root_thickness_pct + +p.tip_thickness_pct) / 2;
-  const midTwist = +p.root_twist_deg
-    + (+p.tip_twist_deg - +p.root_twist_deg) * p.centre_body_fraction;
-  const st = [];
-  const N1 = 6, N2 = 12;
-  for (let i = 0; i <= N1; i++) {
-    const f = i / N1, y = pf.b1 * f;
-    st.push({ y, chord: p.root_chord_m + (pf.cMid - p.root_chord_m) * f,
-      xle: y * tanI, z: y * tanD,
-      tc: (+p.root_thickness_pct + (midThick - p.root_thickness_pct) * f) / 100,
-      tw: +p.root_twist_deg + (midTwist - p.root_twist_deg) * f });
-  }
-  for (let i = 1; i <= N2; i++) {
-    const f = i / N2, y = pf.b1 + pf.b2 * f;
-    st.push({ y, chord: pf.cMid + (pf.cTip - pf.cMid) * f,
-      xle: pf.b1 * tanI + (y - pf.b1) * tanO, z: y * tanD,
-      tc: (midThick + (+p.tip_thickness_pct - midThick) * f) / 100,
-      tw: midTwist + (+p.tip_twist_deg - midTwist) * f });
-  }
-  return st;
-}
+const stations = PLANFORM.stations;
 function buildPreviewGeometry(p) {
   const half = stations(p);
   const full = [...half.slice(1).reverse().map((s) => ({ ...s, y: -s.y })), ...half];
