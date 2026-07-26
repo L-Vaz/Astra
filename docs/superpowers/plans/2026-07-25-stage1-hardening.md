@@ -126,7 +126,7 @@ nothing.
   `tests/test_lid_driven_cavity_services.py`, `tests/test_bwb_intake.py`,
   `tests/test_bwb_candidate_caps.py`
 
-- [ ] **S0-1 — Pytest has no configuration at all** · infrastructure · med · cost S
+- [x] **S0-1 — Pytest has no configuration at all** · infrastructure · med · cost S
   - Anchors: no `pytest.ini`, no `setup.cfg`, no `[tool.pytest.ini_options]` in
     `pyproject.toml`, no `conftest.py` anywhere. Every test file re-does its own
     `sys.path.insert` (e.g. `tests/test_requirements_api.py:12-13`).
@@ -138,7 +138,7 @@ nothing.
   - Done when: `pytest tests/ -q` collects with zero `sys.path` lines left in
     individual test files, and an `xfail` that unexpectedly passes fails the run.
 
-- [ ] **S0-2 — Two files fail to collect without Codex/ChatGPT OAuth credentials** · defect · HIGH · cost S
+- [x] **S0-2 — Two files fail to collect without Codex/ChatGPT OAuth credentials** · defect · HIGH · cost S
   - Anchors: `tests/test_flow_conditions.py:12-25` and
     `tests/test_lid_driven_cavity_services.py:17-23` import `services.*` at module
     scope, which pulls `src/config.py` and its credential requirement. ~14 flow-contract
@@ -152,14 +152,14 @@ nothing.
   - Done when: a credential-less `pytest tests/ -q` reports **0 errors** and a
     non-zero, named skip count instead of two silent collection failures.
 
-- [ ] **S0-3 — A silently shrinking suite is indistinguishable from a passing one** · infrastructure · HIGH · cost S
+- [x] **S0-3 — A silently shrinking suite is indistinguishable from a passing one** · infrastructure · HIGH · cost S
   - Fix: `tests/test_suite_integrity.py` asserts (a) collection produces zero errors
     (`pytest.main(["--collect-only", "-q"])` in a subprocess, assert rc==0), (b) the
     collected test count is `>=` a committed floor constant, (c) every skipped module
     carries one of the declared markers so no skip is anonymous.
   - Done when: deleting a test file or breaking an import fails the suite loudly.
 
-- [ ] **S0-4 — `tests/js/atmosphere_parity.mjs` is orphaned; nothing runs it** · infrastructure · HIGH · cost S
+- [x] **S0-4 — `tests/js/atmosphere_parity.mjs` is orphaned; nothing runs it** · infrastructure · HIGH · cost S
   - Anchors: `tests/js/atmosphere_parity.mjs` imports
     `src/cockpit/static/atmosphere.js` and `aero_mirror.js` and checks them against
     `domain_packs/bwb/data/us_standard_atmosphere_1976_0_4000m.csv`; it is referenced
@@ -176,7 +176,7 @@ nothing.
   - Done when: `pytest tests/ -q` runs the atmosphere parity file, and adding a new
     `.mjs` file requires no wiring.
 
-- [ ] **S0-5 — FALSE-CONFIDENCE TEST #1: `tests/test_bwb_intake.py::test_lock_toggle_roundtrip`** · honesty · HIGH · cost S
+- [x] **S0-5 — FALSE-CONFIDENCE TEST #1: `tests/test_bwb_intake.py::test_lock_toggle_roundtrip`** · honesty · HIGH · cost S
   - Anchors: `tests/test_bwb_intake.py:108-113` asserts only that the `status` flag
     round-trips. The feature it appears to certify is inert: setting every row to
     `fixed` vs every row to `variable` produces byte-identical derived values;
@@ -192,7 +192,7 @@ nothing.
   - Done when: no test name in the suite implies locks work; the inert behaviour is
     asserted, not assumed.
 
-- [ ] **S0-6 — FALSE-CONFIDENCE TEST #2: `tests/test_bwb_candidate_caps.py::test_tighter_stall_cap_grows_candidate_wings`** · defect exposure · CRITICAL · cost M
+- [x] **S0-6 — FALSE-CONFIDENCE TEST #2: `tests/test_bwb_candidate_caps.py::test_tighter_stall_cap_grows_candidate_wings`** · defect exposure · CRITICAL · cost M
   - Anchors: `tests/test_bwb_candidate_caps.py:50-67`. It passes only because its
     fixture (`mtow 2.0 kg, v 18 m/s, alt 100 m, hand, stall 8.0`) is a benign
     combination. A 13-scenario probe found **11 violated**: (mtow 20 kg, span cap
@@ -207,7 +207,7 @@ nothing.
   - Done when: the matrix exists, `xfail_strict` is on, and Stage 4 flips 11 markers
     to pass with zero code changes to the test.
 
-- [ ] **S0-7 — Pin the measured 22-field golden panel** · infrastructure · CRITICAL · cost M
+- [x] **S0-7 — Pin the measured 22-field golden panel** · infrastructure · CRITICAL · cost M
   - Anchors: `domain_packs/bwb/aero_estimates.py:184-243` (`estimate`).
   - Reference case (probe-measured, exact): `BWBParams(span_m=1.6, root_chord_m=0.55,
     centre_body_fraction=0.28, mid_chord_frac=0.6, taper_outer=0.4,
@@ -230,7 +230,7 @@ nothing.
   - Done when: `pytest tests/test_bwb_aero_golden.py -q` passes on Windows python and
     in WSL, and `python verification/verify_aero_goldens.py` prints a 22-row PASS table.
 
-- [ ] **S0-8 — Component goldens so a physics edit localises itself** · infrastructure · HIGH · cost M
+- [x] **S0-8 — Component goldens so a physics edit localises itself** · infrastructure · HIGH · cost M
   - Anchors: `aero_estimates.py:85-94` (`mean_tc`), `:97-100`
     (`effective_le_sweep_deg`), `:103-110` (`effective_c4_sweep_deg`), `:113-118`
     (`skin_friction_coeff`), `:121-123` (`form_factor`), `:126-138`
@@ -244,7 +244,7 @@ nothing.
   - Done when: changing `LAMINAR_FRACTION` fails exactly the Cf/CD0/L-D goldens, and
     changing an Oswald coefficient fails exactly the Oswald grid.
 
-- [ ] **S0-9 — Lock the five invariants that currently hold with zero violations** · infrastructure · CRITICAL · cost M
+- [x] **S0-9 — Lock the five invariants that currently hold with zero violations** · infrastructure · CRITICAL · cost M
   - Anchors: measured over 117,600 flight cases with **zero** violations and **zero**
     NaN: `ld_cruise <= ld_max`; `cl_star <= cl_max_3d`;
     `endurance_fom == cl_cruise**1.5 / cd_cruise`;
@@ -255,7 +255,7 @@ nothing.
   - Done when: the five invariants are asserted in one named test each, and each test
     names the invariant in its docstring so a Stage-6 failure is self-explaining.
 
-- [ ] **S0-10 — Hypothesis strategies for the three schemas** · infrastructure · HIGH · cost M
+- [x] **S0-10 — Hypothesis strategies for the three schemas** · infrastructure · HIGH · cost M
   - Fix: `tests/strategies.py` exports `bwb_params()` (a `@st.composite` that samples
     the 12 fields inside their `Field` ranges and *filters on the model validator* so
     only legal geometries are produced — AR in [2.5, 10], tip chord ≥ 42 mm, no
@@ -267,7 +267,7 @@ nothing.
   - Done when: `hypothesis` is importable in the WSL env (already pinned,
     `environment.yml:372`) and the strategies are reused by Stage 4/6 property tests.
 
-- [ ] **S0-11 — One shared TestClient fixture for the API layer** · infrastructure · HIGH · cost S
+- [x] **S0-11 — One shared TestClient fixture for the API layer** · infrastructure · HIGH · cost S
   - Anchors: the proven pattern is `tests/test_requirements_api.py:17-27` —
     `monkeypatch.setenv("ASTRA_SESSIONS_DIR", tmp_path/"sessions")` then
     `TestClient(cockpit.server.app)`. No WSL-external services, no OpenVSP.
@@ -278,7 +278,7 @@ nothing.
   - Done when: Stage 1/2/4/5 API tests need no boilerplate and the whole API layer
     pays the FAISS import once.
 
-- [ ] **S0-12 — Seed the xfail backlog** · infrastructure · HIGH · cost M
+- [x] **S0-12 — Seed the xfail backlog** · infrastructure · HIGH · cost M
   - Fix: write the *desired-behaviour* tests for every item marked `xfail-encode` in
     the test-strategy section below, each with
     `@pytest.mark.xfail(strict=True, reason="<item ID>: <one line>")`. The reason

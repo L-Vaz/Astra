@@ -59,6 +59,18 @@ Issues = "https://github.com/csml-rpi/Foam-Agent/issues"
 testpaths = ["tests"]
 # --strict-markers turns a mistyped marker into an error instead of a silent no-op.
 addopts = "--strict-markers --strict-config"
+# The xfail backlog is only a backlog if a fixed defect fails the run. Without this, an
+# xfail that starts passing reports XPASS and stays green, so "broken" and "quietly
+# fixed" look identical. Markers set strict=True individually too; this makes it the
+# default so a new one cannot forget.
+xfail_strict = true
+# Our own deprecations are errors — they are ours to fix. Third-party sunset warnings
+# (langchain-community, starlette's testclient) are NOT blanket-errored: that would fail
+# the suite on a dependency's release schedule rather than on anything we changed.
+filterwarnings = [
+    "error::DeprecationWarning:domain_packs",
+    "error::DeprecationWarning:src",
+]
 markers = [
     "slow: long-running sweeps (large hypothesis profiles, full-envelope grids)",
     "wsl: needs the WSL FoamAgent env (imports src/, loads FAISS ~30s)",
@@ -69,7 +81,7 @@ markers = [
 # the count drops below this floor. Module-level skips remove their tests from
 # collection, so this floor covers only the environment-independent core (the tests
 # that collect even without the services layer). Raise it when tests are added.
-minimum_collected_tests = "250"
+minimum_collected_tests = "280"
 
 [tool.setuptools.packages.find]
 include = ["src", "src.*", "domain_packs", "domain_packs.*"]

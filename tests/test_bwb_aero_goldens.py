@@ -15,7 +15,8 @@ Three layers here, each with a different job:
    is right; several known biases are documented in
    docs/superpowers/specs/2026-07-25-stage1-limitations-and-hardening-design.md. They
    are a tripwire: any edit that moves a number must move a golden too, deliberately,
-   with a ledger entry. Regenerate with the snippet in `_regenerate()` below.
+   with a ledger entry. The values live in `tests/data/aero_golden.json`; regenerate
+   only via `python verification/verify_aero_goldens.py --update`, never by hand.
 2. INVARIANTS (S0-9) — relationships that must hold for ANY legal input. A solver fuzz
    over 117,600 flight cases found zero violations of these, so they encode behaviour
    the code already gets right and must not lose.
@@ -23,7 +24,9 @@ Three layers here, each with a different job:
 
 Pure `domain_packs` — runs on any interpreter, no WSL, no OpenVSP.
 """
+import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -43,97 +46,37 @@ from domain_packs.bwb.aero_estimates import (CL_MAX_2D, CL_MAX_3D_FACTOR,
 from domain_packs.bwb.atmosphere import atmosphere_at
 from domain_packs.bwb.schema import BWBParams, MissionDerived
 
-# --- the reference case every golden below is measured at ---------------------------
-REFERENCE_PARAMS = dict(
-    span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28, mid_chord_frac=0.6,
-    taper_outer=0.4, sweep_inner_deg=35, sweep_outer_deg=18, root_thickness_pct=14,
-    tip_thickness_pct=10, root_twist_deg=1.0, tip_twist_deg=-3.0, dihedral_deg=3.0,
-)
-REFERENCE_ALTITUDE_M = 0.0
-REFERENCE_SPEED_MS = 18.0
-REFERENCE_WEIGHT_N = 3.5 * 9.81
-REFERENCE_LAUNCH = "hand"
+# --- the committed golden file ------------------------------------------------------
+# One file, two readers: this module asserts it, and verification/verify_aero_goldens.py
+# both asserts it (as a printed table) and is the only thing allowed to rewrite it
+# (`--update`, which the golden policy binds to a limitations-ledger entry). Keeping the
+# values out of the test module is what makes "regenerate" a reviewable, single-command
+# act rather than a hand-edit of expected numbers.
+GOLDEN_PATH = Path(__file__).parent / "data" / "aero_golden.json"
+if not GOLDEN_PATH.exists():  # pragma: no cover - environment error, not a test outcome
+    raise RuntimeError(
+        f"missing golden file {GOLDEN_PATH}; "
+        f"create it with `python verification/verify_aero_goldens.py --update`")
+GOLDEN = json.loads(GOLDEN_PATH.read_text())
 
-# Exact floats emitted by the live code. rel=1e-12 keeps this a tripwire for real
-# changes rather than a platform-precision lottery.
-GOLDEN_PANEL = {
-    "s_ref_m2": 0.4632320000000001,
-    "aspect_ratio": 5.5263885051119095,
-    "span_m": 1.6,
-    "mac_m": 0.33196149949341447,
-    "wing_loading_kgm2": 7.555609284332687,
-    "washout_deg": 4.0,
-    "v_ms": 18.0,
-    "rho_kgm3": 1.224999155888,
-    "weight_n": 34.335,
-    "reynolds_mac": 409065.98276939226,
-    "cd0": 0.01215973103075618,
-    "oswald_e": 0.8194042063729294,
-    "cl_cruise": 0.37349749636505963,
-    "cd_cruise": 0.021965596161195606,
-    "ld_cruise": 17.003749573839468,
-    "cl_star": 0.4159170474696608,
-    "ld_max": 17.10223056816233,
-    "endurance_fom": 10.391746591388154,
-    "cl_max_3d": 1.1208492861603039,
-    "v_stall_ms": 10.390650635946146,
-    "launch_limit_ms": 10.5,
-    "x_np_m": 0.24976166981040424,
-    "x_cg_for_target_sm_m": 0.22320474985093108,
-    "root_bending_index_nm": 6.867000000000001,
-    "tip_re": 162659.55482175123,
-    "roll_damping_index": 2.5600000000000005,
-}
+# The reference case travels WITH the values, so a golden can never be compared against
+# a case it was not measured at.
+REFERENCE_PARAMS = GOLDEN["reference"]["params"]
+REFERENCE_ALTITUDE_M = GOLDEN["reference"]["altitude_m"]
+REFERENCE_SPEED_MS = GOLDEN["reference"]["speed_ms"]
+REFERENCE_WEIGHT_N = GOLDEN["reference"]["weight_n"]
+REFERENCE_LAUNCH = GOLDEN["reference"]["launch"]
 
-GOLDEN_GEOMETRY = {
-    "mean_tc": 0.11851063829787235,
-    "form_factor_mean_tc": 1.2488566127991974,
-    "effective_le_sweep_deg": 22.76,
-    "effective_c4_sweep_deg": 16.666400854229398,
-    "cl_max_3d": 1.1208492861603039,
-    "neutral_point_m": 0.24976166981040424,
-}
-
-GOLDEN_CF = {
-    0.0: 0.012892296409079974,       # the max(re, 1e4) floor launders invalid input
-    -5.0: 0.012892296409079974,      # ... including a NEGATIVE Reynolds number
-    1e3: 0.012892296409079974,
-    1e4: 0.012892296409079974,
-    1e5: 0.006269033583206196,
-    5e5: 0.004137424748583963,
-    1e6: 0.003527930659928086,
-    5e6: 0.0025332664183959908,
-}
-
-GOLDEN_FORM_FACTOR = {
-    0.05: 1.100375,
-    0.10: 1.206,
-    0.14: 1.3030496,
-    0.20: 1.496,
-}
-
-# Includes the CLAMP cells deliberately: 23% of the legal (AR x sweep) space is pinned
-# at 0.50 or 0.95, where e has zero gradient in both AR and sweep. Pinning them means
-# the clamped fraction cannot grow unnoticed.
-GOLDEN_OSWALD = {
-    (2.5, 0.0): 0.95, (2.5, 30.0): 0.95, (2.5, 45.0): 0.9092395090605572,
-    (2.5, 60.0): 0.7061399389301677,
-    (3.0, 0.0): 0.95, (3.0, 30.0): 0.95, (3.0, 60.0): 0.6601243685965343,
-    (5.0, 0.0): 0.9007058293690858, (5.0, 15.0): 0.8851322056231066,
-    (5.0, 30.0): 0.805082771890826, (5.0, 45.0): 0.688117130642075,
-    (5.0, 60.0): 0.5,
-    (8.0, 0.0): 0.8105923299393963, (8.0, 30.0): 0.5766805244080753,
-    (8.0, 45.0): 0.5,
-    (10.0, 0.0): 0.7566172960495666, (10.0, 15.0): 0.6274691585687779,
-    (10.0, 30.0): 0.5,
-}
-
-GOLDEN_CD0_VS_RE = {
-    2e5: 0.014559180449339992,
-    5e5: 0.011587048636979973,
-    1e6: 0.009880132359741459,
-    2e6: 0.008513445410127012,
-}
+GOLDEN_PANEL = GOLDEN["panel"]
+GOLDEN_GEOMETRY = GOLDEN["geometry"]
+# Stored as [key..., value] pairs rather than JSON objects: object keys are strings, and
+# round-tripping a float through str() is exactly the silent precision loss a golden
+# file must not have.
+GOLDEN_CF = GOLDEN["skin_friction_coeff"]
+GOLDEN_FORM_FACTOR = GOLDEN["form_factor"]
+GOLDEN_OSWALD = GOLDEN["oswald_efficiency"]
+GOLDEN_CD0_VS_RE = GOLDEN["cd0_vs_reynolds"]
+GOLDEN_SWEEP_CASE = GOLDEN["sweep_case"]
 
 
 @pytest.fixture(scope="module")
@@ -164,7 +107,7 @@ def test_golden_panel_field(reference_panel, field):
 
 
 def test_golden_panel_launch_ok(reference_panel):
-    assert reference_panel.launch_ok is True
+    assert reference_panel.launch_ok is GOLDEN["panel_launch_ok"]
 
 
 def test_golden_panel_covers_every_float_field(reference_panel):
@@ -190,27 +133,40 @@ def test_golden_geometry_component(reference_params, name):
         GOLDEN_GEOMETRY[name], rel=1e-12)
 
 
-@pytest.mark.parametrize("re", sorted(GOLDEN_CF))
-def test_golden_skin_friction(re):
-    assert skin_friction_coeff(re) == pytest.approx(GOLDEN_CF[re], rel=1e-12)
+@pytest.mark.parametrize("re,expected", GOLDEN_CF, ids=repr)
+def test_golden_skin_friction(re, expected):
+    """Re ladder straddling the max(re, 1e4) floor: 0 and -5 are not physical, and the
+    floor launders them into a plausible Cf (the S6-F9 defect)."""
+    assert skin_friction_coeff(re) == pytest.approx(expected, rel=1e-12)
 
 
-@pytest.mark.parametrize("tc", sorted(GOLDEN_FORM_FACTOR))
-def test_golden_form_factor(tc):
-    assert form_factor(tc) == pytest.approx(GOLDEN_FORM_FACTOR[tc], rel=1e-12)
+@pytest.mark.parametrize("tc,expected", GOLDEN_FORM_FACTOR, ids=repr)
+def test_golden_form_factor(tc, expected):
+    assert form_factor(tc) == pytest.approx(expected, rel=1e-12)
 
 
-@pytest.mark.parametrize("key", sorted(GOLDEN_OSWALD))
-def test_golden_oswald_efficiency(key):
-    ar, sweep = key
-    assert oswald_efficiency(ar, sweep) == pytest.approx(
-        GOLDEN_OSWALD[key], rel=1e-12)
+@pytest.mark.parametrize("ar,sweep,expected", GOLDEN_OSWALD, ids=repr)
+def test_golden_oswald_efficiency(ar, sweep, expected):
+    """(AR x LE-sweep) grid including the clamp plateaus, where e has zero gradient in
+    both arguments — so the clamped fraction cannot grow unnoticed."""
+    assert oswald_efficiency(ar, sweep) == pytest.approx(expected, rel=1e-12)
 
 
-@pytest.mark.parametrize("re", sorted(GOLDEN_CD0_VS_RE))
-def test_golden_cd0_vs_reynolds(reference_params, re):
+@pytest.mark.parametrize("re,expected", GOLDEN_CD0_VS_RE, ids=repr)
+def test_golden_cd0_vs_reynolds(reference_params, re, expected):
     assert parasite_drag_coeff(reference_params, re) == pytest.approx(
-        GOLDEN_CD0_VS_RE[re], rel=1e-12)
+        expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("name", ["effective_le_sweep_deg", "effective_c4_sweep_deg"])
+def test_golden_sweep_case(name):
+    """Both effective sweeps on the worked case where the quarter-chord sweep exceeds
+    the leading-edge sweep — the geometry behind the S6-F4 xfail. Pinned so the Stage-6
+    fix has to move these two numbers deliberately."""
+    fns = {"effective_le_sweep_deg": effective_le_sweep_deg,
+           "effective_c4_sweep_deg": effective_c4_sweep_deg}
+    params = BWBParams(**GOLDEN_SWEEP_CASE["params"])
+    assert fns[name](params) == pytest.approx(GOLDEN_SWEEP_CASE[name], rel=1e-12)
 
 
 def test_declared_constants_are_pinned():
@@ -323,10 +279,7 @@ def test_oswald_blend_is_continuous_at_its_breakpoints():
                           "sweep in 8.5% of legal geometries — geometrically impossible "
                           "when both panels taper aft, which the schema guarantees.")
 def test_quarter_chord_sweep_never_exceeds_leading_edge_sweep():
-    p = BWBParams(span_m=1.8, root_chord_m=0.25, centre_body_fraction=0.45,
-                  mid_chord_frac=0.85, taper_outer=0.7, sweep_inner_deg=60,
-                  sweep_outer_deg=40, root_thickness_pct=14, tip_thickness_pct=9,
-                  root_twist_deg=2.0, tip_twist_deg=-3.0, dihedral_deg=2.0)
+    p = BWBParams(**GOLDEN_SWEEP_CASE["params"])
     assert effective_c4_sweep_deg(p) <= effective_le_sweep_deg(p) + 1e-9
 
 
@@ -382,19 +335,16 @@ def test_root_bending_index_matches_its_elliptic_label(reference_panel):
     assert reference_panel.root_bending_index_nm == pytest.approx(elliptic, rel=1e-9)
 
 
-def _regenerate():  # pragma: no cover - developer helper, never run by the suite
-    """Print fresh goldens after an INTENDED physics change.
+def test_golden_file_is_regenerable_by_the_verification_script():
+    """The golden file has exactly one writer, and it must still be there.
 
-        python -c "import tests.test_bwb_aero_goldens as g; g._regenerate()"
+    After an INTENDED physics change:
 
-    Paste the output over the dicts above, and record the reason in the limitations
-    ledger. Never regenerate to make a red suite green without that step.
+        python verification/verify_aero_goldens.py --update
+
+    and record the physical reason and its source in the limitations ledger. Never
+    regenerate to turn a red suite green without that step.
     """
-    panel = estimate(BWBParams(**REFERENCE_PARAMS),
-                     atmosphere_at(REFERENCE_ALTITUDE_M), REFERENCE_SPEED_MS,
-                     REFERENCE_WEIGHT_N, REFERENCE_LAUNCH)
-    print("GOLDEN_PANEL = {")
-    for key, value in panel.model_dump().items():
-        if isinstance(value, float):
-            print(f"    {key!r}: {value!r},")
-    print("}")
+    script = Path(__file__).parent.parent / "verification" / "verify_aero_goldens.py"
+    assert script.exists(), "the only sanctioned way to update the goldens is missing"
+    assert "--update" in script.read_text()
