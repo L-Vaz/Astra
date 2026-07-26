@@ -1210,7 +1210,11 @@ def stage1_intake(session: Optional[str] = None) -> Dict[str, Any]:
     sid = _ensure_session(session)
     intake, version, warnings = _load_intake(sid)
     return {"session_id": sid, "version": version,
-            "intake": intake.model_dump(), "warnings": warnings}
+            "intake": intake.model_dump(),
+            # store-level notices (a recovered version) plus the intake's own
+            # (an ambiguous brief, an unreadable value, a clamp)
+            "warnings": warnings + intake.warnings
+            + intake_pack.unusable_row_warnings(intake)}
 
 
 # Request-size limits (S1-A3). Every call writes a new immutable version, so an
@@ -1235,15 +1239,32 @@ def _check_edit_sizes(edits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 class IntakeParseReq(BaseModel):
     session_id: Optional[str] = None
     brief: str = Field(max_length=MAX_BRIEF_CHARS)
+    replace: bool = False
+    """Start over from the assumed defaults instead of merging onto the stored intake.
+
+    The deliberate start-over case, kept explicit because the destructive behaviour
+    used to be the only behaviour (S2-D5)."""
 
 
 @app.post("/api/stage1/parse")
 def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
     """Deterministic brief parse — the LLM parse arrives via chat/MCP; this
-    keeps the standalone cockpit honest (matched fields only)."""
+    keeps the standalone cockpit honest (matched fields only).
+
+    Merges onto the stored intake (S2-D5): parsing a brief after editing used to
+    revert edited rows to their assumed defaults and delete user-added custom rows,
+    with a 200 and no warning.
+    """
     sid = _require_session(req.session_id)
-    intake = intake_pack.derive(intake_pack.parse_brief(req.brief))
-    version = _save_intake(sid, intake)
+    with ds.session_lock(sid):
+        if req.replace:
+            merged = intake_pack.parse_brief(req.brief)
+        else:
+            stored, _, load_warnings = _load_intake(sid)
+            merged = intake_pack.merge_brief(stored, req.brief)
+            merged.warnings = list(load_warnings) + merged.warnings
+        intake = intake_pack.derive(merged)
+        version = _save_intake(sid, intake)
     _queue_explanation(
         sid, "stage1_intake",
         f"Stage-1 brief parsed (intake v{version}): "
@@ -1251,7 +1272,7 @@ def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
                     if r.origin == "you_said") + ".",
         {"intake_version": version})
     return {"session_id": sid, "version": version, "intake": intake.model_dump(),
-            "warnings": []}
+            "warnings": intake.warnings}
 
 
 class IntakeEditReq(BaseModel):
@@ -1273,7 +1294,8 @@ def stage1_intake_save(req: IntakeEditReq) -> Dict[str, Any]:
             raise HTTPException(422, str(exc))
         version = _save_intake(sid, intake)
     return {"session_id": sid, "version": version, "intake": intake.model_dump(),
-            "warnings": warnings}
+            "warnings": warnings + intake.warnings
+            + intake_pack.unusable_row_warnings(intake)}
 
 
 class IntakeGenerateReq(BaseModel):
@@ -1292,6 +1314,56 @@ def stage1_generate(req: IntakeGenerateReq) -> Dict[str, Any]:
         return _stage1_generate_locked(sid, req)
 
 
+# requirements field <- the intake row that owns it. A field whose row is still
+# `assumed` must not overwrite a requirement the user set explicitly on the M3 screen.
+_REQUIREMENT_SOURCE_ROWS = {
+    "mtow_kg": "mtow_cap",
+    "cruise_altitude_m": "altitude",
+    "launch": "launch",
+    "span_max_m": "span_max",
+    "v_stall_max_ms": "v_stall_max",
+}
+
+
+def _synced_requirements(sid: str, intake, mission: MissionSpec,
+                         req_ds: DesignRequirements) -> tuple:
+    """(payload, overrides) — the Stage-1 sync, made non-destructive (S2-D6).
+
+    Before this, one generate silently reset a persisted `span_max_m` of 2.4 m to 3.0
+    and `v_stall_max_ms` to 10.5, because it copied every field from the intake whether
+    or not the user had ever touched the corresponding row. Stage 1 was destroying
+    requirements set on the older requirements screen.
+
+    Now a field is written only when its intake row carries the user's intent
+    (`you_said` from a brief, or `edited`). Where that genuinely overrides a saved
+    value, the previous value is recorded — in the response warnings and in the
+    requirements version itself — so the overwrite is auditable rather than silent.
+    """
+    current = _current_requirements(sid)
+    synced = current.model_dump()
+    from_intake = {
+        "mtow_kg": req_ds.mtow_kg,
+        "cruise_altitude_m": mission.cruise_altitude_m,
+        "launch": mission.launch,
+        "span_max_m": req_ds.span_max_m,
+        "v_stall_max_ms": req_ds.v_stall_max_ms,
+    }
+    rows = {r.id: r for r in intake.rows}
+    overrides = []
+    for field, value in from_intake.items():
+        row = rows.get(_REQUIREMENT_SOURCE_ROWS[field])
+        if row is None or row.origin not in ("you_said", "edited"):
+            continue
+        previous = synced.get(field)
+        if previous != value:
+            overrides.append({"field": field, "previous": previous, "new": value})
+        synced[field] = value
+    # Cruise speed is an OUTCOME of the sizing solve, not an intake row the user can
+    # own, so it always follows the plan.
+    synced["cruise_speed_ms"] = mission.cruise_speed_ms
+    return synced, overrides
+
+
 def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any]:
     intake, iv, warnings = _load_intake(sid)
     if iv == 0:
@@ -1299,21 +1371,51 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
     if intake.feasibility and intake.feasibility.verdict == "error":
         raise HTTPException(409, "requirements do not size — fix the intake first")
 
+    # A stored intake is a file, and files get damaged (S1-B3) or written by an older
+    # build. Every number is re-validated here before it reaches MissionSpec: unusable
+    # ones fall back to the documented default and say so, rather than raising a
+    # pydantic error that the route turns into a 500 (S2-B5).
+    warnings = (list(warnings) + list(intake.warnings)
+                + intake_pack.unusable_row_warnings(intake))
+
     def row_num(rid: str, fallback: float) -> float:
-        r = next((x for x in intake.rows if x.id == rid), None)
-        return r.number if r and r.number is not None else fallback
+        value = intake_pack.usable_number(intake, rid)
+        return fallback if value is None else value
 
     launch_row = next((x for x in intake.rows if x.id == "launch"), None)
     launch = launch_row.value.strip().lower() if launch_row else "hand"
     if launch not in ("hand", "catapult", "runway"):
         launch = "hand"
-    endurance = next((x.number for x in intake.rows
-                      if x.id == "endurance" and x.number), None)
+
+    # Endurance is clamped like its neighbours instead of passed through raw. It drives
+    # no computation (it is recorded for the propulsion stage), so "loiter for 11 hours"
+    # making every subsequent generate return 500 — forever, with GET still 200 so the
+    # UI showed a healthy list and a dead button — was indefensible (S2-B1).
+    endurance = intake_pack.usable_number(intake, "endurance")
+    if endurance is not None:
+        clamped, _ = intake_pack.clamp_endurance(endurance)
+        if clamped != endurance:
+            warnings.append(
+                f"endurance goal: you asked for {endurance:g} min — recorded as "
+                f"{clamped:g} min (the schema maximum; endurance is recorded only)")
+        endurance = clamped
+
+    payload_kg = min(max(row_num("payload", 1.0), 0.01), 10.0)
+    mtow_kg = min(row_num("mtow_cap", 0.0), 25.0) or None
+    if mtow_kg is not None and mtow_kg < payload_kg:
+        # Reconciled BEFORE constructing the model, so the impossible combination
+        # never reaches disk (S2-D7). Raising the cap rather than rejecting keeps the
+        # request working; the warning is what makes the change visible.
+        warnings.append(
+            f"MTOW cap: {mtow_kg:g} kg is below the {payload_kg:g} kg payload — "
+            f"raised the cap to {payload_kg:g} kg")
+        mtow_kg = payload_kg
+
     mission = MissionSpec(
-        payload_kg=min(max(row_num("payload", 1.0), 0.01), 10.0),
+        payload_kg=payload_kg,
         cruise_speed_ms=min(max(row_num("cruise_speed", 18.0), 8.0), 60.0),
         cruise_altitude_m=min(max(row_num("altitude", 100.0), 0.0), 4000.0),
-        mtow_kg=min(row_num("mtow_cap", 0.0), 25.0) or None,
+        mtow_kg=mtow_kg,
         endurance_min=endurance,
         launch=launch)
     # Plan sizing comes from the SAME inverse solve the intake's feasibility
@@ -1339,16 +1441,12 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
                                   invalidate_from="fast_aero")
     # sync the VALIDATED requirements (req_ds already clamped span/stall into
     # schema range) — never raw row values, which may be out of range
-    synced = _current_requirements(sid).model_dump()
-    synced.update({
-        "mtow_kg": req_ds.mtow_kg,
-        "cruise_speed_ms": mission.cruise_speed_ms,
-        "cruise_altitude_m": mission.cruise_altitude_m,
-        "launch": mission.launch,
-        "span_max_m": req_ds.span_max_m,
-        "v_stall_max_ms": req_ds.v_stall_max_ms,
-    })
-    ds.save_requirements(sid, synced)
+    synced, overrides = _synced_requirements(sid, intake, mission, req_ds)
+    for override in overrides:
+        warnings.append(
+            f"{override['field']}: replaced your saved {override['previous']} with "
+            f"{override['new']} from the Stage-1 intake")
+    ds.save_requirements(sid, dict(synced, intake_overrides=overrides))
     try:
         batch = cand_svc.generate(sid, regenerate=True)
     except cand_svc.CandidateError as e:

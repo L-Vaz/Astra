@@ -24,6 +24,21 @@ class MissionSpec(BaseModel):
                                       description="Recorded goal only — not evaluated (propulsion/energy out of scope)")
     launch: Literal["hand", "catapult", "runway"] = "hand"
 
+    @model_validator(mode="after")
+    def cross_checks(self) -> "MissionSpec":
+        """An aircraft cannot weigh less than what it carries (S2-D7).
+
+        Probe-confirmed before this: payload 6 kg with an MTOW cap of 1 kg wrote a
+        mission_derived.json holding mission.mtow_kg = 1.0 alongside
+        mission.payload_kg = 6.0 — an artifact that is internally impossible and that
+        every downstream stage then reasoned from. Same class of cross-check BWBParams
+        already carries."""
+        if self.mtow_kg is not None and self.mtow_kg < self.payload_kg:
+            raise ValueError(
+                f"MTOW {self.mtow_kg:g} kg is below the payload {self.payload_kg:g} kg "
+                f"— an aircraft cannot weigh less than what it carries")
+        return self
+
 
 class BWBParams(BaseModel):
     """Parametric blended-wing-body planform. Hard ranges are the geometry gate."""

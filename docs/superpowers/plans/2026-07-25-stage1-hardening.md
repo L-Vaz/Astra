@@ -453,7 +453,7 @@ with `origin: "you_said"`.
 - Modify: `src/cockpit/server.py`, `domain_packs/bwb/intake.py`
 - Create: `tests/test_stage1_api_robustness.py`, `tests/test_bwb_intake_parsing.py`
 
-- [ ] **S2-B1 — `endurance_min > 600` bricks Generate forever** · defect · CRITICAL · cost S
+- [x] **S2-B1 — `endurance_min > 600` bricks Generate forever** · defect · CRITICAL · cost S
   - Anchors: `server.py:1111-1118` clamps payload/speed/altitude/MTOW but passes
     `endurance` through raw into `MissionSpec(...)` at `server.py:1113`;
     `domain_packs/bwb/schema.py:21` caps `endurance_min` at 600.
@@ -474,7 +474,7 @@ with `origin: "you_said"`.
     endurance row.
   - Done when: no brief expressible in English can make Generate return 500.
 
-- [ ] **S2-B5 — A negative `number` in a stored intake → 500 at generate** · defect · HIGH · cost S
+- [x] **S2-B5 — A negative `number` in a stored intake → 500 at generate** · defect · HIGH · cost S
   - Anchors: `server.py:1103-1118` — `row_num` returns the stored number verbatim and
     generate trusts the file with zero validation.
   - Fix: validate every row number at the generate boundary before constructing
@@ -486,7 +486,7 @@ with `origin: "you_said"`.
     `payload`, `altitude`, `mtow_cap`, `span_max`, `v_stall_max`.
   - Done when: no stored intake, however malformed, can 500 the generate route.
 
-- [ ] **S2-D1 — The number parser drops signs, ignores units, and is unanchored** · defect · CRITICAL · cost M
+- [x] **S2-D1 — The number parser drops signs, ignores units, and is unanchored** · defect · CRITICAL · cost M
   - Anchors: `domain_packs/bwb/intake.py:229-231` —
     `_NUM = r"(\d+(?:\.\d+)?)"` with `text.replace(",", ".")`, no sign, no units, no
     anchoring; used by `apply_edits` (`:320`, `:329`).
@@ -518,7 +518,7 @@ with `origin: "you_said"`.
     (a dedicated `test_brief_and_edit_paths_agree` parametrized over the unit table),
     and no row can display a value the solver does not use without an `unparsed` flag.
 
-- [ ] **S2-D3 — `apply_edits` accepts any JSON type and `str()`s it** · defect · MED · cost S
+- [x] **S2-D3 — `apply_edits` accepts any JSON type and `str()`s it** · defect · MED · cost S
   - Anchors: `intake.py:318-323`. Confirmed: `value: null` stores the literal string
     `"None"`; `value: [1,2]` stores `"[1, 2]"` with `number = 1.0`.
   - Fix: type-gate the payload. `value` must be `str | int | float`; anything else is
@@ -528,7 +528,7 @@ with `origin: "you_said"`.
     `{"a":1}`, `True`; `::test_null_value_restores_the_assumed_default`.
   - Done when: no Python `repr` can reach a user-visible requirement value.
 
-- [ ] **S2-D4 — Brief misparse: "span" reaches past itself and steals the altitude** · defect · CRITICAL · cost M
+- [x] **S2-D4 — Brief misparse: "span" reaches past itself and steals the altitude** · defect · CRITICAL · cost M
   - Anchors: `intake.py:254` —
     `span[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(m|cm|mm)\b` — the `{0,20}` gap skips over the
     span's own number when it is followed by other text, reaching the *next*
@@ -561,7 +561,7 @@ with `origin: "you_said"`.
   - Done when: no field stamped `you_said` holds a number the user did not write for
     that field, and the probed brief round-trips.
 
-- [ ] **S2-D5 — `POST /api/stage1/parse` destroys user state** · defect · HIGH · cost S
+- [x] **S2-D5 — `POST /api/stage1/parse` destroys user state** · defect · HIGH · cost S
   - Anchors: `server.py:1059-1072` calls `intake_pack.parse_brief`, which starts from
     `default_intake()` (`intake.py:245`) and returns a fresh list.
   - Now: parsing after edits reverted an edited `mtow_cap` to the assumed default and
@@ -576,7 +576,7 @@ with `origin: "you_said"`.
     `::test_replace_true_starts_from_defaults`.
   - Done when: no parse silently loses a value the user typed.
 
-- [ ] **S2-D6 — Cross-endpoint data loss: generate overwrites the requirements screen** · defect · HIGH · cost S
+- [x] **S2-D6 — Cross-endpoint data loss: generate overwrites the requirements screen** · defect · HIGH · cost S
   - Anchors: `server.py:1143-1152` — generate reads `_current_requirements(sid)`, then
     overwrites `span_max_m` / `v_stall_max_ms` / mtow / speed / altitude / launch from
     the intake and calls `ds.save_requirements`.
@@ -594,7 +594,7 @@ with `origin: "you_said"`.
   - Done when: a persisted `span_max_m=2.4` survives a Stage-1 generate whose span row
     is still `assumed`.
 
-- [ ] **S2-D7 — Internally inconsistent plan artifacts (a 1 kg aircraft carrying 6 kg)** · defect · HIGH · cost S
+- [x] **S2-D7 — Internally inconsistent plan artifacts (a 1 kg aircraft carrying 6 kg)** · defect · HIGH · cost S
   - Anchors: `server.py:1113-1137` builds `MissionSpec` and `MissionDerived` from
     independently clamped values. Confirmed: payload 6 kg + MTOW cap 1 kg produced
     `mission_derived.json` with `mission.mtow_kg = 1.0`, `mission.payload_kg = 6.0`,

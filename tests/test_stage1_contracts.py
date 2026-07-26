@@ -153,66 +153,16 @@ def test_launch_cap_breach_is_reported():
         f"{res.binding_explanation!r}")
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D1: intake._num is unanchored and sign-blind — it strips "
-                          "the minus and reads the first digits it finds.")
-@pytest.mark.parametrize("typed,expected", [
-    ("-3 kg", -3.0),
-    ("-100", -100.0),
-])
-def test_negative_values_keep_their_sign(typed, expected):
-    ik = I.apply_edits(I.default_intake(), [{"id": "mtow_cap", "value": typed}])
-    assert _row(ik, "mtow_cap").number == pytest.approx(expected)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D1: _num does text.replace(',', '.'), so a thousands "
-                          "separator becomes a decimal point — a 1000x error.")
-def test_thousands_separator_is_not_read_as_a_decimal_point():
-    ik = I.apply_edits(I.default_intake(), [{"id": "mtow_cap", "value": "1,500 g"}])
-    assert _row(ik, "mtow_cap").number != pytest.approx(1.5)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D1: the BRIEF path converts mm/cm (intake.py:254-257) but "
-                          "the EDIT path does not, so the same string means different "
-                          "things depending on how it arrives.")
-def test_edit_path_converts_units_like_the_brief_path():
-    ik = I.apply_edits(I.default_intake(), [{"id": "span_max", "value": "1800 mm"}])
-    assert _row(ik, "span_max").number == pytest.approx(1.8)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D1: a 400-digit string overflows to inf, which then "
-                          "serialises to null and silently empties the row.")
-def test_huge_numbers_do_not_overflow_to_infinity():
-    ik = I.apply_edits(I.default_intake(), [{"id": "mtow_cap", "value": "9" * 400}])
-    number = _row(ik, "mtow_cap").number
-    assert number is None or math.isfinite(number)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D1: the regex captures only the leading digits, so "
-                          "exponent notation is TRUNCATED, not rejected: '1.5e3' "
-                          "becomes 1.5 (a 1000x error) and '1e400' becomes 1.0. "
-                          "Same class as the thousands-separator bug — a plausible "
-                          "entry silently means something else.")
-@pytest.mark.parametrize("typed,wrong", [("1.5e3", 1.5), ("1e400", 1.0)])
-def test_exponent_notation_is_not_silently_truncated(typed, wrong):
-    ik = I.apply_edits(I.default_intake(), [{"id": "mtow_cap", "value": typed}])
-    assert _row(ik, "mtow_cap").number != pytest.approx(wrong)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D4: the span regex reaches past 'span' into the next "
-                          "number+unit and steals the altitude; the altitude branch "
-                          "then discards its own correct match. Both rows end up wrong "
-                          "and BOTH are stamped origin='you_said'.")
-def test_brief_span_pattern_does_not_swallow_the_altitude():
-    ik = I.parse_brief("Surveillance BWB, 250 g camera, 2.2 m span, fly at 300 m, "
-                       "45 min endurance, hand launch")
-    assert _row(ik, "span_max").number == pytest.approx(2.2)
-    assert _row(ik, "altitude").number == pytest.approx(300.0)
+# S2-D1 (sign, units, thousands separators, exponents, magnitudes), S2-D4 (brief
+# anchoring, ambiguity, launch precedence) and S2-D5 (parse merges rather than resets)
+# LANDED in Stage 2. Their markers are retired and the contracts now live, un-xfailed
+# and considerably wider, in tests/test_bwb_intake_parsing.py.
+#
+# One of the retired assertions was itself wrong and is worth recording: it demanded
+# that "1,500 g" NOT parse to 1.5, on the grounds that 1,500 -> 1.5 was the
+# thousands-separator bug. But 1,500 g IS 1.5 kg, so the buggy path and the correct one
+# happened to agree on that input; the discriminating case is "1,500" with no unit,
+# which must be 1500, not 1.5. The replacement test uses that.
 
 
 @pytest.mark.xfail(strict=True,
@@ -259,16 +209,17 @@ def test_editable_rows_either_affect_the_design_or_say_they_do_not(rid, value):
             f"{rid} changes nothing but is not marked recorded-only")
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S2-D5: parse_brief starts from default_intake(), so parsing "
-                          "after editing silently discards the user's edits and any "
-                          "custom rows they added.")
 def test_reparsing_a_brief_preserves_user_edits():
+    """S2-D5, landed: the merge path is what the parse endpoint uses now.
+
+    `parse_brief` itself still returns a fresh list — that is its job, and the
+    deliberate start-over case (`?replace=true`) needs it. What changed is that no
+    endpoint calls it directly on a session that already has an intake."""
     ik = I.derive(I.parse_brief(BRIEF))
     ik = I.derive(I.apply_edits(ik, [
         {"id": "mtow_cap", "value": "4.5 kg", "status": "fixed"},
         {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"},
     ]))
-    reparsed = I.derive(I.parse_brief(BRIEF))
+    reparsed = I.derive(I.merge_brief(ik, BRIEF))
     assert _row(reparsed, "mtow_cap").number == pytest.approx(4.5)
     assert any(r.id == "custom_max_chord" for r in reparsed.rows)
