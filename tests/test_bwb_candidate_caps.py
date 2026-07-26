@@ -92,24 +92,78 @@ _STALL_CAP_CASES = [
 ]
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S4-C1: variants._size_wing applies the stall area floor, "
-                          "then inverse._feasible_planform's AR-gate and root-chord "
-                          "repairs shrink the area back below it. Fix lands in Stage 4.")
 @pytest.mark.parametrize("kw", _STALL_CAP_CASES)
 def test_every_candidate_honours_the_effective_stall_cap(kw):
     """The cap the user sees is min(their stall row, the launch method's tolerance).
 
-    A concept that cannot be launched by the stated method is not a concept.
+    NO THIRD OUTCOME (S4-C1): every candidate either meets that cap or carries a
+    `violations` entry naming stall. What it may never do — and did, in 11 of 13
+    probed scenarios — is breach the cap while reporting `passed: True`.
+
+    This test was written in Stage 0 as `xfail(strict=True)` asserting that Stage 4
+    would make every candidate MEET the cap. That expectation was wrong, and measuring
+    it is what showed why: at a 0.9 m span cap with 20 kg MTOW the stall cap needs
+    2.569 m^2 of wing, while the largest wing the schema permits at that span is
+    0.324 m^2 — a factor of eight. Three of these four scenarios are unreachable by
+    any legal geometry, so "satisfy the cap" is not a contract the code can keep.
+    "Satisfy it or say you cannot" is, and it is the one the plan's own hypothesis
+    property specifies.
     """
     req = DesignRequirements(cruise_speed_ms=18.0, cruise_altitude_m=100.0, **kw)
     cap = min(req.v_stall_max_ms or float("inf"), LAUNCH_VSTALL_MAX[req.launch])
-    breaches = [
-        (c.key, round(c.panel.v_stall_ms, 2))
-        for c in generate_candidates(_derived(req), req)
-        if c.panel.v_stall_ms > cap + 0.05
-    ]
-    assert not breaches, f"cap {cap} m/s breached by {breaches}"
+    for c in generate_candidates(_derived(req), req):
+        if c.panel.v_stall_ms > cap + 0.05:
+            stall = [v for v in c.violations if v.cap == "stall"]
+            assert stall, (
+                f"candidate '{c.key}' stalls at {c.panel.v_stall_ms:.2f} m/s against "
+                f"a {cap} m/s cap and reports no violation")
+            assert stall[0].achieved == pytest.approx(c.panel.v_stall_ms, abs=1e-6)
+            assert stall[0].required == pytest.approx(cap)
+        else:
+            assert not [v for v in c.violations if v.cap == "stall"], \
+                f"candidate '{c.key}' meets the cap but reports a stall violation"
+
+
+@pytest.mark.parametrize("kw", _STALL_CAP_CASES)
+def test_a_breaching_candidate_never_reports_passed(kw):
+    """The flag the gallery reads. `evidence.equation.passed` was unconditionally
+    True (S4-C4)."""
+    req = DesignRequirements(cruise_speed_ms=18.0, cruise_altitude_m=100.0, **kw)
+    for c in generate_candidates(_derived(req), req):
+        cap = min(req.v_stall_max_ms or float("inf"), LAUNCH_VSTALL_MAX[req.launch])
+        if c.panel.v_stall_ms > cap + 0.05:
+            assert c.violations, f"'{c.key}' breaches its cap with no violation"
+
+
+def test_notes_do_not_contradict_each_other():
+    """The candidates used to narrate the contradiction themselves: "Wing grown to
+    0.419 m^2 to honour stall <= 10.5 m/s" directly followed by "Wing area capped at
+    0.400 m^2 by the AR gate". Whichever way that conflict resolves, it must not be
+    reported as two facts."""
+    for kw in (dict(mtow_kg=20.0, launch="hand", span_max_m=0.9),
+               dict(mtow_kg=25.0, launch="hand", v_stall_max_ms=5.0),
+               dict(mtow_kg=2.0, launch="hand", span_max_m=0.8)):
+        req = DesignRequirements(cruise_speed_ms=18.0, cruise_altitude_m=100.0, **kw)
+        for c in generate_candidates(_derived(req), req):
+            notes = " | ".join(c.constraint_notes)
+            grown = "to honour stall" in notes
+            capped = "capped at" in notes and "m^2" in notes
+            if grown and capped:
+                assert "CANNOT MEET" in notes, (
+                    f"'{c.key}' claims both that the wing grew for the stall cap and "
+                    f"that its area was capped, with no resolution: {notes}")
+
+
+def test_a_reachable_cap_is_actually_reached():
+    """Guard the guard: "report the violation" must not become an excuse for never
+    meeting a cap. 2 kg at the default 3.0 m span has room to spare."""
+    req = DesignRequirements(mtow_kg=2.0, cruise_speed_ms=18.0,
+                             cruise_altitude_m=100.0, launch="hand",
+                             v_stall_max_ms=9.0)
+    for c in generate_candidates(_derived(req), req):
+        assert c.panel.v_stall_ms <= 9.0 + 0.05, \
+            f"'{c.key}' stalls at {c.panel.v_stall_ms:.2f} with room to grow"
+        assert not c.violations, c.violations
 
 
 def test_user_stall_note_names_the_requirement():

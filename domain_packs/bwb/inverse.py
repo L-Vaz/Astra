@@ -47,6 +47,27 @@ BINDING_LABELS = {
 }
 
 
+class CapViolation(BaseModel):
+    """A hard requirement the geometry could not satisfy (S4-C1/C4).
+
+    The point of this type is that there is NO THIRD OUTCOME. A design either meets
+    the user's cap or carries one of these saying, in numbers, by how much it does not
+    and what stopped it. Before Stage 4 the third outcome was the normal one: the wing
+    was grown to honour a stall cap, the AR gate shrank it back, and the candidate
+    shipped with `passed: True` and two adjacent notes contradicting each other.
+
+    Some caps are simply unreachable. Measured at a 0.9 m span cap and 20 kg MTOW, the
+    stall cap needs 2.569 m^2 of wing while the largest wing the schema permits at that
+    span is 0.324 m^2 — a factor of eight. No repair can fix that; only saying so can.
+    """
+    cap: str                     # "stall" | "span"
+    required: float
+    achieved: float
+    unit: str
+    blocked_by: str              # the gate or limit that made it impossible
+    message: str
+
+
 class ShapeFractions(BaseModel):
     """The 10 non-sizing parameters of a BWBParams, held fixed while the
     solver chooses area and span."""
@@ -103,8 +124,16 @@ def solve_planform(s_ref: float, ar: float, shape: ShapeFractions,
             reason = "schema" if span_cap >= 3.0 - 1e-9 else "span requirement"
             notes.append(f"Span capped at {span_cap:.1f} m ({reason}): AR falls to {ar:.2f}")
     if span < 0.8:
+        # The 0.8 m schema minimum overrides even a tighter user cap, and used to do it
+        # in silence — the one span change with no note, right beside a branch that
+        # notes every other one (S4-C1b).
         span = 0.8
         ar = span ** 2 / s_ref
+        if notes is not None:
+            notes.append(f"Span raised to the 0.8 m schema minimum: AR rises to "
+                         f"{ar:.2f}"
+                         + (f" — this is WIDER than your {span_cap:.2f} m span cap"
+                            if span_cap < 0.8 - 1e-9 else ""))
 
     cbf, mf = shape.centre_body_fraction, shape.mid_chord_frac
     taper = shape.taper_outer
@@ -131,15 +160,27 @@ def solve_planform(s_ref: float, ar: float, shape: ShapeFractions,
 
 
 def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
-                       span_cap: float, notes: Optional[List[str]]) -> BWBParams:
+                       span_cap: float, notes: Optional[List[str]],
+                       s_floor: Optional[float] = None,
+                       floor_reason: str = "your stall cap",
+                       violations: Optional[List[CapViolation]] = None) -> BWBParams:
     """solve_planform with defensive schema-gate repairs for envelope corners
     (tiny or heavy-and-slow aircraft): the AR gate [2.5, 10] and the root-chord
     schema range [0.25, 1.2] m. Repairs trade AR first; area moves only when
-    span is already pinned at a cap, and every area move is noted."""
+    span is already pinned at a cap, and every area move is noted.
+
+    `s_floor` is the area a HARD user requirement demands — normally the stall floor.
+    The repairs may not silently go below it: they are schema conveniences, and a
+    user's stall requirement outranks a cosmetic AR preference (S4-C1). Where the two
+    genuinely conflict, this reports the conflict through `violations` and returns the
+    closest legal planform, because `inverse` never raises and a quietly violating
+    design is the one outcome that must not exist.
+    """
     span_cap = min(span_cap, 3.0)
     ar = min(max(ar, _AR_GATE[0]), _AR_GATE[1])  # requested AR must respect the gate
     cbf, mf, taper = (shape.centre_body_fraction, shape.mid_chord_frac,
                       shape.taper_outer)
+    blocked_by: Optional[str] = None
 
     def geometry_at(s_: float, ar_: float) -> tuple:
         span = min(max(math.sqrt(ar_ * s_), 0.8), span_cap)
@@ -147,6 +188,13 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
         b2 = span / 2.0 - b1
         k = b1 * (1 + mf) + b2 * (mf + mf * taper)
         return span, k, s_ / k, span ** 2 / s_
+
+    def shrink_to(new_s: float, gate: str) -> float:
+        """Apply an area-reducing repair, recording it when it breaks the floor."""
+        nonlocal blocked_by
+        if s_floor is not None and new_s < s_floor - 1e-12 and blocked_by is None:
+            blocked_by = gate
+        return new_s
 
     for _ in range(80):
         span, k, root, ar_actual = geometry_at(s, ar)
@@ -157,7 +205,8 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
                              f"{span:.2f} m minimum span")
             continue
         if ar_actual < _AR_GATE[0]:           # span pinned, area too large
-            s = span ** 2 / (_AR_GATE[0] * 1.001)
+            s = shrink_to(span ** 2 / (_AR_GATE[0] * 1.001),
+                          f"the AR gate (2.5) at the {span:.2f} m span cap")
             if notes is not None:
                 notes.append(f"Wing area capped at {s:.3f} m^2 by the AR gate "
                              f"(2.5) at the {span:.2f} m span cap — wing "
@@ -167,7 +216,8 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
             if span < span_cap - 1e-9 and ar < _AR_GATE[1] - 1e-9:
                 ar = min(_AR_GATE[1], ar + 0.25)
                 continue
-            s = 1.2 * k * 0.999
+            s = shrink_to(1.2 * k * 0.999,
+                          f"the 1.2 m root-chord schema limit at {span:.2f} m span")
             if notes is not None:
                 notes.append(f"Wing area capped at {s:.3f} m^2 by the 1.2 m "
                              f"root-chord schema limit at {span:.2f} m span")
@@ -182,14 +232,28 @@ def _feasible_planform(s: float, ar: float, shape: ShapeFractions,
                              "0.25 m schema minimum")
             continue
         break
-    for _ in range(10):
+
+    if blocked_by is not None and violations is not None and s_floor is not None:
+        violations.append(CapViolation(
+            cap="stall", required=s_floor, achieved=s, unit="m^2",
+            blocked_by=blocked_by,
+            message=(f"{floor_reason} needs {s_floor:.3f} m^2 of wing; the largest "
+                     f"this geometry allows is {s:.3f} m^2, blocked by "
+                     f"{blocked_by}.")))
+        if notes is not None:
+            notes.append(
+                f"CANNOT MEET {floor_reason}: it needs {s_floor:.3f} m^2 of wing and "
+                f"{blocked_by} limits this design to {s:.3f} m^2.")
+
+    # The contract is that this never raises. The old loop only ever nudged area UP,
+    # which makes an AR-too-low failure worse; try both directions.
+    for attempt in range(12):
         try:
             return solve_planform(s, ar, shape, span_cap, notes)
         except ValueError:
-            # taper widening inside solve_planform shifted the root chord past
-            # a bound by a hair — nudge area up and retry
-            s *= 1.02
-    return solve_planform(s, ar, shape, span_cap, notes)
+            s *= 1.02 if attempt % 2 == 0 else (1.0 / 1.02) ** 2
+    return solve_planform(s, min(max(ar, _AR_GATE[0]), _AR_GATE[1]), shape,
+                          span_cap, notes)
 
 
 def _statuses(req: DesignRequirements, est: AeroEstimate) -> List[RequirementStatus]:

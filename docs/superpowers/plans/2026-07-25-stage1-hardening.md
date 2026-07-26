@@ -921,7 +921,7 @@ Commit 87b3b94 fixed the **span** cap. The **stall** cap is still broken.
   `src/services/candidates.py`
 - Modify: `tests/test_bwb_candidate_caps.py`; Create: `tests/test_candidate_staleness.py`
 
-- [ ] **S4-C1 — The stall-speed area floor is undone by the AR-gate and root-chord repairs** · defect · CRITICAL · cost L
+- [x] **S4-C1 — The stall-speed area floor is undone by the AR-gate and root-chord repairs** · defect · CRITICAL · cost L
   - Anchors: `variants.py:144-150` applies the stall floor
     (`s_floor = max(2W/(rho*v_cap^2*clmax), W/(q*MAX_CRUISE_CL))`) and then calls
     `_solve_planform` → `inverse._feasible_planform` (`inverse.py:133-192`), whose
@@ -961,7 +961,7 @@ Commit 87b3b94 fixed the **span** cap. The **stall** cap is still broken.
     impossible (add `::test_notes_do_not_contradict_each_other`: no candidate may hold
     both a "grown to honour stall" and an "area capped" note).
 
-- [ ] **S4-C1b — `solve_planform` raises span back to 0.8 m unconditionally** · defect · MED · cost S
+- [x] **S4-C1b — `solve_planform` raises span back to 0.8 m unconditionally** · defect · MED · cost S
   - Anchors: `inverse.py:105-107` — `if span < 0.8: span = 0.8; ar = span**2/s_ref`,
     with no reference to `span_cap`, overriding a tighter requirement and leaving no
     note (contrast `:99-104`, which does note the cap).
@@ -973,7 +973,7 @@ Commit 87b3b94 fixed the **span** cap. The **stall** cap is still broken.
     `::test_span_cap_below_schema_minimum_is_reported`.
   - Done when: no span change is silent.
 
-- [ ] **S4-C2 — The `baseline` candidate is never re-checked against the user's caps** · defect · HIGH · cost S
+- [x] **S4-C2 — The `baseline` candidate is never re-checked against the user's caps** · defect · HIGH · cost S
   - Anchors: `variants.py:280` passes `derived.params` through verbatim; the caps at
     `variants.py:271-273` are applied only to the four lenses (`:286-296`).
   - Now: plan solved at `span_max 3.0` (baseline span 1.2153 m), requirements later
@@ -990,7 +990,7 @@ Commit 87b3b94 fixed the **span** cap. The **stall** cap is still broken.
     `::test_baseline_respects_the_stall_cap`, both parametrized over the S0-6 matrix.
   - Done when: the baseline is subject to the same caps as every other card.
 
-- [ ] **S4-C3 — Requirements changes do not invalidate the candidate batch** · defect · CRITICAL · cost M
+- [x] **S4-C3 — Requirements changes do not invalidate the candidate batch** · defect · CRITICAL · cost M
   - Anchors: requirements are deliberately not a stage
     (`src/services/design_session.py:182-187`), so `_plan_version`
     (`candidates.py:52-53`) does not move; `candidates.generate` short-circuits on
@@ -1013,7 +1013,7 @@ Commit 87b3b94 fixed the **span** cap. The **stall** cap is still broken.
   - Done when: no batch generated under different requirements can be returned as
     current without a `stale` flag.
 
-- [ ] **S4-C4 — Candidate records carry no violation flag** · honesty + defect · CRITICAL · cost S
+- [x] **S4-C4 — Candidate records carry no violation flag** · honesty + defect · CRITICAL · cost S
   - Anchors: the record written at `candidates.py:112-126` has
     `evidence: {"equation": {"passed": True}}` unconditionally, and
     `DesignCandidate` (`variants.py:28-40`) has no violation field. The gallery

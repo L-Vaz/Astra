@@ -136,6 +136,16 @@ button.secondary:hover, .ghost-add:hover { border-color: var(--accent); }
 .warn-list li { margin: 2px 0; }
 .warn-list .dim { color: var(--dim); }
 
+/* S4-C4: a concept that breaks a hard cap. Loud on purpose — it used to look
+   identical to a concept that met every requirement. */
+.violation {
+  margin: 4px 0 8px; padding: 8px 12px; border-radius: var(--radius);
+  border: 1px solid var(--err, #a33); color: var(--err, #d66); font-size: 12px;
+  font-weight: 600;
+}
+.violation ul { margin: 4px 0 0; padding-left: 18px; font-weight: 400; }
+#btn-stage2.blocked { opacity: 0.6; }
+
 /* ---------- gallery ---------- */
 #screen-gallery { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #viewport { position: relative; flex: 1; min-height: 0; }

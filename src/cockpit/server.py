@@ -819,6 +819,11 @@ class CandidateAction(BaseModel):
     session_id: str
     key: str
     note: str = ""
+    override_violations: bool = Field(
+        default=False,
+        description=("Promote a candidate that breaks one of your hard caps anyway "
+                     "(S4-C4). Requires a `note` saying why; both are recorded on the "
+                     "geometry version."))
 
 
 @app.post("/api/candidates/build")
@@ -853,9 +858,12 @@ def candidates_screen(req: CandidateAction) -> Dict[str, Any]:
 @app.post("/api/candidates/promote")
 def candidates_promote(req: CandidateAction) -> Dict[str, Any]:
     _require_session(req.session_id)
+    if req.override_violations and not req.note.strip():
+        raise HTTPException(422, "overriding a violation requires a note saying why")
     try:
         with ds.session_lock(req.session_id):
-            result = cand_svc.promote(req.session_id, req.key, note=req.note)
+            result = cand_svc.promote(req.session_id, req.key, note=req.note,
+                                      override_violations=req.override_violations)
     except cand_svc.CandidateError as e:
         raise HTTPException(422, str(e))
     version = result["geometry_version"]

@@ -18,7 +18,8 @@ from .aero_estimates import (AeroEstimate, LAUNCH_VSTALL_MAX, cl_max_3d,
                              estimate)
 from .defaults import MAX_CRUISE_CL
 from .inverse import MIN_TIP_CHORD as _MIN_TIP_CHORD  # noqa: F401 (re-export)
-from .inverse import ShapeFractions, _feasible_planform, solve_planform  # noqa: F401
+from .inverse import (CapViolation, ShapeFractions,  # noqa: F401
+                      _feasible_planform, solve_planform)
 from .requirements import DesignRequirements
 from .schema import BWBParams, MissionDerived
 
@@ -38,6 +39,10 @@ class DesignCandidate(BaseModel):
     tradeoffs: List[str] = Field(default_factory=list,
                                  description="Mechanical comparison vs baseline")
     is_baseline: bool = False
+    violations: List[CapViolation] = Field(
+        default_factory=list,
+        description=("Hard user caps this design does not meet (S4-C4). Empty is the "
+                     "only state in which `evidence.equation.passed` may be True."))
     duplicate_of: Optional[str] = Field(
         default=None,
         description=("Key of an earlier candidate this one is the SAME WING as — same "
@@ -111,13 +116,21 @@ LENSES: List[_Lens] = [
 
 def _solve_planform(s_ref: float, lens: _Lens,
                     notes: Optional[List[str]] = None,
-                    span_cap: float = 3.0) -> BWBParams:
+                    span_cap: float = 3.0,
+                    s_floor: Optional[float] = None,
+                    floor_reason: str = "your stall cap",
+                    violations: Optional[List[CapViolation]] = None) -> BWBParams:
     """Build a valid BWBParams with lens proportions hitting s_ref exactly.
     Uses inverse._feasible_planform (solve_planform plus defensive schema-gate
     repairs) so envelope corners — tiny or heavy-and-slow aircraft — yield the
-    closest valid planform with a note instead of a ValidationError."""
+    closest valid planform with a note instead of a ValidationError.
+
+    `s_floor` carries a hard requirement's area demand INTO the repairs, so they
+    cannot quietly undo it (S4-C1)."""
     shape = ShapeFractions(**{k: getattr(lens, k) for k in ShapeFractions.model_fields})
-    return _feasible_planform(s_ref, lens.ar, shape, span_cap, notes)
+    return _feasible_planform(s_ref, lens.ar, shape, span_cap, notes,
+                              s_floor=s_floor, floor_reason=floor_reason,
+                              violations=violations)
 
 
 class _Sizing(BaseModel):
@@ -138,10 +151,19 @@ class _Sizing(BaseModel):
     binder_reason: Optional[str] = None
 
 
+def effective_stall_cap(launch: str, stall_cap: Optional[float]) -> tuple:
+    """(cap, description) — the stall speed actually in force for a design."""
+    launch_cap = LAUNCH_VSTALL_MAX[launch]
+    if stall_cap is not None and stall_cap < launch_cap:
+        return stall_cap, f"your stall cap of {stall_cap:g} m/s"
+    return launch_cap, f"the {launch}-launch limit of {launch_cap:g} m/s"
+
+
 def _size_wing(lens: _Lens, derived: MissionDerived,
                notes: List[str],
                span_cap: float = 3.0,
-               stall_cap: Optional[float] = None) -> tuple:
+               stall_cap: Optional[float] = None,
+               violations: Optional[List[CapViolation]] = None) -> tuple:
     """(params, sizing record). Choose S for the lens: either baseline wing loading,
     or iterate S so cruise CL approaches CL*, bounded by the stall cap and
     MAX_CRUISE_CL.
@@ -175,15 +197,17 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
         # wing-loading lenses must still honour the stall floor — a user's
         # stall requirement binds every candidate, not just CL*-sized ones
         params0 = _solve_planform(s, lens, None, span_cap)
-        launch_cap = LAUNCH_VSTALL_MAX[launch]
-        v_cap = min(launch_cap, stall_cap) if stall_cap else launch_cap
+        v_cap, cap_reason = effective_stall_cap(launch, stall_cap)
         s_floor = max(2.0 * w / (rho * v_cap ** 2 * cl_max_3d(params0)),
                       w / (q * MAX_CRUISE_CL))
         if s_floor > s:
             notes.append(f"Wing grown to {s_floor:.3f} m^2 to honour "
                          f"stall <= {v_cap:g} m/s")
             s = s_floor
-        return _solve_planform(s, lens, notes, span_cap), sizing
+        # the floor travels INTO the repairs, which used to undo it silently
+        return _solve_planform(s, lens, notes, span_cap, s_floor=s_floor,
+                               floor_reason=cap_reason,
+                               violations=violations), sizing
 
     # --- size toward CL*: S and CL* are coupled through CD0, so iterate ---
     params = _solve_planform(s, lens, None, span_cap)
@@ -205,7 +229,7 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
     s_min_cl = w / (q * MAX_CRUISE_CL)
     clmax = cl_max_3d(params)
     launch_cap = LAUNCH_VSTALL_MAX[launch]
-    v_cap = min(launch_cap, stall_cap) if stall_cap else launch_cap
+    v_cap, cap_reason = effective_stall_cap(launch, stall_cap)
     s_min_stall = 2.0 * w / (rho * v_cap ** 2 * clmax)
     s_bound = max(s_min_cl, s_min_stall)
     if s_bound > s:
@@ -223,7 +247,9 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
             f"Range-optimal wing loading {derived.mtow_kg / s_unconstrained:.1f} kg/m^2 "
             f"is unreachable: {binder} constraint ({reason}) caps wing loading "
             f"at {derived.mtow_kg / s:.1f} kg/m^2.")
-    return _solve_planform(s, lens, notes, span_cap), sizing
+    return _solve_planform(s, lens, notes, span_cap, s_floor=s_min_stall,
+                           floor_reason=cap_reason,
+                           violations=violations), sizing
 
 
 # how far cruise CL may sit from CL* before "sized for best L/D" is a false claim
@@ -437,23 +463,30 @@ def generate_candidates(derived: MissionDerived,
         if requirements and requirements.span_max_m else 3.0
     stall_cap = requirements.v_stall_max_ms if requirements else None
 
-    base_panel = estimate(derived.params, atmosphere, v, w, launch)
+    # The baseline is a card the user can PICK, so it obeys the caps the user set
+    # (S4-C2). It used to be passed through verbatim: a plan solved at span_max 3.0
+    # kept its 1.2153 m span while all four lenses moved to a later 1.2 m cap.
+    base_params, base_notes = _capped_baseline(derived, span_cap, stall_cap)
+    base_panel = estimate(base_params, atmosphere, v, w, launch)
     baseline = DesignCandidate(
         key="baseline", title="Baseline",
         objective="The deterministic sizing default: a physically reasonable "
                   "starting geometry, not an optimum.",
-        params=derived.params, panel=base_panel,
+        params=base_params, panel=base_panel,
         provenance=list(derived.assumptions) + _drag_provenance(base_panel),
         # The placeholder stays — comparisons against itself are meaningless — but the
         # ABSOLUTE checks now run on it too (S3-G6f).
-        constraint_notes=absolute_notes(base_panel),
+        constraint_notes=base_notes + absolute_notes(base_panel),
         tradeoffs=["reference design — all comparisons are against this"],
+        violations=cap_violations(base_panel, span_cap, stall_cap, launch),
         is_baseline=True)
 
     out = [baseline]
     for lens in LENSES:
         notes: List[str] = []
-        params, sizing = _size_wing(lens, derived, notes, span_cap, stall_cap)
+        violations: List[CapViolation] = []
+        params, sizing = _size_wing(lens, derived, notes, span_cap, stall_cap,
+                                    violations)
         panel = estimate(params, atmosphere, v, w, launch)
         # Provenance is composed AFTER the panel exists, so every number it quotes is
         # a number on this card (S3-G3h/G4h).
@@ -472,8 +505,72 @@ def generate_candidates(derived: MissionDerived,
             key=lens.key, title=lens.title, objective=lens.objective,
             params=params, panel=panel, provenance=provenance,
             constraint_notes=notes + absolute_notes(panel),
-            tradeoffs=tradeoff_sentences(panel, base_panel)))
+            tradeoffs=tradeoff_sentences(panel, base_panel),
+            # the PANEL is the arbiter: whatever the sizing intended, the number the
+            # user sees is what has to satisfy the cap or be reported
+            violations=cap_violations(panel, span_cap, stall_cap, launch)))
     return _report_degeneracy(out)
+
+
+def cap_violations(panel: AeroEstimate, span_cap: float,
+                   stall_cap: Optional[float], launch: str) -> List[CapViolation]:
+    """Every hard cap this finished design breaks (S4-C1/C4).
+
+    Derived from the PANEL, not from the sizing intent, so no amount of repair,
+    rounding or later editing can leave a breach unreported. This is the "no third
+    outcome" guarantee: a candidate either satisfies its caps or carries one of these.
+    """
+    out: List[CapViolation] = []
+    cap, reason = effective_stall_cap(launch, stall_cap)
+    if panel.v_stall_ms > cap + 0.05:
+        out.append(CapViolation(
+            cap="stall", required=cap, achieved=panel.v_stall_ms, unit="m/s",
+            blocked_by="the schema's aspect-ratio and chord gates at this span",
+            message=(f"Stalls at {panel.v_stall_ms:.1f} m/s against {reason}. "
+                     f"No wing this schema allows at {panel.span_m:.2f} m span is "
+                     f"large enough to meet it.")))
+    if panel.span_m > span_cap + 1e-6:
+        out.append(CapViolation(
+            cap="span", required=span_cap, achieved=panel.span_m, unit="m",
+            blocked_by="the 0.8 m minimum span in the geometry schema",
+            message=(f"Span {panel.span_m:.2f} m exceeds your {span_cap:.2f} m cap: "
+                     f"the schema's own minimum span is 0.8 m.")))
+    return out
+
+
+def _capped_baseline(derived: MissionDerived, span_cap: float,
+                     stall_cap: Optional[float]) -> tuple:
+    """(params, notes) — the mission's baseline geometry, re-solved if it breaks a cap.
+
+    Comparability matters less than honesty here: the baseline is presented as a
+    selectable design, so a baseline outside the user's caps is a card that cannot be
+    built to the user's own requirements."""
+    params = derived.params
+    launch = derived.mission.launch
+    atmosphere = derived.atmosphere
+    panel = estimate(params, atmosphere, derived.mission.cruise_speed_ms,
+                     derived.weight_n, launch)
+    if not cap_violations(panel, span_cap, stall_cap, launch):
+        return params, []
+
+    notes: List[str] = []
+    violations: List[CapViolation] = []
+    shape = ShapeFractions.from_params(params)
+    cap, cap_reason = effective_stall_cap(launch, stall_cap)
+    rho = atmosphere.density_kgm3
+    s_floor = 2.0 * derived.weight_n / (rho * cap ** 2 * cl_max_3d(params))
+    s = max(params.planform_area_m2(), s_floor)
+    ar = params.span_m ** 2 / params.planform_area_m2()
+    resolved = _feasible_planform(s, ar, shape, span_cap, notes, s_floor=s_floor,
+                                  floor_reason=cap_reason, violations=violations)
+    if resolved.span_m != params.span_m or \
+            abs(resolved.planform_area_m2() - params.planform_area_m2()) > 1e-9:
+        notes.insert(0, (
+            f"Baseline re-solved inside your caps: span {params.span_m:.2f} -> "
+            f"{resolved.span_m:.2f} m, area {params.planform_area_m2():.3f} -> "
+            f"{resolved.planform_area_m2():.3f} m^2. The mission's own sizing was "
+            f"outside them."))
+    return resolved, notes
 
 
 # Two candidates are "the same wing" when the sizing solve landed them in the same

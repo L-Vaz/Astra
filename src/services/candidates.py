@@ -91,10 +91,16 @@ def _index_path(sid: str) -> str:
 # ---------------------------------------------------------------------------
 
 def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
-    """Tier 0: create (or return) the candidate batch for the current plan."""
+    """Tier 0: create (or return) the candidate batch for the current plan.
+
+    Regenerates when the REQUIREMENTS have moved as well as when the plan has (S4-C3).
+    Requirements are deliberately not a pipeline stage, so `plan_version` does not
+    change when a cap does — and the short-circuit below returned the old batch:
+    saving span_max 3.0 -> 1.2 and calling generate() handed back four candidates
+    violating the live cap."""
     derived = _plan_derived(sid)
     idx = _index_path(sid)
-    if os.path.exists(idx) and not regenerate:
+    if os.path.exists(idx) and not regenerate and not _is_stale(sid):
         return list_candidates(sid)
 
     # Vehicle constraints (span/stall caps) ride along so lens sizing happens
@@ -110,6 +116,7 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
     cands = generate_candidates(derived, requirements)
     keys = []
     for c in cands:
+        violations = [v.model_dump() for v in c.violations]
         record = {
             "key": c.key,
             "title": c.title,
@@ -122,25 +129,56 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
             "provenance": c.provenance,
             "constraint_notes": c.constraint_notes,
             "tradeoffs": c.tradeoffs,
-            "evidence": {"equation": {"passed": True}},
+            "violations": violations,
+            "duplicate_of": c.duplicate_of,
+            "distinct_sizings": c.distinct_sizings,
+            # `passed` was unconditionally True, so a candidate breaching the user's
+            # own hard cap reported success to the gallery (S4-C4).
+            "evidence": {"equation": {"passed": not violations}},
             "artifacts": {},
         }
         _save_candidate(sid, record)
         keys.append(c.key)
     ds.atomic_write_json(idx, {"plan_version": _plan_version(sid),
+                               "requirements_version":
+                                   ds._latest_requirements_version(sid),
                                "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
                                "keys": keys})
     return list_candidates(sid)
 
 
-def list_candidates(sid: str) -> Dict[str, Any]:
+def _batch_meta(sid: str) -> Optional[Dict[str, Any]]:
     idx = _index_path(sid)
     if not os.path.exists(idx):
-        return {"plan_version": _plan_version(sid), "generated": None,
-                "candidates": []}
+        return None
     with open(idx) as f:
-        meta = json.load(f)
+        return json.load(f)
+
+
+def _is_stale(sid: str) -> bool:
+    """True when the batch was generated under different requirements (S4-C3).
+
+    A batch written before this field existed reports `None`, which is treated as
+    stale exactly once — the regenerate stamps it."""
+    meta = _batch_meta(sid)
+    if meta is None:
+        return False
+    return meta.get("requirements_version") != ds._latest_requirements_version(sid)
+
+
+def list_candidates(sid: str) -> Dict[str, Any]:
+    meta = _batch_meta(sid)
+    if meta is None:
+        return {"plan_version": _plan_version(sid), "generated": None,
+                "candidates": [], "stale": False}
+    current = ds._latest_requirements_version(sid)
+    batch_version = meta.get("requirements_version")
     return {"plan_version": meta["plan_version"], "generated": meta["generated"],
+            "requirements_version": batch_version,
+            "current_requirements_version": current,
+            # staleness is detected at READ time, which is what keeps the
+            # requirements store out of the stage machinery (design_session.py:182-187)
+            "stale": batch_version != current,
             "candidates": [_load_candidate(sid, k) for k in meta["keys"]]}
 
 
@@ -255,10 +293,22 @@ def screen(sid: str, key: str) -> Dict[str, Any]:
     return record
 
 
-def promote(sid: str, key: str, note: str = "") -> Dict[str, Any]:
+def promote(sid: str, key: str, note: str = "",
+            override_violations: bool = False) -> Dict[str, Any]:
     """Adopt a candidate onto the main geometry line (new geometry version).
-    Downstream mesh/CFD invalidation is handled by record_version as usual."""
+    Downstream mesh/CFD invalidation is handled by record_version as usual.
+
+    A candidate that breaks one of the user's own hard caps is not silently
+    promotable (S4-C4): the caller must pass `override_violations` AND a note, which
+    is recorded on the geometry version so the decision is auditable rather than
+    accidental."""
     record = _load_candidate(sid, key)
+    violations = record.get("violations") or []
+    if violations and not override_violations:
+        raise CandidateError(
+            "this concept does not meet your requirements: "
+            + "; ".join(v["message"] for v in violations)
+            + " Promote it only with an explicit override and a reason.")
     params = BWBParams.model_validate(record["params"])
     vdir = ds.new_version_dir(sid, "geometry")
     try:
@@ -271,6 +321,7 @@ def promote(sid: str, key: str, note: str = "") -> Dict[str, Any]:
         "candidate_title": record["title"],
         "note": note or f"promoted candidate '{record['title']}'",
         "passed": report.all_gates_pass,
+        "violations_overridden": violations,
     })
     record["status"] = "promoted"
     record["promoted_geometry_version"] = version

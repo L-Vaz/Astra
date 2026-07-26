@@ -414,7 +414,19 @@ function showCandidate(i) {
   ];
   $('design-metrics').innerHTML = rows.map(([k, v]) =>
     `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-  $('design-notes').textContent = c.objective || '';
+  /* S4-C4: a concept that breaks one of the user's own hard caps says so on the card
+     and cannot be promoted without an explicit override. It used to report
+     `passed: true` and offer the same button as any other. */
+  const violations = c.violations || [];
+  const notes = [c.objective || '', ...(c.constraint_notes || [])].filter(Boolean);
+  $('design-notes').innerHTML =
+    (violations.length
+      ? `<div class="violation">✖ Does not meet your requirements<ul>`
+        + violations.map((v) => `<li>${esc(v.message)}</li>`).join('')
+        + `</ul></div>`
+      : '')
+    + notes.map((n) => `<p>${esc(n)}</p>`).join('');
+  $('btn-stage2').classList.toggle('blocked', violations.length > 0);
   $('counter').textContent = `${S.candIdx + 1} / ${S.candidates.length}`;
   const dots = $('dots');
   dots.innerHTML = S.candidates.map((_, k) =>
@@ -452,10 +464,23 @@ async function generateConcepts(regenerate) {
 async function takeToStage2() {
   if (!S.candidates.length) return;
   const c = S.candidates[S.candIdx];
+  const violations = c.violations || [];
+  let note = 'stage-1 gallery selection';
+  if (violations.length) {
+    /* An override is a decision, so it is taken explicitly and recorded with a
+       reason on the geometry version (S4-C4). */
+    const reason = window.prompt(
+      'This concept does not meet your requirements:\n\n'
+      + violations.map((v) => `• ${v.message}`).join('\n')
+      + '\n\nPromote it anyway? Type why (this is recorded), or cancel.');
+    if (!reason || !reason.trim()) { toast('promotion cancelled'); return; }
+    note = `override: ${reason.trim()}`;
+  }
   busy(true, `promoting “${c.title}” to the main line…`);
   try {
     await api('/api/candidates/promote',
-      { session_id: S.sid, key: c.key, note: 'stage-1 gallery selection' });
+      { session_id: S.sid, key: c.key, note,
+        override_violations: violations.length > 0 });
     toast('Promoted. Opening Stage 2 (classic cockpit MDO)…', 3200);
     setTimeout(() => { window.location.href = `/?session=${S.sid}`; }, 1200);
   } catch (e) {
