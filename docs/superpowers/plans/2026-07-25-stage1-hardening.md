@@ -310,7 +310,7 @@ session root.
 - Modify: `src/cockpit/server.py`, `src/services/design_session.py`
 - Create: `tests/test_stage1_api_security.py`, `tests/test_stage1_store_integrity.py`
 
-- [ ] **S1-A1 — `session_id` is an unvalidated filesystem path segment** · defect · CRITICAL · cost S
+- [x] **S1-A1 — `session_id` is an unvalidated filesystem path segment** · defect · CRITICAL · cost S
   - Anchors: `src/cockpit/server.py:74` (`_session_path` joins the client string
     directly), `src/services/design_session.py:30-37` (`sessions_root` /
     `_session_file` likewise).
@@ -333,7 +333,7 @@ session root.
   - Done when: all four Stage-1 routes return 400 for every hostile id and the
     filesystem snapshot is unchanged.
 
-- [ ] **S1-A2 — Omitted/empty `session_id` on a MUTATING POST hijacks the live session** · defect · CRITICAL · cost S
+- [x] **S1-A2 — Omitted/empty `session_id` on a MUTATING POST hijacks the live session** · defect · CRITICAL · cost S
   - Anchors: `server.py:109-124` — `_ensure_session(None)` falls back to
     `_list_sessions()[0]`, i.e. the most recently modified session in the whole store
     (`server.py:78-91` sorts by mtime descending).
@@ -349,7 +349,7 @@ session root.
     pre-existing session's intake version is unchanged.
   - Done when: no POST can write to a session the caller did not name.
 
-- [ ] **S1-A3 — No input size limits; every call writes a new immutable version** · defect · HIGH · cost S
+- [x] **S1-A3 — No input size limits; every call writes a new immutable version** · defect · HIGH · cost S
   - Anchors: `server.py:1075-1086` (`IntakeEditReq.edits` unbounded),
     `server.py:1054-1057` (`brief` unbounded), `server.py:1027-1036` (every save is a
     new version directory).
@@ -366,7 +366,7 @@ session root.
     version directory was created.
   - Done when: the store cannot be grown without bound by a single request.
 
-- [ ] **S1-B2 — Concurrency corrupts the store (unlocked read-modify-write, in-place writes)** · defect · CRITICAL · cost M
+- [x] **S1-B2 — Concurrency corrupts the store (unlocked read-modify-write, in-place writes)** · defect · CRITICAL · cost M
   - Anchors: `server.py:1027-1036` (`_save_intake` writes `intake.json` then
     `index.json` in place, no lock, no tmp+rename), `server.py:1008-1013`
     (`_intake_latest_version` reads `index.json`), `server.py:1016-1024`
@@ -395,7 +395,7 @@ session root.
   - Done when: no interleaving produces a 500, a lost version, or a partially written
     JSON file. **This item gates Stages 2–4.**
 
-- [ ] **S1-B3 — A corrupt `intake.json` → 500 on all three intake endpoints** · defect · HIGH · cost S
+- [x] **S1-B3 — A corrupt `intake.json` → 500 on all three intake endpoints** · defect · HIGH · cost S
   - Anchors: `server.py:1024` (`intake_pack.Intake.model_validate(json.load(f))`,
     unguarded). Note S1-B2 is exactly how such a file is created in normal use.
   - Fix: catch `(json.JSONDecodeError, ValidationError, OSError)` in `_load_intake` and
@@ -410,14 +410,14 @@ session root.
     three intake endpoints.
   - Done when: a corrupt store degrades with a named warning instead of 500-ing.
 
-- [ ] **S1-B4 — `index.json` pointing at a missing version → `FileNotFoundError` → 500** · defect · MED · cost S
+- [x] **S1-B4 — `index.json` pointing at a missing version → `FileNotFoundError` → 500** · defect · MED · cost S
   - Anchors: `server.py:1022-1024`.
   - Fix: same recovery path as S1-B3 — treat "declared latest is absent" as
     "corrupt", scan the directory for the highest existing parseable version, warn.
   - Locks: `::test_index_pointing_at_missing_version_recovers`.
   - Done when: deleting `intake/v3/` while `index.latest==3` yields 200 + warning.
 
-- [ ] **S1-D8 — Version inflation: identical writes each create a new version** · defect · MED · cost S
+- [x] **S1-D8 — Version inflation: identical writes each create a new version** · defect · MED · cost S
   - Anchors: `server.py:1080-1086` (`edits: []` still saves), `:1059-1072` (repeated
     identical parses save), `:1093-1163` (repeated generates write a plan version, a
     requirements version, and a candidate batch). Confirmed: `edits: []` × 3 → versions

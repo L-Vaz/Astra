@@ -55,7 +55,9 @@ def _plan_version(sid: str) -> int:
 
 def _batch_dir(sid: str, plan_version: Optional[int] = None) -> str:
     pv = plan_version if plan_version is not None else _plan_version(sid)
-    return os.path.join(ds.sessions_root(), sid, "candidates", f"plan_v{pv}")
+    # session_dir, not sessions_root + sid: the id reaches here straight from an HTTP
+    # body, and joining it unchecked wrote outside the sessions root (S1-A1).
+    return os.path.join(ds.session_dir(sid), "candidates", f"plan_v{pv}")
 
 
 def _cand_dir(sid: str, key: str) -> str:
@@ -75,10 +77,9 @@ def _load_candidate(sid: str, key: str) -> Dict[str, Any]:
 
 
 def _save_candidate(sid: str, record: Dict[str, Any]) -> None:
-    path = _cand_file(sid, record["key"])
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(record, f, indent=2)
+    # Atomic (S1-B2): the gallery polls these files while a build/screen/promote is
+    # rewriting them, and a half-written candidate.json is a 500 on the next read.
+    ds.atomic_write_json(_cand_file(sid, record["key"]), record)
 
 
 def _index_path(sid: str) -> str:
@@ -126,11 +127,9 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
         }
         _save_candidate(sid, record)
         keys.append(c.key)
-    os.makedirs(os.path.dirname(idx), exist_ok=True)
-    with open(idx, "w") as f:
-        json.dump({"plan_version": _plan_version(sid),
-                   "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                   "keys": keys}, f, indent=2)
+    ds.atomic_write_json(idx, {"plan_version": _plan_version(sid),
+                               "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                               "keys": keys})
     return list_candidates(sid)
 
 
@@ -350,9 +349,7 @@ def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any
         _save_candidate(sid, record)
         new_keys.append(key)
 
-    os.makedirs(os.path.dirname(idx_path), exist_ok=True)
-    with open(idx_path, "w") as f:
-        json.dump({"plan_version": _plan_version(sid),
-                   "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                   "keys": kept + new_keys}, f, indent=2)
+    ds.atomic_write_json(idx_path, {"plan_version": _plan_version(sid),
+                                    "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "keys": kept + new_keys})
     return list_candidates(sid)

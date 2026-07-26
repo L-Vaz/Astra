@@ -304,10 +304,22 @@ def parse_brief(text: str) -> Intake:
 # edits — apply a client payload back onto a validated Intake
 # ---------------------------------------------------------------------------
 
+MAX_ROWS = 64
+"""Upper bound on rows in one intake (S1-A3).
+
+Every unknown edit id becomes a new custom row and every save writes a new immutable
+version, so an unbounded row count is unbounded disk: 500 edits in one call produced a
+519-row intake. The default list is 19 rows, so 64 leaves room for a real user's
+additions while keeping a runaway client bounded."""
+
+
 def apply_edits(current: Intake, edits: List[Dict[str, Any]]) -> Intake:
     """Merge client row edits. Value changes on assumed rows flip origin to
     'edited'. Derived rows never accept edits. Unknown ids become custom
-    vehicle rows (recorded; the solver maps recognised ids only)."""
+    vehicle rows (recorded; the solver maps recognised ids only).
+
+    Raises ValueError when a request would push the intake past MAX_ROWS; edits to
+    EXISTING rows are always allowed, so a full intake stays editable."""
     rows = {r.id: r for r in current.rows}
     for e in edits:
         rid = str(e.get("id", ""))
@@ -324,6 +336,11 @@ def apply_edits(current: Intake, edits: List[Dict[str, Any]]) -> Intake:
             if e.get("status") in ("fixed", "variable"):
                 row.status = e["status"]
         elif rid and e.get("label"):
+            if len(current.rows) >= MAX_ROWS:
+                raise ValueError(
+                    f"intake already has {len(current.rows)} rows (limit "
+                    f"{MAX_ROWS}); custom row '{rid}' was not added. Remove a custom "
+                    f"row first.")
             current.rows.append(IntakeRow(
                 id=rid, tier="vehicle", label=str(e["label"]),
                 value=str(e.get("value", "")), number=_num(str(e.get("value", ""))),

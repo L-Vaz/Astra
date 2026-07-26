@@ -13,6 +13,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -54,6 +55,22 @@ from domain_packs.bwb import intake as intake_pack  # noqa: E402
 
 app = FastAPI(title="Astra Aero Design Cockpit")
 
+
+@app.exception_handler(ds.SessionBusy)
+def _session_busy_handler(request, exc: ds.SessionBusy) -> JSONResponse:
+    """A contended session is a retry, not a server fault (S1-B2).
+
+    The per-session lock has a timeout precisely so a stuck writer surfaces as a clear
+    message instead of a hung request."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)},
+                        headers={"Retry-After": "1"})
+
+
+@app.exception_handler(ds.SessionIdRejected)
+def _session_id_rejected_handler(request, exc: ds.SessionIdRejected) -> JSONResponse:
+    """The store's containment backstop answers 400, not 500 (S1-A1)."""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
 DEFAULT_MISSION = dict(payload_kg=1.5, cruise_speed_ms=25.0, cruise_altitude_m=100.0,
                        launch="hand")
 
@@ -71,8 +88,24 @@ _CROSSCHECK_OWNERS = [
 # session helpers
 # ---------------------------------------------------------------------------
 
+# A session id is exactly what create_session mints: uuid4().hex[:8]
+# (design_session.py). Anything else is a client that made one up, and before this it
+# was joined straight into a filesystem path — probe-confirmed: "../escaped",
+# "/tmp/astra_probe_outside" and "aa/bb" all returned 200 and created stage directories
+# outside the sessions root (S1-A1).
+_SESSION_ID_RE = re.compile(r"[0-9a-f]{8}\Z")
+
+
+def _validated_sid(sid: str) -> str:
+    if not _SESSION_ID_RE.fullmatch(sid or ""):
+        raise HTTPException(400, "session_id must be 8 lowercase hex characters")
+    return sid
+
+
 def _session_path(sid: str, *parts: str) -> str:
-    return os.path.join(ds.sessions_root(), sid, *parts)
+    # ds.session_dir re-checks containment, so a route that forgets _validated_sid
+    # still cannot escape the sessions root.
+    return os.path.join(ds.session_dir(_validated_sid(sid)), *parts)
 
 
 def _list_sessions() -> List[Dict[str, Any]]:
@@ -93,25 +126,49 @@ def _list_sessions() -> List[Dict[str, Any]]:
 
 def _write_plan_version(sid: str, derived: MissionDerived, note: str,
                         invalidate_from: Optional[str] = None) -> int:
-    vdir = ds.new_version_dir(sid, "plan")
-    with open(os.path.join(vdir, "mission_derived.json"), "w") as f:
-        f.write(derived.model_dump_json(indent=2))
-    with open(os.path.join(vdir, "enriched_requirement.txt"), "w") as f:
-        f.write(build_enriched_requirement(derived))
-    return ds.record_version(sid, "plan", {
-                                 "prompt": note,
-                                 "source": "cockpit",
-                                 **atmosphere_provenance(derived.atmosphere),
-                             },
-                             invalidate_from=invalidate_from)
+    """Persist a mission as a new plan version, or reuse the identical current one.
+
+    The lock spans allocate-directory → write artifacts → record: `new_version_dir`
+    and `record_version` each derive the number from the stored state, so without it
+    two concurrent generates write their artifacts into the SAME vN and one mission is
+    lost (S1-B2).
+
+    Idempotent (S1-D8): a mission byte-identical to the current plan reuses that
+    version. Nothing downstream is invalidated in that case, which is correct — the
+    flight condition every downstream artifact was built from has not changed.
+    """
+    payload = derived.model_dump_json(indent=2)
+    with ds.session_lock(sid):
+        current = ds.latest_dir(sid, "plan")
+        if current:
+            existing = os.path.join(current, "mission_derived.json")
+            if os.path.exists(existing):
+                with open(existing) as f:
+                    if f.read() == payload:
+                        return ds.get_state(sid)["stages"]["plan"]["latest"]
+
+        vdir = ds.new_version_dir(sid, "plan")
+        ds.atomic_write(os.path.join(vdir, "mission_derived.json"), payload)
+        ds.atomic_write(os.path.join(vdir, "enriched_requirement.txt"),
+                        build_enriched_requirement(derived))
+        return ds.record_version(sid, "plan", {
+                                     "prompt": note,
+                                     "source": "cockpit",
+                                     **atmosphere_provenance(derived.atmosphere),
+                                 },
+                                 invalidate_from=invalidate_from)
 
 
 def _ensure_session(sid: Optional[str]) -> str:
-    """Resolve a usable session: the given one, the most recent, or a fresh
-    deterministic demo session (default mission, no LLM involved)."""
+    """Resolve a usable session for a READ: the given one, the most recent, or a fresh
+    deterministic demo session (default mission, no LLM involved).
+
+    The fall-back to "most recent" is a convenience for opening the cockpit with no id
+    in the URL. It is defensible for a GET and indefensible for a mutating POST — see
+    _require_session (S1-A2)."""
     if sid:
         try:
-            ds.get_state(sid)
+            ds.get_state(_validated_sid(sid))
             return sid
         except FileNotFoundError:
             raise HTTPException(404, f"unknown design session: {sid}")
@@ -122,6 +179,24 @@ def _ensure_session(sid: Optional[str]) -> str:
     derived = derive(MissionSpec(**DEFAULT_MISSION))
     _write_plan_version(new_sid, derived, "cockpit default mission")
     return new_sid
+
+
+def _require_session(sid: Optional[str]) -> str:
+    """Resolve a session for a WRITE. No id means no write (S1-A2).
+
+    `_ensure_session(None)` returns the most recently modified session in the whole
+    store. On a mutating POST that means an unauthenticated localhost request with no
+    session_id at all — which any web page the user visits can send — silently edits
+    whatever session they were last working on. Probe-confirmed: POST
+    /api/stage1/intake with the field omitted, and with "", both mutated the newest
+    session and returned 200."""
+    if not sid:
+        raise HTTPException(400, "session_id is required for this request")
+    try:
+        ds.get_state(_validated_sid(sid))
+    except FileNotFoundError:
+        raise HTTPException(404, f"unknown design session: {sid}")
+    return sid
 
 
 def _plan_derived(sid: str) -> Optional[MissionDerived]:
@@ -748,16 +823,20 @@ class CandidateAction(BaseModel):
 
 @app.post("/api/candidates/build")
 def candidates_build(req: CandidateAction) -> Dict[str, Any]:
+    _require_session(req.session_id)
     try:
-        return cand_svc.build(req.session_id, req.key)
+        with ds.session_lock(req.session_id):
+            return cand_svc.build(req.session_id, req.key)
     except cand_svc.CandidateError as e:
         raise HTTPException(422, str(e))
 
 
 @app.post("/api/candidates/screen")
 def candidates_screen(req: CandidateAction) -> Dict[str, Any]:
+    _require_session(req.session_id)
     try:
-        record = cand_svc.screen(req.session_id, req.key)
+        with ds.session_lock(req.session_id):
+            record = cand_svc.screen(req.session_id, req.key)
     except cand_svc.CandidateError as e:
         raise HTTPException(422, str(e))
     fa = record["evidence"].get("fast_aero", {})
@@ -773,8 +852,10 @@ def candidates_screen(req: CandidateAction) -> Dict[str, Any]:
 
 @app.post("/api/candidates/promote")
 def candidates_promote(req: CandidateAction) -> Dict[str, Any]:
+    _require_session(req.session_id)
     try:
-        result = cand_svc.promote(req.session_id, req.key, note=req.note)
+        with ds.session_lock(req.session_id):
+            result = cand_svc.promote(req.session_id, req.key, note=req.note)
     except cand_svc.CandidateError as e:
         raise HTTPException(422, str(e))
     version = result["geometry_version"]
@@ -789,8 +870,10 @@ def candidates_promote(req: CandidateAction) -> Dict[str, Any]:
 
 @app.post("/api/candidates/discard")
 def candidates_discard(req: CandidateAction) -> Dict[str, Any]:
+    _require_session(req.session_id)
     try:
-        return cand_svc.discard(req.session_id, req.key, reason=req.note)
+        with ds.session_lock(req.session_id):
+            return cand_svc.discard(req.session_id, req.key, reason=req.note)
     except cand_svc.CandidateError as e:
         raise HTTPException(422, str(e))
 
@@ -1006,34 +1089,113 @@ def _intake_dir(sid: str) -> str:
 
 
 def _intake_latest_version(sid: str) -> int:
+    """The version index.json DECLARES latest, or 0 if it is absent or unreadable.
+
+    A corrupt index is not fatal: the directory scan below is the authority on what
+    actually exists (S1-B4)."""
     idx = os.path.join(_intake_dir(sid), "index.json")
     if not os.path.exists(idx):
         return 0
-    with open(idx) as f:
-        return json.load(f).get("latest", 0)
+    try:
+        with open(idx) as f:
+            return int(json.load(f).get("latest", 0))
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return 0
+
+
+def _intake_versions_on_disk(sid: str) -> List[int]:
+    """Version numbers with a directory, newest first."""
+    root = _intake_dir(sid)
+    if not os.path.isdir(root):
+        return []
+    found = []
+    for name in os.listdir(root):
+        if name.startswith("v") and name[1:].isdigit() \
+                and os.path.isdir(os.path.join(root, name)):
+            found.append(int(name[1:]))
+    return sorted(found, reverse=True)
 
 
 def _load_intake(sid: str) -> tuple:
-    """(intake, version). A fresh session gets a derived default list (v0,
-    unsaved) so the screen never opens empty."""
-    n = _intake_latest_version(sid)
-    if n == 0:
-        return intake_pack.derive(intake_pack.default_intake()), 0
-    path = os.path.join(_intake_dir(sid), f"v{n}", "intake.json")
-    with open(path) as f:
-        return intake_pack.Intake.model_validate(json.load(f)), n
+    """(intake, version, warnings). A fresh session gets a derived default list (v0,
+    unsaved) so the screen never opens empty.
+
+    Degrades instead of 500-ing (S1-B3/B4). The declared-latest version can be
+    unreadable (truncated JSON, a payload the schema no longer accepts) or simply
+    absent, and every intake route used to raise straight out of here — which bricked
+    all three of them, including the GET that would have shown the user what was wrong.
+    Recovery falls back to the newest version that DOES parse and names the damaged one
+    in `warnings`. The corrupt file is never rewritten or deleted: it is the user's
+    data, and the next save lands on a new version number beside it.
+    """
+    declared = _intake_latest_version(sid)
+    on_disk = _intake_versions_on_disk(sid)
+    default = intake_pack.derive(intake_pack.default_intake())
+
+    if not on_disk:
+        if declared:
+            return default, 0, [f"intake v{declared} is recorded as current but no "
+                                f"version exists on disk — starting from the "
+                                f"assumed defaults"]
+        return default, 0, []
+
+    order = ([declared] if declared in on_disk else []) \
+        + [v for v in on_disk if v != declared]
+    unreadable = []
+    for version in order:
+        path = os.path.join(_intake_dir(sid), f"v{version}", "intake.json")
+        try:
+            with open(path) as f:
+                intake = intake_pack.Intake.model_validate(json.load(f))
+        except (json.JSONDecodeError, ValidationError, OSError, ValueError) as exc:
+            unreadable.append(f"v{version} ({type(exc).__name__})")
+            continue
+        warnings = []
+        if declared and version != declared:
+            warnings.append(
+                f"intake v{declared} unreadable — recovered from v{version}")
+        elif not declared:
+            warnings.append(
+                f"the intake version index was unreadable — recovered from v{version}")
+        return intake, version, warnings
+
+    return default, 0, [
+        f"no readable intake version ({', '.join(unreadable)}) — starting from the "
+        f"assumed defaults. Your saved versions are untouched on disk."]
 
 
 def _save_intake(sid: str, intake: intake_pack.Intake) -> int:
+    """Persist a new intake version, or reuse the identical current one.
+
+    Locked (S1-B2): read-latest → allocate → write index was an unguarded
+    read-modify-write, and 12 parallel saves produced 5x HTTP 500 with 10 of the 12
+    versions silently lost.
+
+    Idempotent (S1-D8): an edit that changes nothing (including `edits: []`, which the
+    UI sends on any no-op interaction) returns the current version rather than stacking
+    a byte-identical copy.
+    """
+    payload = intake.model_dump_json(indent=2)
     root = _intake_dir(sid)
-    n = _intake_latest_version(sid) + 1
-    vdir = os.path.join(root, f"v{n}")
-    os.makedirs(vdir, exist_ok=True)
-    with open(os.path.join(vdir, "intake.json"), "w") as f:
-        f.write(intake.model_dump_json(indent=2))
-    with open(os.path.join(root, "index.json"), "w") as f:
-        json.dump({"latest": n}, f, indent=2)
-    return n
+    with ds.session_lock(sid):
+        declared = _intake_latest_version(sid)
+        on_disk = _intake_versions_on_disk(sid)
+
+        if declared and declared in on_disk:
+            current_path = os.path.join(root, f"v{declared}", "intake.json")
+            try:
+                with open(current_path) as f:
+                    if f.read() == payload:
+                        return declared
+            except OSError:
+                pass  # unreadable current version: write a new one, never overwrite
+
+        # Highest of declared and on-disk: a corrupt index must not hand out a number
+        # that overwrites an existing version.
+        n = max([declared] + on_disk) + 1
+        ds.atomic_write(os.path.join(root, f"v{n}", "intake.json"), payload)
+        ds.atomic_write_json(os.path.join(root, "index.json"), {"latest": n})
+        return n
 
 
 @app.get("/stage1")
@@ -1046,21 +1208,40 @@ def stage1_page():
 @app.get("/api/stage1/intake")
 def stage1_intake(session: Optional[str] = None) -> Dict[str, Any]:
     sid = _ensure_session(session)
-    intake, version = _load_intake(sid)
+    intake, version, warnings = _load_intake(sid)
     return {"session_id": sid, "version": version,
-            "intake": intake.model_dump()}
+            "intake": intake.model_dump(), "warnings": warnings}
+
+
+# Request-size limits (S1-A3). Every call writes a new immutable version, so an
+# unbounded request is unbounded disk: a single 2 MB edit value was persisted verbatim,
+# 500 edits in one call produced a 519-row intake, and a 50,000-char brief was stored.
+MAX_BRIEF_CHARS = 4000
+MAX_EDITS_PER_REQUEST = 64
+MAX_EDIT_VALUE_CHARS = 200
+
+
+def _check_edit_sizes(edits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for edit in edits:
+        for field in ("value", "label"):
+            if field in edit and len(str(edit[field])) > MAX_EDIT_VALUE_CHARS:
+                raise ValueError(
+                    f"edit '{edit.get('id', '?')}' has a {field} of "
+                    f"{len(str(edit[field]))} characters; the limit is "
+                    f"{MAX_EDIT_VALUE_CHARS}")
+    return edits
 
 
 class IntakeParseReq(BaseModel):
     session_id: Optional[str] = None
-    brief: str
+    brief: str = Field(max_length=MAX_BRIEF_CHARS)
 
 
 @app.post("/api/stage1/parse")
 def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
     """Deterministic brief parse — the LLM parse arrives via chat/MCP; this
     keeps the standalone cockpit honest (matched fields only)."""
-    sid = _ensure_session(req.session_id)
+    sid = _require_session(req.session_id)
     intake = intake_pack.derive(intake_pack.parse_brief(req.brief))
     version = _save_intake(sid, intake)
     _queue_explanation(
@@ -1069,21 +1250,30 @@ def stage1_parse(req: IntakeParseReq) -> Dict[str, Any]:
         + ", ".join(f"{r.label}={r.value}" for r in intake.rows
                     if r.origin == "you_said") + ".",
         {"intake_version": version})
-    return {"session_id": sid, "version": version, "intake": intake.model_dump()}
+    return {"session_id": sid, "version": version, "intake": intake.model_dump(),
+            "warnings": []}
 
 
 class IntakeEditReq(BaseModel):
     session_id: Optional[str] = None
-    edits: List[Dict[str, Any]]
+    edits: List[Dict[str, Any]] = Field(max_length=MAX_EDITS_PER_REQUEST)
 
 
 @app.post("/api/stage1/intake")
 def stage1_intake_save(req: IntakeEditReq) -> Dict[str, Any]:
-    sid = _ensure_session(req.session_id)
-    intake, _ = _load_intake(sid)
-    intake = intake_pack.derive(intake_pack.apply_edits(intake, req.edits))
-    version = _save_intake(sid, intake)
-    return {"session_id": sid, "version": version, "intake": intake.model_dump()}
+    sid = _require_session(req.session_id)
+    with ds.session_lock(sid):
+        intake, _, warnings = _load_intake(sid)
+        try:
+            intake = intake_pack.derive(
+                intake_pack.apply_edits(intake, _check_edit_sizes(req.edits)))
+        except ValueError as exc:
+            # Rejected BEFORE any write, so an oversize or over-long request cannot
+            # leave a version behind (S1-A3).
+            raise HTTPException(422, str(exc))
+        version = _save_intake(sid, intake)
+    return {"session_id": sid, "version": version, "intake": intake.model_dump(),
+            "warnings": warnings}
 
 
 class IntakeGenerateReq(BaseModel):
@@ -1093,8 +1283,17 @@ class IntakeGenerateReq(BaseModel):
 @app.post("/api/stage1/generate")
 def stage1_generate(req: IntakeGenerateReq) -> Dict[str, Any]:
     """Intake -> plan version -> tier-0 concept candidates for the gallery."""
-    sid = _ensure_session(req.session_id)
-    intake, iv = _load_intake(sid)
+    sid = _require_session(req.session_id)
+    # One lock for the whole chain: this route writes an intake version, a plan
+    # version, a requirements version and a candidate batch, and a concurrent generate
+    # interleaving with it produced plan versions with no matching batch and returned
+    # plan_version values that matched no listable state (S1-B2).
+    with ds.session_lock(sid):
+        return _stage1_generate_locked(sid, req)
+
+
+def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any]:
+    intake, iv, warnings = _load_intake(sid)
     if iv == 0:
         iv = _save_intake(sid, intake)
     if intake.feasibility and intake.feasibility.verdict == "error":
@@ -1160,7 +1359,7 @@ def stage1_generate(req: IntakeGenerateReq) -> Dict[str, Any]:
         + ", ".join(c["title"] for c in batch["candidates"]) + ".",
         {"plan_version": version, "intake_version": iv})
     return {"session_id": sid, "plan_version": version, "intake_version": iv,
-            "candidates": batch["candidates"]}
+            "candidates": batch["candidates"], "warnings": warnings}
 
 
 # static frontend (mounted last so /api/* wins)

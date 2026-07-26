@@ -136,6 +136,20 @@ def cockpit_client(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
+def stage1_session(cockpit_client):
+    """(client, session_id) for a session that exists and has a plan (S0-11).
+
+    /api/bootstrap with no session creates the deterministic demo session, which is the
+    cheapest way to get a real session id without an LLM or OpenVSP. Stage-1 tests need
+    an id they can name explicitly, because mutating POSTs no longer accept a missing
+    one (S1-A2).
+    """
+    response = cockpit_client.get("/api/bootstrap")
+    assert response.status_code == 200, response.text
+    return cockpit_client, response.json()["session_id"]
+
+
+@pytest.fixture()
 def sessions_root(tmp_path, monkeypatch) -> Path:
     """Isolated ASTRA_SESSIONS_DIR for tests that touch the store directly.
 
