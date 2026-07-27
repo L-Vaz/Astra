@@ -7,9 +7,10 @@ for p in (REPO_ROOT, os.path.join(REPO_ROOT, "src")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# OpenFOAM rejects paths containing spaces (fileName::stripInvalid). The repo
-# lives on /mnt/e/cursor projects/... in WSL, so everything OpenFOAM touches
-# must live on a native path instead. Default: ~/astra_runs.
+# OpenFOAM rejects paths containing spaces (fileName::stripInvalid), and a symlink
+# does not save you — Python's getcwd() resolves it to the physical path. So when the
+# checkout sits on a space-containing path, everything OpenFOAM touches goes to
+# ~/astra_runs instead. Override either case with ASTRA_RUNS_DIR.
 RUNS_DIR = os.environ.get("ASTRA_RUNS_DIR") or (
     os.path.join(REPO_ROOT, "runs") if " " not in REPO_ROOT
     else os.path.expanduser("~/astra_runs"))

@@ -7,10 +7,22 @@
       "runtimeArgs": [
         "bash",
         "-lc",
-        "cd /mnt/e/AI_projects/Astra/Foam-Agent && /opt/conda/envs/FoamAgent/bin/python -m src.cockpit.server --host 0.0.0.0 --port 8765"
+        "cd /mnt/e/AI_projects/Astra && /opt/conda/envs/FoamAgent/bin/python -m src.cockpit.server --host 0.0.0.0 --port 8765"
       ],
       "port": 8765,
       "url": "http://localhost:8765"
+    },
+    {
+      "name": "astra-cockpit-root",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": [
+        "-d", "Ubuntu-22.04",
+        "-u", "root",
+        "--",
+        "bash", "-c",
+        "cd /mnt/e/AI_projects/Astra && exec /opt/conda/envs/FoamAgent/bin/python -m src.cockpit.server --port 8765"
+      ],
+      "port": 8765
     }
   ]
 }

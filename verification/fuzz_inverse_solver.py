@@ -4,12 +4,16 @@ Deterministic grid + fixed-seed random sweep. Reproducible by construction.
 """
 import itertools
 import math
+import os
 import random
 import sys
 import time
 import traceback
 
-sys.path.insert(0, r"E:\AI_projects\Astra\Foam-Agent")
+# Relative to this file, not a machine-specific absolute path — the previous hardcoded
+# path meant this script only ran on one checkout, on one machine, and moving the
+# repository broke it silently.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX
 from domain_packs.bwb.inverse import (BINDING_LABELS, MET_TOLERANCES,

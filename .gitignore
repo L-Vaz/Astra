@@ -13,6 +13,10 @@
 /src/runs/
 output/
 benchmark/
+# Reference PDFs and scratch downloads. Moved in from the old parent folder when the
+# checkout became the Astra root; ~31 MB of published papers that belong on disk, not
+# in the pack.
+/tmp/
 database/foamgpt/data
 
 # Byte-compiled / optimized / DLL files

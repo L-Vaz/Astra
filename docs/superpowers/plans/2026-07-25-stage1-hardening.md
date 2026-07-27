@@ -43,7 +43,7 @@ envelope) plus a launch-cap reporting hole — see S6-J1…J4.
   - `domain_packs/*` tests run on Windows python (pure pydantic) *and* in WSL.
   - Anything importing `src/services` or `src/cockpit/server.py` is **WSL only** —
     it eagerly loads FAISS/sentence-transformers (~30 s). Batch such work.
-  - Full suite: `wsl.exe bash -lc "cd /mnt/e/AI_projects/Astra/Foam-Agent && /opt/conda/envs/FoamAgent/bin/python -m pytest tests/ -q"`
+  - Full suite: `wsl.exe bash -lc "cd /mnt/e/AI_projects/Astra && /opt/conda/envs/FoamAgent/bin/python -m pytest tests/ -q"`
 - **Baseline to beat:** 21 test files, ~136 test functions, 119 pass, 2 files fail to
   collect. Coverage 46% overall; `domain_packs/bwb` mostly 89–99%.
 - **Coverage is not the target.** The high-coverage modules are *executed but
