@@ -21,6 +21,7 @@ that is a couple of seconds; in the WSL env, collection imports the services lay
 (FAISS, ~30 s). It is paid once per session — the fixture is module-scoped.
 """
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -171,6 +172,57 @@ def test_no_second_agent_guidance_file():
               and "build" not in p.parts and ".git" not in p.parts]
     assert not strays, (
         f"agent guidance must live only at the repository root; found: {strays}")
+
+
+# --- 3c. one grounding protocol, read by two different agents -----------------------
+
+_CLAUDE_SKILL = _REPO_ROOT / ".claude" / "skills" / "grounding.md"
+_CODEX_SKILL = _REPO_ROOT / ".agents" / "skills" / "grounding" / "SKILL.md"
+
+# Each agent reads its hook registration from its own file. The *script* is deliberately
+# shared: one behaviour, not two that can drift.
+_HOOK_REGISTRATIONS = (
+    _REPO_ROOT / ".claude" / "settings.json",   # Claude Code
+    _REPO_ROOT / ".codex" / "hooks.json",       # Codex
+)
+
+
+def test_grounding_skill_mirrors_are_identical():
+    """The engineering-discipline protocol is one document under two names, for the same
+    reason `CLAUDE.md` and `AGENTS.md` are: Claude Code scans `.claude/skills/*.md`,
+    Codex scans `.agents/skills/<name>/SKILL.md`. A protocol that says "grade every
+    number" in one tool and something older in the other is worse than having it once.
+    """
+    assert _CLAUDE_SKILL.is_file() and _CODEX_SKILL.is_file(), (
+        f"both grounding skill files must exist: {_CLAUDE_SKILL}, {_CODEX_SKILL}")
+    if _CLAUDE_SKILL.read_bytes() != _CODEX_SKILL.read_bytes():
+        pytest.fail(
+            "the Claude and Codex grounding skills have drifted. They are one document "
+            "under two names — edit one and copy it over the other, in the same commit. "
+            "Do not resolve this by deleting either.")
+
+
+@pytest.mark.parametrize("registration", _HOOK_REGISTRATIONS,
+                         ids=lambda p: p.parent.name)
+def test_hook_registration_points_at_an_existing_script(registration):
+    """Both agents' `UserPromptSubmit` hooks must name a script that is actually there.
+
+    The hook is the only layer of the protocol that cannot fade mid-session, and it fails
+    *silently*: rename the script, update one registration, forget the other, and that
+    agent simply stops being reminded. Nothing in a normal run would say so — the same
+    quiet-reads-as-fine failure this module exists to catch.
+    """
+    assert registration.is_file(), f"missing hook registration: {registration}"
+    events = json.loads(registration.read_text(encoding="utf-8"))["hooks"]
+    commands = [entry["command"]
+                for group in events["UserPromptSubmit"]
+                for entry in group["hooks"]]
+    assert commands, f"{registration} registers no UserPromptSubmit command"
+    for command in commands:
+        script = _REPO_ROOT / command.split()[-1]
+        assert script.is_file(), (
+            f"{registration.relative_to(_REPO_ROOT)} runs {command!r}, but "
+            f"{script.relative_to(_REPO_ROOT)} does not exist")
 
 
 # --- 4. the xfail backlog cannot drift from the plan --------------------------------

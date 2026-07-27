@@ -84,7 +84,7 @@ markers = [
 # the count drops below this floor. Module-level skips remove their tests from
 # collection, so this floor covers only the environment-independent core (the tests
 # that collect even without the services layer). Raise it when tests are added.
-minimum_collected_tests = "660"
+minimum_collected_tests = "663"
 
 [tool.setuptools.packages.find]
 include = ["src", "src.*", "domain_packs", "domain_packs.*"]

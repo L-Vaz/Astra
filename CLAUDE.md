@@ -10,7 +10,22 @@ Live code is authoritative. When sources disagree, trust live code, then this fi
 - No LLM step may be load-bearing for correctness. Back probabilistic routing and generated configuration with deterministic validation, fallbacks, and gates.
 - Domain knowledge belongs in `domain_packs/<domain>/`. Add a domain pack rather than a domain-specific agent.
 - Keep the scope aerodynamics-first and parametric. Structures are reserved; general text-to-CAD is out of scope.
-- Cite physics and numerical choices to official sources or label them explicitly as engineering judgment.
+- Every engineering number carries an evidence grade, and no problem gets fixed before it is shown to be real. See below.
+
+## Engineering discipline
+
+Full protocol: [`.claude/skills/grounding.md`](.claude/skills/grounding.md). Read it before any physics work. A `UserPromptSubmit` hook restates the short form every turn, because instructions fade over a long session and a hook does not.
+
+**Heavy** — all of this applies to anything touching a physical number, an algorithm's correctness, or an architectural choice. **Light** — skip it for refactors, tests, formatting, UI wiring, tooling.
+
+- **Grade every engineering quantity, inline.** `[A]` primary source cited to equation/section · `[B]` textbook cited to edition/page · `[C]` measured here with the command recorded · `[D]` judgment — *not a fact*; needs a sensitivity and what would falsify it. "Raymer says" without a page is `[D]`. "Standard practice" is `[D]`. Fluency is not evidence: a number arriving with no source attached is a stop signal.
+- **No number without its first principles.** The maintainer has a mechanical engineering degree and rusty aero — give the concept from basics, briefly, then the value. Deeper derivation on request.
+- **No source? Route it, never guess.** Fetch it yourself (NTRS/NACA/DATCOM/official docs) · propose an experiment with confirm/refute criteria set first · or hand the decision back with band, consequence, sensitivity and a recommendation. Choosing silently on a decision gap takes a call that is the maintainer's.
+- **Prove the problem is real before fixing it** — a failing test, a measured wrong output, a reproduced behaviour. "Looks fragile" is not admissible. If it cannot be demonstrated, say so and do not build.
+- **Record substantive decisions** in [`docs/decisions/`](docs/decisions/README.md), and close such sessions with a verdict that cites checkable evidence — solved / unproven / churn.
+- `domain_packs/bwb/atmosphere.py` is the worked example of a properly sourced quantity. Match its standard.
+
+The protocol is mirrored for both agents, because each reads a different location. The skill is one document under two names — `.claude/skills/grounding.md` and `.agents/skills/grounding/SKILL.md` — kept byte-identical by `tests/test_suite_integrity.py`, exactly as this file and `AGENTS.md` are. The hook *script* is shared, not copied; only its registration is per-agent (`.claude/settings.json`, `.codex/hooks.json`), and a test asserts both still point at a script that exists.
 
 ## Daily commands
 

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/grounding_reminder.py",
+            "statusMessage": "engineering discipline",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
