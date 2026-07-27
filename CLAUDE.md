@@ -57,7 +57,10 @@ Suite rules, enforced by `tests/test_suite_integrity.py`:
 - `tests/`: the pytest suite; `conftest.py` gates the services layer and guards the collection floor.
 - `reports/`: verification results and source accounting.
 - `evaluation/`: the Foam-Agent evaluation study — report, prompts, scripts, extracted metrics and figures. Raw solver output under `evaluation/runs/*/` is regenerable and untracked.
+- `quickstart/`: standalone API-key smoke test. Not part of the design loop.
 - `database/faiss/`: prebuilt RAG indices; do not regenerate without a specific reason.
+
+`README.md` is the user-facing counterpart to this file: what Astra is, how to run it, and its stated scope limits. When a limit here changes, check whether the README's "Scope and limits" section still tells the truth.
 
 For a new graph stage: service → thin node → required `GraphState` fields → wiring in `src/main.py`. For external stage-level orchestration, expose the service through the MCP server.
 
@@ -96,6 +99,7 @@ Detailed maps with roles, wiring, and caveats per task: [`docs/agent-guidance/ta
 - OpenVSP bindings require Python 3.10. Invoke `/opt/vsp-venv/bin/python` as a subprocess; do not import them into the Python 3.12 FoamAgent environment.
 - Preserve deterministic custom-mesh conversion, wall-patch classification, Netgen optimization, bounded schemes, and post-hoc evaluator fallbacks.
 - `GraphState` is mutable and passed by reference; check for unintended side effects.
+- `core.autocrlf` is true on the Windows checkout. `.gitattributes` pins `*.sh` and `Allrun` to LF because bash rejects a shebang line ending in `\r`; add any new WSL-executed file to it.
 - A clean solver exit is not proof of valid physics. Keep result-level convergence, plausibility, mission, and visualization checks.
 
 ## Read only when relevant

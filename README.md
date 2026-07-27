@@ -1,3 +1,47 @@
+# Astra
+
+**Astra is a blended-wing-body drone design loop built on top of [Foam-Agent](https://github.com/csml-rpi/Foam-Agent).** It adds a conversational, reviewable path from a mission brief to a physical-quality verdict:
+
+> mission intent → parametric geometry → fast aero → mesh → OpenFOAM CFD → verdict
+
+Foam-Agent's LangGraph CFD pipeline is the spine and is **not** modified — Astra attaches before and around it. Everything below the divider is the upstream Foam-Agent README, kept as-is: it remains accurate for that spine, and its install, Docker, MCP and configuration instructions apply here unchanged.
+
+## What Astra adds
+
+| Where | What |
+|---|---|
+| `domain_packs/bwb/` | BWB parametric schema, brief intake and unit parsing, inverse sizing, analytic aero, concept variants and ranking |
+| `src/cockpit/` | browser cockpit — requirements explorer, concept cards, planform preview |
+| `src/services/` | design sessions, candidate lifecycle (build → promote → restore), geometry / mesh / aero stage services |
+| `verification/` | golden-path, revision, adversarial-gate and aero-golden checks |
+| `tests/` | the test suite — 697 collected in WSL, 671 in the Windows core |
+| `evaluation/` | an evaluation study of the inherited Foam-Agent pipeline: report, prompts, scripts, metrics and figures |
+
+Agent guidance for working in this repository lives in [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) — one document under two names, kept byte-identical by a test.
+
+## Running the Astra suite
+
+```bash
+python -m pytest tests/ -q                     # full suite (WSL FoamAgent env)
+python -m pytest tests/ -q -rx                 # print the live xfail backlog
+python verification/verify_aero_goldens.py     # aero tripwires
+python verification/doctor.py                  # environment preflight
+```
+
+Two environments, deliberately: the WSL FoamAgent env runs everything, and the Windows python runs the `domain_packs` core alone (no FAISS) as the fast loop. `xfail` markers are a **backlog**, not passes — `xfail_strict` is on, so a fixed defect fails the build until its marker is retired.
+
+## Scope and limits
+
+Stated plainly, because the numbers this tool prints are only as good as these bounds:
+
+- **Aerodynamic sizing only.** No structural analysis, and general text-to-CAD is out of scope.
+- **The fast aero tier is a vortex-lattice method** (AeroSandbox / VSPAERO). VLM is linear and has **no stall model**, so it cannot validate a maximum-lift claim. Stall limits come from analytic caps, not from the VLM.
+- **CLmax is analytic**, not from an airfoil dataset — a 2D value scaled by a 3D factor and the cosine of quarter-chord sweep. Reynolds effects are not yet in it.
+- **Dihedral is identical across all five concepts.** It is a fixed value, not a design variable; a test documents this rather than letting the lens labels imply otherwise.
+- Known gaps, and the work queued against each, are tracked in [`docs/superpowers/plans/2026-07-25-stage1-hardening.md`](docs/superpowers/plans/2026-07-25-stage1-hardening.md). Items that do not exist yet are listed as capabilities and are deliberately left unchecked.
+
+---
+
 # Foam-Agent    <a href="https://arxiv.org/abs/2505.04997"><img src="https://img.shields.io/badge/arXiv-2505.04997-b31b1b.svg" alt="Paper"></a>
 <p align="center">
   <img src="overview.png" alt="Foam-Agent System Architecture" width="800">
