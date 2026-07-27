@@ -1,0 +1,23 @@
+	Command being timed: "/opt/conda/envs/FoamAgent/bin/python foambench_main.py --output /home/lindonlv/foamagent-goal/t2t5_run1_20260707_230416/t5_03 --prompt_path /opt/Foam-Eval/goal_run/prompts/t5_03_turbulent_flatplate.txt"
+	User time (seconds): 24.11
+	System time (seconds): 4.15
+	Percent of CPU this job got: 17%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:43.13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4005508
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 1386598
+	Voluntary context switches: 7001
+	Involuntary context switches: 226
+	Swaps: 0
+	File system inputs: 80
+	File system outputs: 12176
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

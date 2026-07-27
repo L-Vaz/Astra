@@ -1,0 +1,11 @@
+Perform a 2D incompressible laminar transient simulation of flow past a square obstacle inside a
+channel using the pimpleFoam solver. The channel extends from x=0 to x=2.0 m and from y=0 to
+y=0.4 m, with a thickness of 0.01 m in z. A square obstacle of side 0.1 m is centered at
+(0.5, 0.2). Use blockMesh with a structured multi-block mesh of roughly 60x20 cells overall
+resolution and 1 cell in the z-direction, leaving a hole for the obstacle. The inlet boundary
+named "inlet" (x=0) has a uniform velocity of 0.1 m/s in +x. The outlet named "outlet" (x=2.0)
+has fixed pressure p=0. The channel top and bottom named "topWall" and "bottomWall" are no-slip
+walls, and the obstacle surface named "obstacle" is a no-slip wall. The front and back faces
+named "frontAndBack" are empty for 2D. Kinematic viscosity nu = 1e-4 m^2/s (Reynolds number 100
+based on the obstacle side). The simulation runs from time 0 to 10 seconds with a time step of
+0.01 s, and results are written every 2 seconds.

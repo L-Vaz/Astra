@@ -1,0 +1,8 @@
+Perform a 3D steady-state incompressible turbulent simulation of flow through a straight square
+duct using the simpleFoam solver with the k-epsilon RAS turbulence model and wall functions.
+The duct is 1.0 m long in the x-direction with a 0.1 m x 0.1 m square cross-section. Use
+blockMesh with a structured 50x12x12 mesh. The inlet named "inlet" (x=0) has a uniform velocity
+of 5 m/s in +x with turbulence intensity 5% and mixing length 0.007 m. The outlet named
+"outlet" (x=1.0) has fixed pressure p=0 and zero-gradient velocity. The four duct walls are a
+single boundary named "walls" with a no-slip condition. Kinematic viscosity nu = 1.5e-5 m^2/s.
+Run 300 SIMPLE iterations, writing results every 100 iterations.

@@ -1,0 +1,8 @@
+Simulate incompressible flow over a circular cylinder. Use gmsh to create the
+computational mesh. Domain: x from -2.5 to 2.5, y from -1 to 1, z from 0 to 0.2.
+Cylinder centered at (-1, 0) with radius 0.1, about 20x10 cells in x-y and
+1 cell in z. Inlet 'inlet' (x=-2.5) uniform 1 m/s in +x; outlet 'outlet'
+(x=2.5); top/bottom walls 'topWall'/'bottomWall' (y=+/-1) slip; cylinder surface
+'cylinder' no-slip; 'frontAndBack' (z=0 and 0.2) empty. Base mesh size 0.5 on the
+cylinder, 1.0 elsewhere. Run from t=0 to 2 s, deltaT=0.001, output every 100.
+nu = 1e-5 m^2/s. Use pisoFoam. Visualize velocity magnitude in the x-y plane.

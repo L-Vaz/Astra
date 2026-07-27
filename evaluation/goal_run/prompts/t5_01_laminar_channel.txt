@@ -1,0 +1,9 @@
+Perform a 2D incompressible laminar simulation of pressure-driven flow in a rectangular channel
+using the icoFoam solver. The channel is 1.0 m long in the x-direction and 0.1 m high in the
+y-direction, with a thickness of 0.01 m in the z-direction. Use blockMesh with a structured
+100x20x1 mesh. The inlet boundary named "inlet" (at x=0) has a uniform velocity of 0.05 m/s in
+the positive x-direction. The outlet named "outlet" (at x=1.0) has fixed pressure p=0 and
+zero-gradient velocity. The top and bottom boundaries named "topWall" and "bottomWall" are
+no-slip walls. The front and back faces named "frontAndBack" are of type empty for 2D simulation.
+The kinematic viscosity nu is constant at 1e-4 m^2/s. The simulation runs from time 0 to 5
+seconds with a time step of 0.01 s, and results are written every 1 second.

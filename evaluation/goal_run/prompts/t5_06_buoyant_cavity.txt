@@ -1,0 +1,9 @@
+Perform a 2D transient natural convection simulation of air in a differentially heated square
+cavity using the buoyantFoam solver (compressible buoyant flow), laminar (no turbulence model).
+The cavity is 0.1 m x 0.1 m with a thickness of 0.005 m in z. Use blockMesh with a structured
+40x40x1 mesh. The left wall named "hotWall" has a fixed temperature of 330 K. The right wall
+named "coldWall" has a fixed temperature of 300 K. The top and bottom walls named "topWall" and
+"bottomWall" are adiabatic no-slip walls. The front and back faces named "frontAndBack" are
+empty for 2D. The working fluid is air initially at 300 K and 100000 Pa. Gravity is 9.81 m/s^2
+in the negative y-direction. The simulation runs from time 0 to 2 seconds with a time step of
+0.005 seconds, and results are written every 0.5 seconds.

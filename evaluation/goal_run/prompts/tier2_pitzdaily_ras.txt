@@ -1,0 +1,8 @@
+Run a 2D steady-state incompressible turbulent simulation of the pitzDaily
+backward-facing step using the simpleFoam solver with a RAS k-epsilon turbulence
+model, on the standard pitzDaily blockMesh geometry. The inlet named 'inlet' has
+a uniform velocity of 10 m/s in +x; the outlet named 'outlet' has fixed
+zero-gauge pressure with zero-gradient velocity; the walls named 'upperWall' and
+'lowerWall' are no-slip; the 'frontAndBack' faces are 'empty' (2D). Kinematic
+viscosity nu = 1e-5 m^2/s. Run up to 1000 iterations, writing every 100.
+Visualize the velocity magnitude in the x-y plane at the final iteration.

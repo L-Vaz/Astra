@@ -1,0 +1,73 @@
+/*---------------------------------------------------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  10
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+Build  : 10-c4cf895ad8fa
+Exec   : blockMesh
+Date   : Jun 23 2026
+Time   : 00:21:02
+Host   : "LAPTOP-75M1LBPH"
+PID    : 1842
+I/O    : uncollated
+Case   : /tmp/foamagent_case_puuu2sj_/case
+nProcs : 1
+sigFpe : Enabling floating point exception trapping (FOAM_SIGFPE).
+fileModificationChecking : Monitoring run-time modified files using timeStampMaster (fileModificationSkew 10)
+allowSystemOperations : Allowing user-supplied system call operations
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+Create time
+
+Reading "blockMeshDict"
+
+Creating block mesh from
+    "system/blockMeshDict"
+Creating block edges
+No non-planar block faces defined
+Creating topology blocks
+Creating topology patches
+
+Creating block mesh topology
+
+Check topology
+
+	Basic statistics
+		Number of internal faces : 0
+		Number of boundary faces : 6
+		Number of defined boundary faces : 6
+		Number of undefined boundary faces : 0
+	Checking patch -> block consistency
+
+Creating block offsets
+Creating merge list .
+
+Creating polyMesh from blockMesh
+Creating patches
+Creating cells
+Creating points with scale 1
+    Block 0 cell size :
+        i : 0.025 .. 0.025
+        j : 0.025 .. 0.025
+        k : 0.01
+
+Writing polyMesh
+----------------
+Mesh Information
+----------------
+  boundingBox: (0 0 0) (1 1 0.01)
+  nPoints: 3362
+  nCells: 1600
+  nFaces: 6480
+  nInternalFaces: 3120
+----------------
+Patches
+----------------
+  patch 0 (start: 3120 size: 40) name: movingWall
+  patch 1 (start: 3160 size: 120) name: fixedWalls
+  patch 2 (start: 3280 size: 3200) name: frontAndBack
+
+End
+

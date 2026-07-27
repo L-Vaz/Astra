@@ -1,0 +1,58 @@
+{
+  "final_field_relative_l2": 0.0006112133269198239,
+  "final_field_max_velocity_difference": 0.0028525327797979116,
+  "identical_input_files": [
+    "0/U",
+    "0/p",
+    "constant/physicalProperties",
+    "system/controlDict",
+    "Allrun"
+  ],
+  "different_input_files": [
+    "system/blockMeshDict",
+    "system/fvSchemes",
+    "system/fvSolution"
+  ],
+  "input_hashes": {
+    "0/U": {
+      "identical": true,
+      "run1_sha256": "a9c3cbff47710e23bc66f69b3221a879049e652a5529c5e5c6edc2410291d722",
+      "run2_sha256": "a9c3cbff47710e23bc66f69b3221a879049e652a5529c5e5c6edc2410291d722"
+    },
+    "0/p": {
+      "identical": true,
+      "run1_sha256": "3fb7bc1abaae0973545ea4b8e323b40d15633ec9be61c93ec17513ce381f4253",
+      "run2_sha256": "3fb7bc1abaae0973545ea4b8e323b40d15633ec9be61c93ec17513ce381f4253"
+    },
+    "constant/physicalProperties": {
+      "identical": true,
+      "run1_sha256": "8c6094244c42b407df177a35fe1e54b561f3a23a6fc0feac4bf3addd6983cc28",
+      "run2_sha256": "8c6094244c42b407df177a35fe1e54b561f3a23a6fc0feac4bf3addd6983cc28"
+    },
+    "system/blockMeshDict": {
+      "identical": false,
+      "run1_sha256": "696ecc742ec3738348f7e8757401a92b77171ca8baf393e0a42381049aee7cd6",
+      "run2_sha256": "18d02edb80012e8edc2e656119cccbe85a87b38fe2d4e219c1f46d6c3635d1b0"
+    },
+    "system/controlDict": {
+      "identical": true,
+      "run1_sha256": "226cb9e9207204a599c0a338daa5dd6af345d2640fca42463640cabe4dc270fc",
+      "run2_sha256": "226cb9e9207204a599c0a338daa5dd6af345d2640fca42463640cabe4dc270fc"
+    },
+    "system/fvSchemes": {
+      "identical": false,
+      "run1_sha256": "7bad791e6a21367f09e68164f89b2cdcdfe725d88d69be1f11bb67868e9ad886",
+      "run2_sha256": "4863f1370bd0eb3f1a35704cc2ba20258a88b16f4eaba63eb69639d9031babd1"
+    },
+    "system/fvSolution": {
+      "identical": false,
+      "run1_sha256": "4874d61fc32b970dce1f5c4cab962563cd315d9e77129f980c18b2860b44626d",
+      "run2_sha256": "fb0ce417da1ed9084859326e8618ef8c16b40473477e830a12823b3106a89f8b"
+    },
+    "Allrun": {
+      "identical": true,
+      "run1_sha256": "b18a57e998bd9453d5fa4352ade7cbe377268a33b0c998da9e94e3f3f65c6cd0",
+      "run2_sha256": "b18a57e998bd9453d5fa4352ade7cbe377268a33b0c998da9e94e3f3f65c6cd0"
+    }
+  }
+}

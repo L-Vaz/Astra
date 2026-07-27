@@ -1,0 +1,9 @@
+Simulate a two-dimensional incompressible laminar lid-driven square cavity using Foundation OpenFOAM v10.
+
+The cavity width and height are 1 m. Represent it as a thin three-dimensional block from (0, 0, 0) to (1, 1, 0.01) m with one cell through the z direction, so the front and back patches are empty. Use a structured blockMesh mesh with 40 cells in x, 40 cells in y, and 1 cell in z, with uniform grading.
+
+Name the top boundary movingWall and prescribe a uniform velocity U = (1 0 0) m/s. Name the left, right, and bottom boundaries fixedWalls and apply no-slip velocity U = (0 0 0). Name the two z-normal patches frontAndBack and use the empty boundary condition. Use the corresponding pressure boundary conditions for a closed incompressible cavity and set one pressure reference as required.
+
+Use constant kinematic viscosity nu = 0.01 m^2/s, giving Reynolds number Re = U L / nu = 100. Use a transient incompressible laminar solver compatible with Foundation OpenFOAM v10, preferably icoFoam. Start from rest. Use time step 0.01 s, run from 0 to 50 s, and write results every 5 s. Choose stable second-order spatial and temporal schemes appropriate for this laminar case.
+
+Generate and run blockMesh, run checkMesh, execute the solver, and detect and repair any OpenFOAM errors without changing the stated geometry, mesh, material property, boundary conditions, or run time. Generate a PyVista visualization of velocity magnitude and in-plane velocity vectors or streamlines at the final time.

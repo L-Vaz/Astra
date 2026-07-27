@@ -1,0 +1,6 @@
+Do an incompressible 3D flow over a tandem wing configuration. The mesh is
+provided as a .msh file with boundaries 'inlet', 'outlet', 'walls', 'airfoil',
+'frontAndBack'. inlet/outlet are freestream at 9 m/s; walls/airfoil are no-slip;
+frontAndBack are type wall. Run t=0 to 10, deltaT=1.0, output every 1.
+nu = 1.5e-05 m^2/s. Use simpleFoam with the SpalartAllmaras turbulence model.
+Visualize velocity magnitude along the mid-Z section at the final time.

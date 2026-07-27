@@ -1,0 +1,8 @@
+tier=tier2
+label=pitzDaily / blockMesh / simpleFoam RAS
+started=2026-06-25T15:38:31+01:00
+finished=2026-06-25T15:42:17+01:00
+exit_code=1
+output_dir=/home/lindonlv/foamagent-goal/20260625_153609/tier2
+log_file=/opt/Foam-Eval/goal_run/logs/tier2.log
+time_file=/opt/Foam-Eval/goal_run/logs/tier2.time

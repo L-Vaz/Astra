@@ -1,0 +1,9 @@
+Perform a 2D steady-state incompressible turbulent simulation of flow over a flat plate using
+the simpleFoam solver with the kOmegaSST RAS turbulence model. The domain is 2.0 m long (x) and
+0.5 m high (y), 0.01 m thick (z). Use blockMesh with a structured 100x40x1 mesh graded toward
+the bottom wall. The inlet named "inlet" (x=0) has a uniform velocity of 10 m/s in +x with
+turbulence intensity 5%. The outlet named "outlet" (x=2.0) has fixed pressure p=0. The bottom
+boundary named "plate" is a no-slip wall with standard wall functions. The top boundary named
+"top" is a slip boundary. The front and back faces named "frontAndBack" are empty for 2D.
+Kinematic viscosity nu = 1.5e-5 m^2/s. Run 500 SIMPLE iterations, writing results every 100
+iterations.

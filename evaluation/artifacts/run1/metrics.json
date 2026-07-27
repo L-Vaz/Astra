@@ -1,0 +1,64 @@
+{
+  "case": "/opt/foamagent-eval/run1",
+  "time_values": [
+    0.0,
+    5.0,
+    10.0,
+    15.0,
+    20.0,
+    25.0,
+    30.0,
+    35.0,
+    40.0,
+    45.0,
+    50.0
+  ],
+  "solver_end_marker": true,
+  "solver_execution_time_s": 12.8469,
+  "residual_last": {
+    "Ux": {
+      "time": 50.0,
+      "field": "Ux",
+      "initial": 1.31604e-07,
+      "final": 1.31604e-07
+    },
+    "Uy": {
+      "time": 50.0,
+      "field": "Uy",
+      "initial": 8.2615e-08,
+      "final": 8.2615e-08
+    },
+    "p": {
+      "time": 50.0,
+      "field": "p",
+      "initial": 1.05811e-06,
+      "final": 8.73613e-07
+    }
+  },
+  "continuity_final": {
+    "time": 50.0,
+    "local": 3.36414e-10,
+    "global": 5.26459e-20,
+    "cumulative": 8.11807e-18
+  },
+  "continuity_max_local": 3.87763e-06,
+  "continuity_max_abs_global": 6.59632e-19,
+  "continuity_max_abs_cumulative": 1.4616e-17,
+  "steady_45_to_50_relative_l2": 1.7305319488514215e-07,
+  "steady_45_to_50_max_velocity_change": 1.0132789611816406e-06,
+  "speed_min": 0.0,
+  "speed_max": 1.0,
+  "primary_vortex_center_approx": {
+    "x": 0.6166666666666667,
+    "y": 0.7416666666666667,
+    "speed": 0.006814667955040932
+  },
+  "ghia_u_rmse": 0.0015521255000613846,
+  "ghia_u_max_abs_error": 0.003191034111968055,
+  "ghia_v_rmse": 0.003447505432037188,
+  "ghia_v_max_abs_error": 0.007293269428874899,
+  "u_centerline_min": -0.2095542550086975,
+  "u_centerline_max": 1.0,
+  "v_centerline_min": -0.2489505112171173,
+  "v_centerline_max": 0.17594775557518005
+}

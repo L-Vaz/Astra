@@ -1,0 +1,8 @@
+tier=tier4
+label=tandem wing / external gmsh import / simpleFoam SA
+started=2026-06-26T14:51:51+01:00
+finished=2026-06-26T14:55:05+01:00
+exit_code=1
+output_dir=/home/lindonlv/foamagent-goal/20260626_144351/tier4
+log_file=/opt/Foam-Eval/goal_run/logs/tier4.log
+time_file=/opt/Foam-Eval/goal_run/logs/tier4.time

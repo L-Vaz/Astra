@@ -1,0 +1,13 @@
+# Raw OpenFOAM solver output from the evaluation runs. Regenerable from the tracked
+# case setup (0/, constant/, system/, Allrun) by re-running the case, and the evidence
+# the report actually cites — metrics, centreline profiles, residual and streamline
+# plots — is extracted into evaluation/artifacts/, which IS tracked.
+#
+# What this excludes: ~19 MB, dominated by three 3.5 MB icoFoam logs and the written
+# time directories. Keeping them would put more bytes of regenerable text in the pack
+# than the entire rest of the repository.
+runs/*/log.icoFoam
+runs/*/constant/polyMesh/
+# Written time directories (5, 10, ... 50). `0/` is the initial condition — an input —
+# and stays tracked.
+runs/*/[1-9]*/

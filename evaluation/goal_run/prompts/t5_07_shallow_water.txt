@@ -1,0 +1,8 @@
+Perform a shallow-water simulation of flow in a flat rectangular basin using the
+shallowWaterFoam solver. The basin is 10 m x 10 m in the x-y plane, meshed with blockMesh as a
+structured 50x50x1 grid one cell thick in z. The left boundary named "inlet" has an inflow
+velocity of 0.5 m/s in +x. The right boundary named "outlet" is an open outflow with zero
+gradient. The top and bottom boundaries named "sideWalls" are slip walls. The front and back
+faces named "frontAndBack" are empty. The initial water depth h is 0.1 m everywhere, at rest,
+over a flat bed (h0 = 0). Gravitational acceleration is 9.81 m/s^2. The simulation runs from
+time 0 to 20 seconds with a time step of 0.1 seconds, and results are written every 5 seconds.

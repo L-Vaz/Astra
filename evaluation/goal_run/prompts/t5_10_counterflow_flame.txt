@@ -1,0 +1,10 @@
+Perform a 2D transient combustion simulation of a methane-air counterflow diffusion flame using
+the reactingFoam solver with single-step irreversible chemistry (CH4 + 2 O2 -> CO2 + 2 H2O).
+The domain is 0.02 m x 0.02 m with a thickness of 0.001 m in z, meshed with blockMesh as a
+structured 50x50x1 grid. The fuel inlet named "fuel" (left boundary, x=0) supplies pure CH4 at
+0.1 m/s and 293 K. The air inlet named "air" (right boundary) supplies air (O2 mass fraction
+0.23, N2 0.77) at 0.1 m/s and 293 K. The top and bottom boundaries named "outlet" are open
+outflows (zero-gradient / inletOutlet). The front and back faces named "frontAndBack" are empty
+for 2D. Initial field temperature is 2000 K to ignite the mixture, pressure 100000 Pa. The
+simulation runs from time 0 to 0.05 seconds with an initial time step of 1e-5 seconds and
+adjustable time stepping (max Courant number 0.4), writing results every 0.01 seconds.

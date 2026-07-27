@@ -1,0 +1,8 @@
+Simulate a 2D incompressible lid-driven cavity flow using the icoFoam solver.
+The domain is a square of side 0.1 m in the x-y plane with a thickness of 0.01 m
+in z, meshed with blockMesh using 20 x 20 x 1 cells. The top wall named
+'movingWall' moves in the +x direction at a uniform 1 m/s. The side and bottom
+walls named 'fixedWalls' are no-slip (zero velocity). The front and back faces
+named 'frontAndBack' are type 'empty' (2D). Kinematic viscosity nu = 0.01 m^2/s.
+Run from t=0 to t=10 s with deltaT=0.005, writing every 100 steps. Visualize the
+velocity magnitude in the x-y plane at the final time.

@@ -27,6 +27,23 @@ python verification/verify_gates.py
 
 `doctor` is a seconds-fast environment preflight (paths, both Python envs, OpenFOAM, FAISS, credentials) — run it first on a fresh or changed environment. The last two verification scripts require a completed golden case. Full CFD verification can use API credentials and take substantial time; use the deterministic `--no-llm` golden run for a quick pipeline check.
 
+## Tests
+
+```bash
+python -m pytest tests/ -q                     # full suite (WSL FoamAgent env)
+python -m pytest tests/ -q -rx                 # print the live xfail backlog
+python verification/verify_aero_goldens.py     # aero tripwires; --update to re-baseline
+```
+
+Two environments, deliberately. The WSL FoamAgent env runs everything; the Windows python runs the `domain_packs` core alone (no FAISS, seconds not minutes) and is the fast loop. A `src/services` or cockpit change is only proven in WSL.
+
+Suite rules, enforced by `tests/test_suite_integrity.py`:
+
+- `xfail_strict` is on. An xfail is a **backlog entry**, not a pass — fix the defect and the marker fails the build until it is retired. Every `reason` must start with the plan item ID that will flip it.
+- `minimum_collected_tests` in `pyproject.toml` fails a shrinking run. Raise it when you add tests; never lower it to make a run green.
+- Every module-level skip must name a declared environmental reason, so a lost test never looks like a passing one.
+- A golden value changes only through `verify_aero_goldens.py --update`, with a ledger entry naming the physics change that moved it. A test failing on a golden is the tripwire working.
+
 ## Code map
 
 - `src/main.py`: inherited LangGraph workflow.
@@ -36,8 +53,10 @@ python verification/verify_gates.py
 - `src/services/`: inherited CFD services and Astra stage logic.
 - `src/mcp/fastmcp_server.py`: inherited and Astra MCP tools.
 - `domain_packs/bwb/`: BWB schema, assumptions, OpenVSP/VSPAERO, and Gmsh knowledge.
-- `verification/`: golden-path, revision, and adversarial-gate checks.
+- `verification/`: golden-path, revision, adversarial-gate, and aero-golden checks.
+- `tests/`: the pytest suite; `conftest.py` gates the services layer and guards the collection floor.
 - `reports/`: verification results and source accounting.
+- `evaluation/`: the Foam-Agent evaluation study — report, prompts, scripts, extracted metrics and figures. Raw solver output under `evaluation/runs/*/` is regenerable and untracked.
 - `database/faiss/`: prebuilt RAG indices; do not regenerate without a specific reason.
 
 For a new graph stage: service → thin node → required `GraphState` fields → wiring in `src/main.py`. For external stage-level orchestration, expose the service through the MCP server.
@@ -49,6 +68,10 @@ Detailed maps with roles, wiring, and caveats per task: [`docs/agent-guidance/ta
 | Task | Go straight to |
 | --- | --- |
 | Mission intent / requirement parsing | `src/services/intent.py`, `domain_packs/bwb/defaults.py`, `domain_packs/bwb/schema.py` |
+| Brief text / units / requirement rows | `domain_packs/bwb/intake.py` |
+| Inverse sizing, analytic aero, stall caps | `domain_packs/bwb/inverse.py`, `domain_packs/bwb/aero_estimates.py`, `domain_packs/bwb/constants.py` |
+| Concept variants, lenses, ranking | `domain_packs/bwb/variants.py` |
+| Candidate lifecycle (build / promote / restore) | `src/services/candidates.py` |
 | Drone geometry / parametric changes | `domain_packs/bwb/schema.py`, `domain_packs/bwb/vsp_builder.py`, `src/services/geometry.py` |
 | Fast aero (VSPAERO) | `domain_packs/bwb/vsp_aero.py`, `src/services/vspaero.py` |
 | Farfield meshing (Astra, deterministic) | `domain_packs/bwb/gmsh_farfield.py`, `src/services/bwb_mesh.py` |
@@ -59,7 +82,8 @@ Detailed maps with roles, wiring, and caveats per task: [`docs/agent-guidance/ta
 | Review / error-correction loop | `src/services/review.py`, `src/nodes/reviewer_node.py`, `src/router_func.py` |
 | Evaluation / verdict / visualization | `src/services/evaluate.py`, `src/services/visualization.py` |
 | MCP tools | `src/mcp/fastmcp_server.py` |
-| Cockpit UI | `src/cockpit/server.py`, `src/cockpit/static/cockpit.js` |
+| Cockpit UI | `src/cockpit/server.py`, `src/cockpit/static/cockpit.js`, `static/stage1.js` |
+| Planform/station algebra shared with the browser | `domain_packs/bwb/schema.py` and `src/cockpit/static/planform.js` — one copy per language, parity-tested both ways; change both or the parity test fails |
 | Sessions / revisions / rollback | `src/services/design_session.py` |
 | Verification & gates | `verification/`, `reports/` |
 | RAG / FAISS | `src/utils.py`, `database/`, `init_database.py` |
@@ -84,4 +108,6 @@ Detailed maps with roles, wiring, and caveats per task: [`docs/agent-guidance/ta
 
 ## Maintain this file
 
-Keep this file at or below 150 lines. Include only guidance useful to most tasks; move specialized detail into a descriptive linked document. Do not add manual formatting rules—use project formatters and linters. After user approval, keep `CLAUDE.md` and `AGENTS.md` byte-for-byte identical.
+This is the repository's single agent-guidance file. It exists under two names because different tools read different ones: `CLAUDE.md` and `AGENTS.md` are the same file, byte-for-byte, both tracked, and `tests/test_suite_integrity.py::test_agent_guidance_files_are_identical` fails the build if they drift. Edit one and copy it over the other in the same commit. Do not add a second guidance file in a subdirectory.
+
+Keep it at or below 150 lines. Include only guidance useful to most tasks; move specialized detail into a descriptive linked document. Do not add manual formatting rules—use project formatters and linters.

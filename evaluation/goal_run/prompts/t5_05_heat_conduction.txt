@@ -1,0 +1,8 @@
+Perform a 2D transient heat conduction simulation in a solid square plate using the
+laplacianFoam solver. The plate is 1.0 m x 1.0 m with a thickness of 0.01 m in z. Use blockMesh
+with a structured 50x50x1 mesh. The left boundary named "hotWall" has a fixed temperature of
+373 K. The right boundary named "coldWall" has a fixed temperature of 273 K. The top and bottom
+boundaries named "topWall" and "bottomWall" are adiabatic (zero gradient). The front and back
+faces named "frontAndBack" are empty for 2D. The initial internal temperature is 273 K. The
+thermal diffusivity DT is constant at 4e-5 m^2/s. The simulation runs from time 0 to 2000
+seconds with a time step of 10 seconds, and results are written every 500 seconds.

@@ -1,0 +1,12 @@
+Perform a 2D transient two-phase (water-air) dam break simulation using the interFoam solver
+with the VOF method. The domain is a box 0.584 m wide (x) and 0.584 m high (y) with a thickness
+of 0.0146 m in z. Use blockMesh with a structured 46x46x1 mesh. At time 0 a water column
+0.1461 m wide and 0.292 m high sits at rest against the left wall (set the initial alpha.water
+field with setFields); the rest of the domain is air. All four sides — left and right walls
+named "leftWall" and "rightWall", bottom named "lowerWall" — are no-slip walls, the top named
+"atmosphere" is open to the atmosphere (totalPressure / pressureInletOutletVelocity). The front
+and back faces named "frontAndBack" are empty for 2D. Water: density 1000 kg/m^3, kinematic
+viscosity 1e-6 m^2/s. Air: density 1 kg/m^3, kinematic viscosity 1.48e-5 m^2/s. Surface tension
+0.07 N/m. Gravity 9.81 m/s^2 in -y. The simulation runs from time 0 to 1 second with an initial
+time step of 0.001 s and adjustable time stepping (max Courant number 1), writing results every
+0.1 seconds.

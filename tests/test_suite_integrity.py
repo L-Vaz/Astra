@@ -141,6 +141,38 @@ def test_every_js_fixture_is_collected(collect_run):
         f"collected ids with no file: {sorted(collected - on_disk)}")
 
 
+# --- 3b. one agent-guidance file, under two names -----------------------------------
+
+def test_agent_guidance_files_are_identical():
+    """`CLAUDE.md` and `AGENTS.md` are one document read by two different tools.
+
+    The rule to keep them byte-identical was written in the document itself and enforced
+    by nothing; worse, `CLAUDE.md` was gitignored, so a fresh clone had guidance under
+    one name only and any drift was invisible to review. Both are tracked now, and this
+    turns "please keep them in sync" into a failing build.
+    """
+    claude = _REPO_ROOT / "CLAUDE.md"
+    agents = _REPO_ROOT / "AGENTS.md"
+    assert claude.is_file() and agents.is_file(), (
+        "both CLAUDE.md and AGENTS.md must exist at the repository root")
+    if claude.read_bytes() != agents.read_bytes():
+        pytest.fail("CLAUDE.md and AGENTS.md have drifted. They are the same document "
+                    "under two names — edit one and copy it over the other, in the "
+                    "same commit. Do not resolve this by deleting either.")
+
+
+def test_no_second_agent_guidance_file():
+    """Guidance in a subdirectory is guidance nobody at the root will read, and it is
+    how the single file starts to fork. Keep one, at the root."""
+    strays = [p.relative_to(_REPO_ROOT).as_posix()
+              for name in ("CLAUDE.md", "AGENTS.md")
+              for p in _REPO_ROOT.rglob(name)
+              if p.parent != _REPO_ROOT
+              and "build" not in p.parts and ".git" not in p.parts]
+    assert not strays, (
+        f"agent guidance must live only at the repository root; found: {strays}")
+
+
 # --- 4. the xfail backlog cannot drift from the plan --------------------------------
 
 def _xfail_markers():

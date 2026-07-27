@@ -1,0 +1,14 @@
+Simulate incompressible flow over a circular cylinder. Use gmsh to create the computational mesh.
+The computational domain extends from -2.5 to 2.5 in the x-direction, -1 to 1 in the y-direction,
+and 0 to 0.2 in the z-direction. The cylinder is positioned at (-1, 0) with a radius of 0.1 units.
+Use a structured mesh with approximately 20x10 cells in the x-y plane and 1 cell in the z-direction.
+The inlet boundary named "inlet" (left boundary at x = -2.5) has a uniform velocity of 1 m/s in
+the positive x-direction. The right boundary at x=+2.5 is the outlet named "outlet". The top and
+bottom walls named "topWall" and "bottomWall" respectively (y = +1 and y=-1) use slip boundary
+conditions. The cylinder surface named "cylinder" uses a no-slip boundary condition (velocity equal
+to zero at the wall). The front and back faces named "frontAndBack" are located at z = 0 and z = 0.2
+respectively, and are designated as 'empty' for 2D simulation. Use base mesh size of 0.5 on cylinder
+and size of 1.0 elsewhere. The simulation runs from time 0 to 2 seconds with a time step of 0.001
+units, and results are output every 100 time steps. The kinematic viscosity (nu) is set as constant
+with a value of 1e-5 m^2/s. Use pisoFoam solver for incompressible flow. Visualize the magnitude
+of velocity ('U') along the x-y plane.

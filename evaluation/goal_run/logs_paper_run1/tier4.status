@@ -1,0 +1,7 @@
+tier=tier4
+label=tandem wing / external msh / simpleFoam SA (paper B.2)
+started=2026-07-07T19:29:46+01:00
+finished=2026-07-07T19:37:17+01:00
+exit_code=0
+output_dir=/home/lindonlv/foamagent-goal/paper_run1_20260707_192354/tier4
+log_file=/opt/Foam-Eval/goal_run/logs_paper_run1/tier4.log

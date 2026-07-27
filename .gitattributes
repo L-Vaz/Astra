@@ -11,3 +11,9 @@ database/raw/openfoam_commands.txt filter=lfs diff=lfs merge=lfs -text
 database/faiss/**/*.faiss filter=lfs diff=lfs merge=lfs -text
 database/faiss/**/*.pkl filter=lfs diff=lfs merge=lfs -text
 tandem_wing.msh filter=lfs diff=lfs merge=lfs -text
+
+# Executed in WSL/Linux, checked out on Windows with core.autocrlf=true — which would
+# give them CRLF, and bash rejects a script whose shebang line ends in \r. Pin to LF.
+*.sh text eol=lf
+Allrun text eol=lf
+Allrun.* text eol=lf

@@ -1,8 +1,16 @@
 # Project
-CLAUDE.md
+# CLAUDE.md is tracked, not ignored: it is the repo's single agent-guidance file and a
+# fresh clone needs it. tests/test_suite_integrity.py keeps it byte-identical to AGENTS.md.
 .claude/settings.local.json
 .claude/memory/
-runs/
+# Anchored: this is the design-session store at the repo root. Unanchored it also
+# swallowed evaluation/runs/, whose case setups and reports belong in git —
+# evaluation/.gitignore excludes only the regenerable solver output there.
+/runs/
+# Stray OpenFOAM case output written inside the package tree — the very path bug that
+# evaluation/runs/"runner path regression" documents. Not source; safe to delete. It was
+# hidden by the unanchored rule above, which is part of why it survived.
+/src/runs/
 output/
 benchmark/
 database/foamgpt/data

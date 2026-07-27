@@ -1,0 +1,8 @@
+Perform a 1D compressible shock tube (Sod problem) simulation using the rhoCentralFoam solver.
+The tube extends from x = -5 m to x = +5 m with a 0.1 m x 0.1 m cross-section. Use blockMesh
+with a structured 1000x1x1 mesh. At time 0 the diaphragm at x=0 separates two air states at
+rest (set with setFields): left side pressure 100000 Pa and temperature 348.4 K, right side
+pressure 10000 Pa and temperature 278.7 K. The two tube ends named "leftEnd" and "rightEnd"
+use zero-gradient conditions; all four lateral faces named "sides" are empty. The gas is air
+(perfect gas). The simulation runs from time 0 to 0.007 seconds with a time step of 1e-6
+seconds, and results are written every 0.001 seconds.
