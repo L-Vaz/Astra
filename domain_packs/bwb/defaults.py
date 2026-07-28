@@ -8,7 +8,8 @@ import math
 from typing import List, Optional
 
 from .atmosphere import atmosphere_at
-from .schema import BWBParams, MissionDerived, MissionSpec
+from .schema import (DEFAULT_MID_AIRFOIL, DEFAULT_ROOT_AIRFOIL,
+                     DEFAULT_TIP_AIRFOIL, BWBParams, MissionDerived, MissionSpec)
 
 # Typical wing loading for small fixed-wing UAVs by launch method, kg/m^2
 WING_LOADING = {"hand": 7.0, "catapult": 10.0, "runway": 13.0}
@@ -98,8 +99,11 @@ def _planform_from(span: float, s_ref: float,
         taper_outer=taper_outer,
         sweep_inner_deg=38.0,
         sweep_outer_deg=22.0,
-        root_thickness_pct=14.0,
-        tip_thickness_pct=9.0,
+        # S1-C: the section owns thickness; these give 14.07 / 12.09 / 9.82 %,
+        # the closest available to the 14 / 9 this used to hard-code.
+        root_airfoil=DEFAULT_ROOT_AIRFOIL,
+        mid_airfoil=DEFAULT_MID_AIRFOIL,
+        tip_airfoil=DEFAULT_TIP_AIRFOIL,
         root_twist_deg=2.0,
         tip_twist_deg=-3.0,
         dihedral_deg=2.0,

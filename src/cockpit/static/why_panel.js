@@ -19,6 +19,11 @@ const METRIC_ROWS = [
   { id: 'cl_star',          label: 'Best-L/D CL*',     get: e => e.clStar,      dp: 3 },
   { id: 'cl_max_3d',        label: 'CLmax (3D)',       get: e => e.clMax3d,     dp: 2 },
   { id: 'v_stall_ms',       label: 'Stall speed',      get: e => e.vStall,      dp: 1, unit: ' m/s' },
+  /* S1-C2: WHERE the wing stalls, as a fraction of semi-span. The single most
+     consequential new number in the panel — outboard-first stall on a swept tailless
+     wing moves the centre of lift forward and pitches the aircraft up, deeper in,
+     with no tail to recover. 0 = root, 1 = tip. */
+  { id: 'stall_eta',        label: 'Stall station η',  get: e => e.stallEta,    dp: 3 },
   { id: 'oswald_e',         label: 'Oswald e',         get: e => e.e,           dp: 3 },
   { id: 'x_np_m',           label: 'Neutral point x',  get: e => e.xNp,         dp: 3, unit: ' m' },
   { id: 'wing_loading_kgm2', label: 'Wing loading',    get: e => e.wingLoading, dp: 1, unit: ' kg/m²' },
@@ -114,10 +119,17 @@ export function refresh() {
   for (const m of METRIC_ROWS) {
     const row = document.getElementById(`why-${m.id}`);
     const v = m.get(est);
-    row.querySelector('.wval').textContent = v.toFixed(m.dp) + (m.unit || '');
-    const d = base ? v - m.get(base) : 0;
+    /* S1-C2: every stall quantity is null until the section Reynolds curves arrive
+       from the server. Show a dash. The previous code called v.toFixed() straight
+       out, which would throw and abort the whole panel render mid-loop — leaving the
+       rows BELOW the stall rows displaying the previous geometry's numbers, which is
+       the worst possible failure for a live readout. */
+    const baseV = base ? m.get(base) : null;
+    row.querySelector('.wval').textContent =
+      v == null ? '—' : v.toFixed(m.dp) + (m.unit || '');
+    const d = (v != null && baseV != null) ? v - baseV : 0;
     row.querySelector('.wdelta').textContent =
-      base && Math.abs(d) > Math.abs(m.get(base)) * 1e-4 + 1e-9
+      (v != null && baseV != null && Math.abs(d) > Math.abs(baseV) * 1e-4 + 1e-9)
         ? `${d > 0 ? '+' : ''}${d.toFixed(m.dp)}` : '';
   }
   if (expanded.size) scheduleExplain();

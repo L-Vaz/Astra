@@ -18,12 +18,12 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .aero_estimates import (CL_MAX_2D, CL_MAX_3D_FACTOR, INTERFERENCE_MARGIN,
+from .aero_estimates import (INTERFERENCE_MARGIN,
                              LAMINAR_FRACTION, LAUNCH_VSTALL_MAX,
                              STATIC_MARGIN_TARGET, effective_c4_sweep_deg,
                              effective_le_sweep_deg, form_factor, mean_tc,
                              neutral_point_m, oswald_efficiency,
-                             skin_friction_coeff)
+                             skin_friction_coeff, stall_solution)
 from .atmosphere import AtmosphereState
 from .schema import BWBParams
 
@@ -124,7 +124,11 @@ def derive_graph(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
             ("sweep_inner_deg", "Inner LE sweep", "Λ_i", "deg"),
             ("sweep_outer_deg", "Outer LE sweep", "Λ_o", "deg"),
             ("root_thickness_pct", "Root thickness", "t/c_r", "%"),
-            ("tip_thickness_pct", "Tip thickness", "t/c_t", "%")]:
+            ("tip_thickness_pct", "Tip thickness", "t/c_t", "%"),
+            # S1-C2: twist is now a declared input because CLmax depends on it —
+            # washout is what moves the stall station inboard.
+            ("root_twist_deg", "Root incidence", "α_r", "deg"),
+            ("tip_twist_deg", "Tip twist (washout)", "α_t", "deg")]:
         inp(pid, label, sym, float(getattr(params, pid)), unit)
 
     # ---------------- constants ---------------------------------------------
@@ -132,10 +136,9 @@ def derive_graph(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
           "engineering default (LAMINAR_FRACTION = 0.30): smooth small-UAV wing at Re ~ 5e5–1e6")
     const("interference_margin", "Interference margin", "k_int", INTERFERENCE_MARGIN,
           "engineering default (+10%): excrescences, gaps, antennas")
-    const("cl_max_2d", "Section CLmax", "Cl_max", CL_MAX_2D,
-          "engineering default: NACA 4-series section at Re ~ 7e5")
-    const("cl_max_3d_factor", "Finite-wing knockdown", "k_3D", CL_MAX_3D_FACTOR,
-          "Raymer: CLmax ≈ 0.9·Clmax·cos(Λc/4)")
+    # S1-C2: `cl_max_2d` and `cl_max_3d_factor` are gone as constants. CLmax is no
+    # longer a constant times a knockdown — it is solved from the spanwise load, so it
+    # has no constant to declare. Its node cites the stall station instead.
     const("static_margin_target", "Static-margin target", "SM", STATIC_MARGIN_TARGET,
           "engineering default: 8% MAC for a tailless BWB")
 
@@ -309,14 +312,24 @@ def derive_graph(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         children=["sweep_inner_deg", "sweep_outer_deg", "root_chord_m",
                   "mid_chord_frac", "taper_outer"],
         source="quarter-chord sweep geometry (exact)"))
-    clmax = CL_MAX_2D * CL_MAX_3D_FACTOR * math.cos(math.radians(c4_sweep))
+    # S1-C2: solved, not assumed. `stall_solution` iterates CLmax and the stall speed
+    # together, because the Reynolds number that sets CLmax depends on the speed at
+    # which the wing actually stalls.
+    v_stall, clmax, stall = stall_solution(params, atmosphere, weight_n)
     add(DerivationNode(
         id="cl_max_3d", label="Max lift coefficient (3D)", symbol="CLmax", value=clmax,
-        formula="CLmax = Cl_max · k_3D · cos(Λ_c/4)",
-        substitution=f"{CL_MAX_2D}·{CL_MAX_3D_FACTOR}·cos({_g(c4_sweep, 3)}°) = {_g(clmax, 3)}",
-        children=["cl_max_2d", "cl_max_3d_factor", "c4_sweep_eff"],
-        source="Raymer finite-wing CLmax knockdown"))
-    v_stall = math.sqrt(2.0 * weight_n / (rho_kgm3 * s * clmax))
+        formula="CLmax = min over span of [ (cl_max(y) − cl_basic(y)) / cl_add(y) ] "
+                "· cos(Λ_c/4)",
+        substitution=(
+            f"stall begins at {stall.stall_eta:.0%} semi-span"
+            + (" (OUTBOARD — pitches a swept tailless wing up into the stall)"
+               if stall.stall_is_outboard else " (inboard)")
+            + f"; CLmax = {_g(clmax, 3)}"),
+        # Sections are string inputs, not numeric nodes, so they cannot be children of
+        # the graph — the twist and sweep that shape the span load can.
+        children=["c4_sweep_eff", "root_twist_deg", "tip_twist_deg", "s_ref"],
+        source="Schrenk, NACA TM-948 (1940), spanwise lift distribution — "
+               "cos(Λ_c/4) is a separate patch; TM-948 has no sweep term"))
     stall_children = ["weight_n", "rho", "s_ref", "cl_max_3d"]
     add(DerivationNode(
         id="v_stall_ms", label="Stall speed", symbol="V_stall", value=v_stall, unit="m/s",

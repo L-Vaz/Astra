@@ -36,7 +36,11 @@ def test_sign_checks(params):
     assert _row(rows, "sweep_outer_deg").deltas["cl_max_3d"] < 0  # sweep up -> CLmax down
     assert _row(rows, "sweep_outer_deg").deltas["v_stall_ms"] > 0
     assert _row(rows, "sweep_outer_deg").deltas["x_np_m"] > 0     # sweep up -> np aft
-    assert _row(rows, "root_thickness_pct").deltas["cd0"] > 0     # thicker -> more drag
+    # S1-C: the "thicker -> more drag" row is gone. Thickness is set by the section,
+    # so there is no continuous knob to perturb — nudging t/c by a notch would mean
+    # silently swapping the aerofoil. Section choice is a discrete variable and is
+    # not part of the sensitivity table.
+    assert "root_thickness_pct" not in {r.param for r in rows}
     assert _row(rows, "root_chord_m").deltas["s_ref_m2"] > 0
 
 

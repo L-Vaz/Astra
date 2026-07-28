@@ -18,7 +18,7 @@ def test_parse_extracts_stated_fields_as_you_said():
     ik = I.parse_brief(BRIEF)
     assert _row(ik, "mission_type").value == "Surveillance"
     for rid, num in (("payload", 0.18), ("altitude", 100.0),
-                     ("span_max", 2.0), ("endurance", 45.0)):
+                     ("span_max", 2.0)):
         row = _row(ik, rid)
         assert row.origin == "you_said" and row.status == "fixed"
         assert row.number == pytest.approx(num)
@@ -96,13 +96,37 @@ def test_derived_rows_reject_edits():
     assert _row(ik, "wing_loading").value == before
 
 
-def test_custom_row_lands_in_vehicle_tier():
+def test_an_unknown_row_id_is_refused_by_name():
+    """S1-B: replaces test_custom_row_lands_in_vehicle_tier. That row landed in the
+    vehicle tier and moved nothing; the requirement set is now closed."""
     ik = I.derive(I.parse_brief(BRIEF))
-    ik = I.derive(I.apply_edits(ik, [{"id": "custom_max_chord_1",
-                                      "label": "Max chord",
-                                      "value": "≤ 0.35 m", "status": "fixed"}]))
-    row = _row(ik, "custom_max_chord_1")
-    assert row.tier == "vehicle" and row.custom and row.number == pytest.approx(0.35)
+    before = [r.id for r in ik.rows]
+    with pytest.raises(ValueError) as exc:
+        I.apply_edits(ik, [{"id": "custom_max_chord_1", "label": "Max chord",
+                            "value": "≤ 0.35 m", "status": "fixed"}])
+    assert "custom_max_chord_1" in str(exc.value)
+    assert "closed set" in str(exc.value)
+    assert [r.id for r in ik.rows] == before, "a refused edit must not mutate the intake"
+
+
+def test_an_unknown_id_without_a_label_is_also_refused():
+    """The old code only created a row when a `label` was supplied, so an unknown id
+    without one was dropped in silence — accepted with a 200 and no effect."""
+    with pytest.raises(ValueError, match="closed set"):
+        I.apply_edits(I.default_intake(), [{"id": "endurance", "value": "45 min"}])
+
+
+def test_every_declared_row_id_is_editable():
+    """The closed set must be the set that actually exists: every id known_row_ids()
+    reports must be accepted by apply_edits, or the refusal message is a lie.
+
+    This is the test that caught known_row_ids() being built from default_intake()
+    alone, which omitted the seven rows derive() appends and made an edit to
+    `cruise_speed` raise."""
+    ik = I.derive(I.default_intake())
+    assert len(I.known_row_ids()) == len(ik.rows)
+    for rid in I.known_row_ids():
+        I.apply_edits(ik, [{"id": rid, "value": "1"}])   # must not raise
 
 
 def test_lock_flag_persists():
@@ -136,16 +160,12 @@ def _intake_with_all_locks(status: str) -> I.Intake:
     return ik
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S3-E1: lock state is never read outside display code, so "
-                          "'fixed' and 'variable' produce identical derived values. "
-                          "Either make locks constrain the solve or stop presenting "
-                          "them as constraints.")
 def test_locking_a_row_constrains_the_solve():
     """Locking every editable row must change the outcome versus freeing every row.
 
     This is the contract the UI advertises: a lock means 'the solver may not move
-    this'. Measured today: the two signatures are byte-identical.
+    this'. It was an xfail from S3-E1 until S1-F made it true — measured, the two
+    signatures were byte-identical, and are now 7.064 vs 3.519 kg/m^2 wing loading.
     """
     free = I.derive(_intake_with_all_locks("variable"))
     fixed = I.derive(_intake_with_all_locks("fixed"))

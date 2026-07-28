@@ -23,13 +23,20 @@ from typing import Dict, List, Optional
 from annotated_types import Ge, Le
 from pydantic import BaseModel, Field, model_validator
 
-from .schema import BWBParams
+from .schema import (DEFAULT_MID_AIRFOIL, DEFAULT_ROOT_AIRFOIL,
+                     DEFAULT_TIP_AIRFOIL, BWBParams)
 
-# BWBParams fields that are numeric design variables (all of them, in declared order).
+# BWBParams fields that are CONTINUOUS numeric design variables, in declared order.
+#
+# S1-C: root_thickness_pct and tip_thickness_pct left this list. They are no longer
+# inputs — thickness is read from the chosen section, so it cannot be perturbed by a
+# fraction of a percent without changing which aerofoil the aircraft has. Section
+# choice is a DISCRETE variable and does not belong in a continuous design space;
+# an optimiser that wants to explore sections has to enumerate them.
 DESIGN_FIELDS: List[str] = [
     "span_m", "root_chord_m", "centre_body_fraction", "mid_chord_frac",
-    "taper_outer", "sweep_inner_deg", "sweep_outer_deg", "root_thickness_pct",
-    "tip_thickness_pct", "root_twist_deg", "tip_twist_deg", "dihedral_deg",
+    "taper_outer", "sweep_inner_deg", "sweep_outer_deg",
+    "root_twist_deg", "tip_twist_deg", "dihedral_deg",
 ]
 
 
@@ -68,6 +75,18 @@ class ParamBound(BaseModel):
 class DesignSpace(BaseModel):
     bounds: Dict[str, ParamBound] = Field(
         description="per-BWBParams-field search bounds, keyed by field name")
+    # S1-C: the sections are carried, not searched. They are discrete choices, so
+    # they cannot be a continuous dimension — but they must be REMEMBERED, or
+    # to_params() would rebuild every candidate with the pack defaults and silently
+    # discard the aerofoils the design was actually using.
+    root_airfoil: str = DEFAULT_ROOT_AIRFOIL
+    mid_airfoil: str = DEFAULT_MID_AIRFOIL
+    tip_airfoil: str = DEFAULT_TIP_AIRFOIL
+
+    def _sections(self) -> Dict[str, str]:
+        return {"root_airfoil": self.root_airfoil,
+                "mid_airfoil": self.mid_airfoil,
+                "tip_airfoil": self.tip_airfoil}
 
     @model_validator(mode="after")
     def _known_fields(self) -> "DesignSpace":
@@ -103,7 +122,8 @@ class DesignSpace(BaseModel):
             if is_frozen:
                 lo = hi = nominal
             bounds[name] = ParamBound(lo=lo, nominal=nominal, hi=hi, frozen=is_frozen)
-        return cls(bounds=bounds)
+        return cls(bounds=bounds, root_airfoil=base.root_airfoil,
+                   mid_airfoil=base.mid_airfoil, tip_airfoil=base.tip_airfoil)
 
     def freeze(self, *names: str) -> "DesignSpace":
         """Return a copy with the named fields frozen at their nominal."""
@@ -128,7 +148,8 @@ class DesignSpace(BaseModel):
         return [(self.bounds[n].lo, self.bounds[n].hi) for n in self.free_names()]
 
     def nominal(self) -> BWBParams:
-        return BWBParams(**{n: self.bounds[n].nominal for n in DESIGN_FIELDS})
+        return BWBParams(**{n: self.bounds[n].nominal for n in DESIGN_FIELDS},
+                         **self._sections())
 
     def vector_to_params(self, x) -> BWBParams:
         """Map a free-dim vector back to a full BWBParams (frozen -> nominal).
@@ -140,4 +161,5 @@ class DesignSpace(BaseModel):
         values = {n: self.bounds[n].nominal for n in DESIGN_FIELDS}
         for name, xi in zip(free, x):
             values[name] = float(xi)
+        values.update(self._sections())
         return BWBParams(**values)

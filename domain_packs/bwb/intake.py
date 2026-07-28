@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from .aero_estimates import LAUNCH_VSTALL_MAX
 from .atmosphere import atmosphere_at
 from .defaults import PAYLOAD_FRACTION
-from .inverse import BINDING_LABELS, solve_requirements
+from .inverse import BINDING_LABELS, LockedValues, solve_requirements
 from .requirements import DesignRequirements
 
 Tier = Literal["mission", "vehicle", "derived"]
@@ -54,15 +54,18 @@ class IntakeRow(BaseModel):
     status: Status = Field(
         default="variable",
         description=(
-            "Lock state — DISPLAY ONLY (S3-E1). The flag records your intent for a "
-            "later stage and is persisted, but nothing reads it: the solver produces "
-            "byte-identical derived values with every row 'fixed' and with every row "
-            "'variable'. Making locks constrain the solve is S7-CAP-3."))
+            "Lock state. For the rows in LOCKABLE_ROW_IDS — max span, wing area and "
+            "MTOW — 'fixed' CONSTRAINS THE SOLVE (S1-F): the solver must deliver that "
+            "exact value or return a CapViolation saying by how much it could not. "
+            "For every other row the flag still only records intent for a later stage; "
+            "`lockable` says which is which, so the UI need not hard-code the list. "
+            "Until S1-F this was display-only on every row (S3-E1 / S7-CAP-3)."))
     origin: Origin = "assumed"
     source: str = ""       # citation for assumed defaults / derived values
     info: str = ""         # definition + formula for the info panel
     drivers: List[Driver] = Field(default_factory=list)  # derived rows only
-    custom: bool = False   # user-added row (recorded; mapped when recognised)
+    # S1-B: the `custom` flag went with user-added rows. The intake is a closed set, so
+    # every row is one this pack declares and nothing can be flagged as an addition.
     used_value: str = ""
     """What the solver actually used, when that differs from `value` (S3-D2).
 
@@ -75,6 +78,13 @@ class IntakeRow(BaseModel):
     Measured, not asserted: six of the twelve editable rows change nothing at all, and
     `test_bwb_disclosure.py` perturbs every row and fails if this flag disagrees with
     what actually moved."""
+    lockable: bool = False
+    """Whether setting `status` to 'fixed' on this row actually constrains the solve.
+
+    Three rows do (S1-F): `span_max`, `s_ref`, `mtow_cap`. They are the ones that pin a
+    number the sizing solve would otherwise choose. `cruise_speed` and `ld_est` are
+    deliberately NOT lockable — they are outcomes, and a lock on an outcome is a
+    requirement wearing the wrong hat."""
     unparsed: bool = False
     """The text in `value` could not be read as a number for this row (S2-D1f).
 
@@ -140,15 +150,12 @@ class Intake(BaseModel):
 # ---------------------------------------------------------------------------
 
 _INFO = {
-    "mission_type": "Sets every default downstream: surveillance favours endurance "
+    "mission_type": "Sets every default downstream: surveillance favours efficiency "
                     "and stability; racing favours speed.",
-    "payload": "Everything carried. Mass adds to MTOW; power draw shrinks endurance. "
-               "Each item needs mass + watts.",
+    "payload": "Everything carried. Mass adds to MTOW, which sets the wing area the "
+               "stall floor demands. Each item needs a mass.",
     "altitude": "Cruise height. Sets air density rho (ISA) used in every lift and "
                 "drag equation.",
-    "endurance": "Time aloft — recorded goal only for now: propulsion and energy "
-                 "modelling are outside the aero-only scope, so this never resizes "
-                 "the wing. It is kept on the record for the propulsion stage.",
     "launch": "Hand launch caps stall speed near "
               f"{LAUNCH_VSTALL_MAX['hand']} m/s — you must throw it flying. "
               "Catapult or runway relaxes the cap.",
@@ -295,9 +302,6 @@ def default_intake() -> Intake:
         IntakeRow(id="altitude", tier="mission", label="Operating altitude",
                   value="100 m AMSL", number=100.0, unit="m", origin="assumed",
                   source="small-UAV typical", info=_INFO["altitude"]),
-        IntakeRow(id="endurance", tier="mission", label="Endurance goal",
-                  value="not set", origin="assumed",
-                  source="recorded only — aero scope", info=_INFO["endurance"]),
         IntakeRow(id="launch", tier="mission", label="Launch and recovery",
                   value="hand", origin="assumed", source="most common for this size",
                   info=_INFO["launch"]),
@@ -326,7 +330,7 @@ def default_intake() -> Intake:
                   value="≤ 8 m/s gusts", origin="assumed",
                   source="open-field typical", info=_INFO["wind"]),
     ]
-    return Intake(brief="", rows=rows)
+    return Intake(brief="", rows=_mark_lockable(rows))
 
 
 # ---------------------------------------------------------------------------
@@ -371,11 +375,12 @@ _UNITS: Dict[str, Dict[str, float]] = {
               "knot": 0.5144444444444445, "knots": 0.5144444444444445,
               "km/h": 1.0 / 3.6, "kmh": 1.0 / 3.6, "kph": 1.0 / 3.6,
               "mph": 0.44704},
-    "time": {"min": 1.0, "mins": 1.0, "minute": 1.0, "minutes": 1.0,
-             "h": 60.0, "hr": 60.0, "hrs": 60.0, "hour": 60.0, "hours": 60.0},
 }
+# S1-A: the "time" dimension went with the endurance row. `endurance` was its only
+# consumer, so minutes and hours are no longer units this pack recognises anywhere —
+# "45 min" in a brief now yields a bare number that no row claims, which is the point.
 
-CANONICAL_UNIT = {"length": "m", "mass": "kg", "speed": "m/s", "time": "min"}
+CANONICAL_UNIT = {"length": "m", "mass": "kg", "speed": "m/s"}
 
 # Which dimension each row's number is in. Rows absent from this table are text rows
 # (mission type, launch method, structure...): a number in them is recorded if one
@@ -387,7 +392,6 @@ ROW_DIMENSION = {
     "altitude": "length",
     "v_stall_max": "speed",
     "cruise_speed": "speed",
-    "endurance": "time",
 }
 
 # Longest-first so "m/s" wins over "m" and "mm" over "m".
@@ -503,25 +507,10 @@ def _set(row: IntakeRow, value: str, number: Optional[float] = None) -> None:
     row.source = "your brief"
 
 
-ENDURANCE_MIN_MIN = 1.0
-ENDURANCE_MIN_MAX = 600.0
-"""MissionSpec.endurance_min is `gt=0, le=600` (schema.py). Endurance drives no
-computation at this tier, so a brief outside that range must be recorded and capped,
-never rejected: "loiter for 11 hours" parsed 200 OK and then made every subsequent
-generate return 500, forever, with no indication which row was at fault (S2-B1)."""
-
-
-def clamp_endurance(value: float) -> tuple:
-    """(value, source) — clamp into the schema range and say so in the row's source."""
-    if value > ENDURANCE_MIN_MAX:
-        return ENDURANCE_MIN_MAX, (
-            f"your brief (capped at {ENDURANCE_MIN_MAX:g} min — endurance is "
-            f"recorded only)")
-    if value < ENDURANCE_MIN_MIN:
-        return ENDURANCE_MIN_MIN, (
-            f"your brief (raised to {ENDURANCE_MIN_MIN:g} min — endurance is "
-            f"recorded only)")
-    return value, "your brief — recorded only (aero scope)"
+# S1-A: ENDURANCE_MIN_MIN / ENDURANCE_MIN_MAX / clamp_endurance were removed with the
+# endurance row. They existed to keep "loiter for 11 hours" from making every later
+# generate return 500 (S2-B1) — a clamp guarding a value nothing computed with. With
+# the row gone there is no value to clamp and no failure mode to guard.
 
 
 # A keyword and its number belong to the same clause. The gap between them may not
@@ -540,8 +529,6 @@ _BRIEF_ROWS = [
     ("altitude", r"altitude|amsl|agl|fly at|flying at|cruise at|at", "length",
      "{v:g} m AMSL"),
     ("v_stall_max", r"stall", "speed", "≤ {v:g} m/s"),
-    ("endurance", r"endurance|loiter|aloft|flight time|fly for", "time",
-     "≥ {v:g} min"),
 ]
 
 # Most specific launch family first, so a brief naming two of them resolves the same
@@ -611,10 +598,6 @@ def parse_brief(text: str) -> Intake:
 
     for rid, keywords, dimension, display in _BRIEF_ROWS:
         matches = _brief_matches(t, keywords, dimension)
-        if not matches and rid == "endurance":
-            # Time units name their own row: nothing else in a drone brief is measured
-            # in minutes or hours, so "30 minutes" needs no keyword.
-            matches = _brief_matches(t, r"", "time")
         if not matches:
             continue
         value = matches[0][1]
@@ -630,12 +613,7 @@ def parse_brief(text: str) -> Intake:
                 message=(f"{rows[rid].label}: the brief gives "
                          f"{', '.join(f'{v:g} {unit}' for v in distinct)} — used "
                          f"{value:g} {unit} (the first one)")))
-        if rid == "endurance":
-            value, note = clamp_endurance(value)
-            _set(rows[rid], display.format(v=value), value)
-            rows[rid].source = note
-        else:
-            _set(rows[rid], display.format(v=value), value)
+        _set(rows[rid], display.format(v=value), value)
 
     matched_launches = [name for name, pattern in _LAUNCH_FAMILIES
                         if re.search(pattern, t)]
@@ -706,13 +684,31 @@ def merge_brief(current: Intake, text: str) -> Intake:
 # edits — apply a client payload back onto a validated Intake
 # ---------------------------------------------------------------------------
 
-MAX_ROWS = 64
-"""Upper bound on rows in one intake (S1-A3).
+# S1-B: MAX_ROWS = 64 was removed. It bounded a runaway client because every unknown
+# edit id became a new row, so an unbounded row count was unbounded disk (S1-A3: 500
+# edits in one call produced a 519-row intake). `apply_edits` now refuses unknown ids
+# outright, so the row list cannot grow at all and the cap became unreachable. The
+# attack is closed at its source rather than bounded downstream.
 
-Every unknown edit id becomes a new custom row and every save writes a new immutable
-version, so an unbounded row count is unbounded disk: 500 edits in one call produced a
-519-row intake. The default list is 19 rows, so 64 leaves room for a real user's
-additions while keeping a runaway client bounded."""
+
+_KNOWN_ROW_IDS: Optional[tuple] = None
+
+
+def known_row_ids() -> tuple:
+    """The closed set of requirement ids Stage 1 accepts.
+
+    Both halves matter: `default_intake()` supplies the 11 input rows, and `derive()`
+    appends the 7 derived ones (wing_loading, s_ref, cruise_speed, cruise_cl, clmax,
+    static_margin, ld_est). Building this from `default_intake()` alone made
+    `apply_edits` refuse a legitimate edit to `cruise_speed`, which the disclosure
+    suite caught immediately.
+
+    Computed from the pack itself so it cannot drift from the rows that actually exist.
+    Cached because `derive()` runs the sizing solve."""
+    global _KNOWN_ROW_IDS
+    if _KNOWN_ROW_IDS is None:
+        _KNOWN_ROW_IDS = tuple(r.id for r in derive(default_intake()).rows)
+    return _KNOWN_ROW_IDS
 
 
 def _checked_scalar(rid: str, value: Any) -> Any:
@@ -752,7 +748,9 @@ def _set_row_value(row: IntakeRow, text: str, origin_when_assumed: str,
 def _restore_default(intake: Intake, row: IntakeRow) -> None:
     """`value: null` means 'clear this row', i.e. go back to the assumed default."""
     default = next((r for r in default_intake().rows if r.id == row.id), None)
-    if default is None:                       # a custom row: drop it entirely
+    if default is None:
+        # No default to restore, so the row is not one this pack declares — it can only
+        # have come from an intake stored before S1-B closed the set. Drop it.
         intake.rows = [r for r in intake.rows if r.id != row.id]
         return
     for field in ("value", "number", "unit", "origin", "source", "unparsed",
@@ -761,13 +759,20 @@ def _restore_default(intake: Intake, row: IntakeRow) -> None:
 
 
 def apply_edits(current: Intake, edits: List[Dict[str, Any]]) -> Intake:
-    """Merge client row edits. Value changes on assumed rows flip origin to
-    'edited'. Derived rows never accept edits. Unknown ids become custom
-    vehicle rows (recorded; the solver maps recognised ids only).
+    """Merge client row edits onto a CLOSED set of requirements (S1-B).
 
-    Raises ValueError when a request would push the intake past MAX_ROWS, or when a
-    value is not text or a number; edits to EXISTING rows are always allowed, so a
-    full intake stays editable."""
+    Value changes on assumed rows flip origin to 'edited'. Derived rows never accept
+    edits. An id this pack does not declare is REFUSED by name — it does not become a
+    row.
+
+    Unknown ids used to be accepted as "custom" vehicle rows. The UI offered them as
+    "+ Add constraint — max chord, materials, anything", and the row's own info text
+    then admitted it was "recorded on this list only ... does not constrain the
+    solver". Measured: adding one changed none of the derived values. Refusing the id
+    is the honest version of a row that does nothing.
+
+    Raises ValueError for an unknown id, or a value that is not text or a number.
+    Edits to declared rows are always allowed."""
     rows = {r.id: r for r in current.rows}
     for e in edits:
         rid = str(e.get("id", ""))
@@ -785,34 +790,35 @@ def apply_edits(current: Intake, edits: List[Dict[str, Any]]) -> Intake:
                                    source_when_assumed="your edit")
             if e.get("status") in ("fixed", "variable"):
                 row.status = e["status"]
-        elif rid and e.get("label"):
-            if "value" in e and e["value"] is not None:
-                _checked_scalar(rid, e["value"])
-            if len(current.rows) >= MAX_ROWS:
-                raise ValueError(
-                    f"intake already has {len(current.rows)} rows (limit "
-                    f"{MAX_ROWS}); custom row '{rid}' was not added. Remove a custom "
-                    f"row first.")
-            custom = IntakeRow(
-                id=rid, tier="vehicle", label=str(e["label"]), value="",
-                status="fixed" if e.get("status") != "variable" else "variable",
-                origin="edited", source="your addition", custom=True,
-                # The old text promised this row was "passed to Stage 2 as a
-                # constraint when recognised". No custom row id is recognised
-                # anywhere, so the promise was empty (S3-E3).
-                info=_INFO.get(rid, "Custom requirement — recorded on this list only. "
-                                    "It is not evaluated at this tier and does not "
-                                    "constrain the solver."))
-            _set_row_value(custom, str(e.get("value", "")),
-                           origin_when_assumed="edited",
-                           source_when_assumed="your addition")
-            current.rows.append(custom)
+        elif rid in known_row_ids():
+            # Declared, but not on THIS intake yet — a derived row that `derive()` has
+            # not appended. There is nothing to edit (derived rows never accept edits,
+            # see the `status == "derived"` branch above), so this is a no-op, not a
+            # refusal. Keying the refusal on `current.rows` instead of the declared set
+            # is exactly the bug the disclosure suite caught here.
+            continue
+        elif rid:
+            # Refused, not ignored. A silently dropped edit is the failure mode this
+            # pack has spent several stages removing: the user sees their requirement
+            # accepted and no number moves.
+            known = known_row_ids()
+            raise ValueError(
+                f"'{rid}' is not a requirement Stage 1 has. The intake is a closed set "
+                f"of {len(known)} rows and none can be added (S1-B). Known ids: "
+                f"{', '.join(sorted(known))}")
     return current
 
 
 # ---------------------------------------------------------------------------
 # derive — compute the derived tier + feasibility from the editable tiers
 # ---------------------------------------------------------------------------
+
+def _mark_lockable(rows: List[IntakeRow]) -> List[IntakeRow]:
+    """Set `lockable` from the one declared list, so the UI never hard-codes it."""
+    for r in rows:
+        r.lockable = r.id in LOCKABLE_ROW_IDS
+    return rows
+
 
 def _row(intake: Intake, rid: str) -> Optional[IntakeRow]:
     return next((r for r in intake.rows if r.id == rid), None)
@@ -832,8 +838,6 @@ ROW_LIMITS = {
     "altitude":     (0.0, 4000.0, "clamp", "the pack's ISA table (0-4000 m)"),
     "v_stall_max":  (5.0, 20.0, "clamp", "DesignRequirements stall range"),
     "span_max":     (0.8, 3.0, "clamp", "BWBParams span range"),
-    "endurance":    (ENDURANCE_MIN_MIN, ENDURANCE_MIN_MAX, "clamp",
-                     "MissionSpec endurance range"),
     "cruise_speed": (8.0, 60.0, "clamp", "MissionSpec cruise-speed range"),
 }
 
@@ -960,6 +964,33 @@ def refresh_disclosure(intake: Intake) -> List[IntakeWarning]:
     return substitutions
 
 
+LOCKABLE_ROW_IDS = ("span_max", "s_ref", "mtow_cap")
+"""The rows whose 'fixed' status constrains the solve (S1-F).
+
+Chosen because each pins a number the sizing solve would otherwise choose for you: the
+span you can transport, the wing you have already built, the mass you must not exceed.
+`cruise_speed` and `ld_est` are excluded on purpose — they are OUTCOMES of the sizing,
+and locking an outcome is a requirement in disguise, which the requirements panel
+already expresses properly."""
+
+
+def to_locked(intake: Intake) -> LockedValues:
+    """Read the lock toggles into the solver's constraint object (S1-F).
+
+    A row only locks when it is BOTH marked fixed and carries a usable number. A lock
+    with nothing to lock to is not an error and not a constraint — it is a toggle the
+    operator flipped before typing a value."""
+    def pinned(rid: str):
+        row = _row(intake, rid)
+        if row is None or row.status != "fixed":
+            return None
+        n = row.number
+        return n if (n is not None and n > 0) else None
+
+    return LockedValues(span_m=pinned("span_max"), s_ref_m2=pinned("s_ref"),
+                        mtow_kg=pinned("mtow_cap"))
+
+
 def to_requirements(intake: Intake) -> DesignRequirements:
     """Map editable rows onto DesignRequirements. Cruise speed starts at a
     neutral guess — derive() then iterates it to the best-L/D speed."""
@@ -982,8 +1013,8 @@ def to_requirements(intake: Intake) -> DesignRequirements:
 # ambiguous brief, an overridden edit) and must survive.
 _RECOMPUTED_KINDS = {"clamped", "rejected", "unparsed"}
 
-# The six editable rows that measurably move a derived number. The other six
-# (mission_type, endurance, regulatory, structure, airfoil, wind) and every custom row
+# The six editable rows that measurably move a derived number. The other five
+# (mission_type, regulatory, structure, airfoil, wind)
 # change nothing at all — verified by perturbing each row and comparing all seven
 # derived values (S3-E2/E3). `test_bwb_disclosure.py` re-measures this on every run, so
 # the day one of them starts mattering the flag cannot stay wrong.
@@ -1001,16 +1032,21 @@ def derive(intake: Intake) -> Intake:
     # payload row (payload / payload-fraction), so parsing "180 g camera"
     # doesn't leave a stale 3.3 kg default behind.
     mtow_row, payload_row = _row(intake, "mtow_cap"), _row(intake, "payload")
-    if (mtow_row is not None and mtow_row.origin == "assumed"
+    # S1-F: a LOCKED MTOW stops following the payload row. This auto-follow is the one
+    # thing the intake changes behind the operator's back, so it is the one thing a
+    # lock on this row has to stop.
+    if (mtow_row is not None and mtow_row.status != "fixed"
+            and mtow_row.origin == "assumed"
             and payload_row is not None and payload_row.number):
         mtow_row.number = round(min(payload_row.number / PAYLOAD_FRACTION, 25.0), 2)
         mtow_row.value = f"≤ {mtow_row.number:g} kg"
         mtow_row.source = f"payload / {PAYLOAD_FRACTION:.0%} payload fraction"
     try:
         req = to_requirements(intake)
+        locked = to_locked(intake)
         rho = atmosphere_at(req.cruise_altitude_m).density_kgm3
         w = req.mtow_kg * 9.81
-        res = solve_requirements(req)
+        res = solve_requirements(req, locked=locked)
         for _ in range(6):
             v_best = math.sqrt(2.0 * w / (rho * res.panel.s_ref_m2
                                           * max(res.panel.cl_star, 0.05)))
@@ -1018,7 +1054,7 @@ def derive(intake: Intake) -> Intake:
             if abs(v_best - req.cruise_speed_ms) < 0.05:
                 break
             req = req.model_copy(update={"cruise_speed_ms": v_best})
-            res = solve_requirements(req)
+            res = solve_requirements(req, locked=locked)
     except Exception as e:  # never crash the intake — report instead
         intake.feasibility = Feasibility(
             verdict="error", headline="Could not size these requirements",
@@ -1055,6 +1091,9 @@ def derive(intake: Intake) -> Intake:
         drow("ld_est", "Cruise L/D (equation)", f"{p.ld_cruise:.1f}",
              p.ld_cruise, "", "equation tier — VSPAERO/CFD supersede"),
     ]
+    # `s_ref` is a derived row, so it is rebuilt here rather than existing at
+    # construction — mark the whole set again so its `lockable` flag is right.
+    _mark_lockable(intake.rows)
 
     unmet = [s for s in res.requirements if s.met is False]
     implied = {

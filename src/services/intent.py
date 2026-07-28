@@ -27,7 +27,7 @@ class IntentResult(BaseModel):
 _PARSE_SYSTEM = """You extract UAV mission requirements from a user's casual request.
 Rules:
 - Only set a field when the user stated it or it is clearly implied. Convert units to SI.
-- Leave mtow_kg and endurance_min unset unless the user gave them (do NOT invent them).
+- Leave mtow_kg unset unless the user gave it (do NOT invent it).
 - launch is one of hand/catapult/runway; default hand only if nothing is implied.
 - If the user gives a range ("20-30 m/s"), use the midpoint.
 - payload_kg, cruise_speed_ms, cruise_altitude_m are required: if truly absent, use a

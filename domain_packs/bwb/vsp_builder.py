@@ -81,10 +81,11 @@ def build_bwb(p: BWBParams, outdir: str, warnings: list) -> dict:
         # mirror and schema.py both assume.
         set_parm(wid, "Sweep_Location", xsec, 0.0, warnings)
 
-    # airfoil thickness (NACA 4-series t/c), root -> blend -> tip
-    mid_thick = (p.root_thickness_pct + p.tip_thickness_pct) / 2.0
+    # Section thickness, root -> blend -> tip. S1-C: each station reads its own
+    # aerofoil's t/c instead of interpolating the blend as the root/tip mean, so the
+    # built solid matches the sections the design actually specifies.
     set_parm(wid, "ThickChord", "XSecCurve_0", p.root_thickness_pct / 100.0, warnings)
-    set_parm(wid, "ThickChord", "XSecCurve_1", mid_thick / 100.0, warnings)
+    set_parm(wid, "ThickChord", "XSecCurve_1", p.mid_thickness_pct / 100.0, warnings)
     set_parm(wid, "ThickChord", "XSecCurve_2", p.tip_thickness_pct / 100.0, warnings)
 
     # Recorded in the report so a convention change is visible in the manifest rather

@@ -67,6 +67,9 @@ def _mission(sid: str, version: int) -> dict:
     "surveillance, 2 m span, hand launch, fly for 24 hours",
 ])
 def test_long_endurance_brief_still_generates(stage1_session, brief):
+    """The original defect was that these briefs bricked Generate. S1-A removed the
+    row rather than clamping it, so the brief is now simply inert — but the route must
+    still survive it, which is what this pins."""
     client, sid = stage1_session
     parsed = client.post("/api/stage1/parse",
                          json={"session_id": sid, "brief": brief})
@@ -75,20 +78,21 @@ def test_long_endurance_brief_still_generates(stage1_session, brief):
     generated = client.post("/api/stage1/generate", json={"session_id": sid})
     assert generated.status_code == 200, generated.text
 
-    row = next(r for r in parsed.json()["intake"]["rows"] if r["id"] == "endurance")
-    assert row["number"] == pytest.approx(600.0)
-    assert "capped" in row["source"], row["source"]
+    assert not any(r["id"] == "endurance" for r in parsed.json()["intake"]["rows"])
 
 
-def test_a_capped_endurance_is_still_recorded_in_the_plan(stage1_session):
-    """Capping must not quietly drop the goal: it is recorded for the propulsion
-    stage, which is the row's entire purpose."""
+def test_the_plan_carries_no_endurance(stage1_session):
+    """S1-A: replaces test_a_capped_endurance_is_still_recorded_in_the_plan. The goal
+    is no longer recorded because it is no longer collected — a requirement no equation
+    reads is a promise the tool does not keep."""
     client, sid = stage1_session
     client.post("/api/stage1/parse",
                 json={"session_id": sid, "brief": "loiter for 11 hours"})
     version = client.post("/api/stage1/generate",
                           json={"session_id": sid}).json()["plan_version"]
-    assert _mission(sid, version)["mission"]["endurance_min"] == pytest.approx(600.0)
+    mission = _mission(sid, version)["mission"]
+    assert "endurance_min" not in mission
+    assert "range_km" not in mission
 
 
 # ===================================================================================
@@ -167,22 +171,21 @@ def _rows(payload) -> dict:
     return {r["id"]: r for r in payload["intake"]["rows"]}
 
 
-def test_parse_preserves_user_edits_and_custom_rows(stage1_session):
+def test_parse_preserves_user_edits(stage1_session):
+    """S1-B: the custom-row leg was removed with the closed requirement set. Edit
+    preservation across a reparse is the contract that mattered."""
     client, sid = stage1_session
     client.post("/api/stage1/parse", json={
         "session_id": sid, "brief": "surveillance, 2.2 m span, hand launch"})
-    client.post("/api/stage1/intake", json={
+    saved = client.post("/api/stage1/intake", json={
         "session_id": sid,
-        "edits": [{"id": "mtow_cap", "value": "4.5 kg"},
-                  {"id": "custom_max_chord", "label": "Max chord",
-                   "value": "0.35 m"}]})
+        "edits": [{"id": "mtow_cap", "value": "4.5 kg"}]})
+    assert saved.status_code == 200, saved.text
 
     reparsed = client.post("/api/stage1/parse", json={
         "session_id": sid, "brief": "surveillance, 2.2 m span, hand launch"})
     assert reparsed.status_code == 200, reparsed.text
-    rows = _rows(reparsed.json())
-    assert rows["mtow_cap"]["number"] == pytest.approx(4.5)
-    assert "custom_max_chord" in rows
+    assert _rows(reparsed.json())["mtow_cap"]["number"] == pytest.approx(4.5)
 
 
 def test_brief_overriding_an_edit_is_reported(stage1_session):
@@ -201,14 +204,12 @@ def test_replace_true_starts_from_defaults(stage1_session):
     client, sid = stage1_session
     client.post("/api/stage1/intake", json={
         "session_id": sid,
-        "edits": [{"id": "span_max", "value": "1.4 m"},
-                  {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"}]})
+        "edits": [{"id": "span_max", "value": "1.4 m"}]})
 
     replaced = client.post("/api/stage1/parse", json={
         "session_id": sid, "brief": "hand launch", "replace": True})
     rows = _rows(replaced.json())
     assert rows["span_max"]["number"] == pytest.approx(3.0), "back to the default"
-    assert "custom_max_chord" not in rows
 
 
 # ===================================================================================
@@ -282,3 +283,56 @@ def test_a_fresh_session_still_gets_requirements_from_its_intake(stage1_session)
     assert saved["span_max_m"] == pytest.approx(1.8)
     assert saved["v_stall_max_ms"] == pytest.approx(9.0)
     assert saved["launch"] == "catapult"
+
+
+# ===================================================================================
+# S1-I — the handoff route
+#
+# Added because it 500'd on its very first live request while the whole Python suite
+# was green: `check_requirements(req, params)` was called with the PANEL. Nothing in
+# tests/ exercised the route, so nothing could catch a wrong argument at a call site
+# the type checker does not see. A route with no test is a route that has never run.
+# ===================================================================================
+
+def test_handoff_route_returns_a_complete_artifact(stage1_session):
+    client, sid = stage1_session
+    r = client.get(f"/api/handoff/{sid}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["schema_version"]
+    h = body["handoff"]
+
+    # the four things Stage 2 cannot work without
+    assert h["geometry"]["span_m"] > 0
+    assert h["flight_condition"]["cruise_speed_ms"] > 0
+    assert h["requirements"]["mtow_kg"] > 0
+    assert h["performance"]["cl_max_3d"] > 0
+
+    # and the thing that makes it a handoff rather than a dump
+    grades = {e["quantity"]: e["grade"] for e in h["evidence"]}
+    assert grades, "an artifact with no evidence block is just a model_dump"
+    assert set(grades.values()) <= {"A", "B", "C", "D"}
+    assert grades["cd0"] == "D", "the number driving every L/D must travel graded"
+    assert len(h["known_disagreements"]) >= 3
+    assert len(h["provenance"]["airfoil_table_sha256"]) == 64
+
+
+def test_handoff_requirement_status_matches_a_direct_check(stage1_session):
+    """The regression guard for the actual bug: the status list must be computed from
+    the GEOMETRY, not from the panel. Passing the wrong object raised AttributeError
+    at request time and nowhere else."""
+    from domain_packs.bwb.inverse import check_requirements
+    from domain_packs.bwb.requirements import DesignRequirements
+    from domain_packs.bwb.schema import BWBParams
+
+    client, sid = stage1_session
+    h = client.get(f"/api/handoff/{sid}").json()["handoff"]
+    direct = check_requirements(DesignRequirements.model_validate(h["requirements"]),
+                                BWBParams.model_validate(h["geometry"]))
+    assert [(s["name"], s["met"]) for s in h["requirement_status"]] == \
+           [(s.name, s.met) for s in direct]
+
+
+def test_handoff_on_an_unknown_session_is_a_404_not_a_500(stage1_session):
+    client, _ = stage1_session
+    assert client.get("/api/handoff/deadbeef").status_code in (404, 422)

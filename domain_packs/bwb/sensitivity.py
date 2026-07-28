@@ -20,14 +20,15 @@ HUMAN_STEPS: Dict[str, float] = {
     "span_m": 0.10, "root_chord_m": 0.02, "centre_body_fraction": 0.02,
     "mid_chord_frac": 0.02, "taper_outer": 0.05,
     "sweep_inner_deg": 1.0, "sweep_outer_deg": 1.0,
-    "root_thickness_pct": 1.0, "tip_thickness_pct": 1.0,
+    # S1-C: no thickness entries. Thickness comes from the section, so "one notch of
+    # the control" is meaningless — there is no control, and nudging t/c by 1% would
+    # mean silently swapping the aerofoil for a different one.
     "root_twist_deg": 0.5, "tip_twist_deg": 0.5, "dihedral_deg": 1.0,
 }
 STEP_UNITS: Dict[str, str] = {
     "span_m": "m", "root_chord_m": "m", "centre_body_fraction": "",
     "mid_chord_frac": "", "taper_outer": "",
     "sweep_inner_deg": "deg", "sweep_outer_deg": "deg",
-    "root_thickness_pct": "% t/c", "tip_thickness_pct": "% t/c",
     "root_twist_deg": "deg", "tip_twist_deg": "deg", "dihedral_deg": "deg",
 }
 METRICS = ["ld_cruise", "cd_cruise", "cd0", "cl_cruise", "cl_max_3d",

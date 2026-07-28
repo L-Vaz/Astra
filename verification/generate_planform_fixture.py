@@ -31,19 +31,19 @@ FIXTURE_PATH = os.path.join(REPO_ROOT, "tests", "js", "planform_fixture.json")
 CASES = [
     dict(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28, mid_chord_frac=0.6,
          taper_outer=0.4, sweep_inner_deg=35, sweep_outer_deg=18,
-         root_thickness_pct=14, tip_thickness_pct=10, root_twist_deg=1.0,
+         root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
          tip_twist_deg=-3.0, dihedral_deg=3.0),
     dict(span_m=0.8, root_chord_m=0.25, centre_body_fraction=0.12, mid_chord_frac=0.35,
          taper_outer=0.7, sweep_inner_deg=60, sweep_outer_deg=40,
-         root_thickness_pct=14, tip_thickness_pct=9, root_twist_deg=2.0,
+         root_airfoil="e474", mid_airfoil="e472", tip_airfoil="oa209", root_twist_deg=2.0,
          tip_twist_deg=-3.0, dihedral_deg=0.0),
     dict(span_m=3.0, root_chord_m=1.2, centre_body_fraction=0.45, mid_chord_frac=0.85,
          taper_outer=0.7, sweep_inner_deg=15, sweep_outer_deg=5,
-         root_thickness_pct=20, tip_thickness_pct=14, root_twist_deg=5.0,
+         root_airfoil="e475", mid_airfoil="e474", tip_airfoil="oa212", root_twist_deg=5.0,
          tip_twist_deg=2.0, dihedral_deg=8.0),
     dict(span_m=1.8, root_chord_m=0.25, centre_body_fraction=0.45, mid_chord_frac=0.85,
          taper_outer=0.7, sweep_inner_deg=60, sweep_outer_deg=40,
-         root_thickness_pct=14, tip_thickness_pct=9, root_twist_deg=2.0,
+         root_airfoil="e474", mid_airfoil="e472", tip_airfoil="oa209", root_twist_deg=2.0,
          tip_twist_deg=-3.0, dihedral_deg=2.0),
 ]
 
@@ -57,7 +57,8 @@ def _stations(p: BWBParams) -> list:
     tan_i = math.tan(math.radians(p.sweep_inner_deg))
     tan_o = math.tan(math.radians(p.sweep_outer_deg))
     tan_d = math.tan(math.radians(p.dihedral_deg))
-    mid_thick = (p.root_thickness_pct + p.tip_thickness_pct) / 2.0
+    # S1-C: read the blend section's own t/c rather than averaging root and tip.
+    mid_thick = p.mid_thickness_pct
     mid_twist = (p.root_twist_deg
                  + (p.tip_twist_deg - p.root_twist_deg) * p.centre_body_fraction)
 
@@ -93,7 +94,11 @@ def build() -> dict:
     for raw in CASES:
         p = BWBParams(**raw)
         cases.append({
-            "params": raw,
+            # model_dump(), not the raw kwargs: it carries the COMPUTED thickness
+            # fields the sections imply. The browser gets the same payload from the
+            # server, so the JS mirror must be fed exactly what the server sends
+            # rather than a hand-built subset (S1-C).
+            "params": p.model_dump(),
             "chords": list(p.chords()),
             "half_widths": list(p.half_widths()),
             "planform_area_m2": p.planform_area_m2(),

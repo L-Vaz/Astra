@@ -85,30 +85,17 @@ def _f(x) -> float:
     return float(np.asarray(x).ravel()[0])
 
 
-MAX_TC_SNAP_ERROR = 0.50 / 4.0
-"""Worst relative t/c error the integer-percent snap can introduce (S7-I2).
-
-The snap is deliberate — NeuralFoil's NACA-4 parametrization is why this tier is fast —
-but it means the fast tier scores a slightly DIFFERENT geometry than the preview shows,
-and that was a comment rather than a bounded number. The worst case is half a percentage
-point of rounding at the thinnest legal section: BWBParams allows tip_thickness_pct down
-to 5, and the schema's own floor of 4% in the clamp below makes 4 the thinnest section
-this can produce, so 0.5/4 = 12.5%. tests/test_bwb_asb_aero.py measures it."""
-
-
-def _symmetric_naca(tc_pct: float):
-    """Symmetric NACA 4-series section at the given t/c (%). Rounded to the nearest
-    integer percent — a documented low-fidelity simplification for this fast tier,
-    bounded by MAX_TC_SNAP_ERROR."""
-    import aerosandbox as asb
-    tc = int(round(max(4.0, min(30.0, tc_pct))))
-    return asb.Airfoil(f"naca00{tc:02d}")
-
-
-def tc_snap_error(tc_pct: float) -> float:
-    """Relative t/c error the snap introduces at this section thickness."""
-    snapped = int(round(max(4.0, min(30.0, tc_pct))))
-    return abs(snapped - tc_pct) / tc_pct
+# S1-C: MAX_TC_SNAP_ERROR, _symmetric_naca and tc_snap_error are gone.
+#
+# They existed because this tier built every station as a symmetric NACA 00xx snapped
+# to an integer percent thickness, which introduced up to 12.5% t/c error at the
+# thinnest legal section (0.5/4) and — worse — scored a DIFFERENT SHAPE than the
+# preview drew. The snap was justified by NeuralFoil's NACA-4 parametrization being
+# fast, but NeuralFoil accepts arbitrary coordinates and CST parameters, so the
+# justification never held for named sections.
+#
+# `BWBParams` now carries real section names, so this builds the actual aerofoil.
+# No snap, no rounding error, and the fast tier scores the geometry the user chose.
 
 
 def bwbparams_to_airplane(p: BWBParams):
@@ -116,16 +103,16 @@ def bwbparams_to_airplane(p: BWBParams):
 
     Half-model mirrored (symmetric=True). Three stations along the half-span:
     root (apex, y=0), blend (y=b1), tip (y=b1+b2). Leading edge swept per panel;
-    z raised by the dihedral; twist and NACA thickness interpolated exactly as the
-    OpenVSP builder does (blend twist uses centre_body_fraction; blend thickness is
-    the root/tip mean).
+    z raised by the dihedral; twist interpolated exactly as the OpenVSP builder does
+    (blend twist uses centre_body_fraction). Each station carries its OWN named
+    section, so thickness is whatever that aerofoil is — no interpolation and no
+    snap (S1-C).
     """
     import aerosandbox as asb
 
     c_root, c_mid, c_tip = p.chords()
     b1, b2 = p.half_widths()
     mid_twist = p.root_twist_deg + (p.tip_twist_deg - p.root_twist_deg) * p.centre_body_fraction
-    mid_thick = (p.root_thickness_pct + p.tip_thickness_pct) / 2.0
 
     tan_in = math.tan(math.radians(p.sweep_inner_deg))
     tan_out = math.tan(math.radians(p.sweep_outer_deg))
@@ -138,11 +125,11 @@ def bwbparams_to_airplane(p: BWBParams):
 
     xsecs = [
         asb.WingXSec(xyz_le=[x0, y0, z0], chord=c_root, twist=p.root_twist_deg,
-                     airfoil=_symmetric_naca(p.root_thickness_pct)),
+                     airfoil=asb.Airfoil(p.root_airfoil)),
         asb.WingXSec(xyz_le=[x1, y1, z1], chord=c_mid, twist=mid_twist,
-                     airfoil=_symmetric_naca(mid_thick)),
+                     airfoil=asb.Airfoil(p.mid_airfoil)),
         asb.WingXSec(xyz_le=[x2, y2, z2], chord=c_tip, twist=p.tip_twist_deg,
-                     airfoil=_symmetric_naca(p.tip_thickness_pct)),
+                     airfoil=asb.Airfoil(p.tip_airfoil)),
     ]
     wing = asb.Wing(name="bwb", symmetric=True, xsecs=xsecs)
     return asb.Airplane(

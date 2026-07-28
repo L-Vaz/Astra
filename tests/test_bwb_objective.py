@@ -23,7 +23,7 @@ _STRUCTURAL = ("m_root", "u_structure", "sigma_peak", "sigma_cv", "shape_3d")
 def _params(**over) -> BWBParams:
     base = dict(span_m=1.8, root_chord_m=0.5, centre_body_fraction=0.28,
                 mid_chord_frac=0.55, taper_outer=0.5, sweep_inner_deg=34,
-                sweep_outer_deg=20, root_thickness_pct=13, tip_thickness_pct=9,
+                sweep_outer_deg=20, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010",
                 root_twist_deg=2, tip_twist_deg=-3, dihedral_deg=3)
     base.update(over)
     return BWBParams(**base)
@@ -148,3 +148,112 @@ def test_weights_scale_contribution():
     doubled = score(p, _aero(p, cn_beta=0.005), ObjectiveWeights(w6_latdir=2.0), _config(p))
     assert doubled.penalties["latdir"].contribution == pytest.approx(
         2.0 * base.penalties["latdir"].contribution)
+
+
+# --------------------------------------------------------------------------
+# w10 — stall station (S1-C2)
+#
+# The wing that motivated this term is the golden reference: it stalls at eta
+# 0.647, outboard, and -3 deg of washout is NOT enough to bring it inboard. Before
+# S1-C2 nothing in the pack could see that, because CLmax was a constant.
+# --------------------------------------------------------------------------
+
+def _reference_params(**over) -> BWBParams:
+    """The golden reference planform — the one measured to stall outboard."""
+    base = dict(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
+                mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
+                sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472",
+                tip_airfoil="s5010", root_twist_deg=1.0, tip_twist_deg=-3.0,
+                dihedral_deg=3.0)
+    base.update(over)
+    return BWBParams(**base)
+
+
+def _reference_aero(p: BWBParams) -> AsbAeroResult:
+    """At the reference cruise Reynolds, 409k.
+
+    Pinned explicitly rather than inherited from `_aero`'s 3.5e5, because the stall
+    STATION is Reynolds-sensitive and not only the CLmax: measured on this planform,
+    the converged onset moves from eta 0.569 at a 350k cruise Reynolds to 0.628 at
+    409k. Section CLmax rises with Reynolds, and it rises fastest at the tip, whose
+    chord Reynolds is lowest and furthest down the steep part of the curve — so more
+    speed buys the tip proportionally more capability and pushes the first stall
+    outboard. A test that let this float would be measuring the fixture, not the wing.
+    """
+    return _aero(p).model_copy(update={"reynolds_mac": 4.09e5})
+
+
+def test_outboard_stall_is_reported_and_penalised():
+    """Measured: eta 0.628 at the converged stall Reynolds, outboard of 0.60."""
+    p = _reference_params()
+    bd = score(p, _reference_aero(p), ObjectiveWeights(), _config(p))
+    assert bd.stall_is_outboard, "the reference wing stalls outboard — that is the point"
+    assert bd.stall_eta > 0.60
+    assert bd.penalties["stall_station"].contribution > 0.0
+    assert "OUTBOARD" in bd.penalties["stall_station"].note
+
+
+def test_washout_moves_stall_inboard_and_relieves_the_penalty():
+    """The term must reward the lever an operator actually has.
+
+    Measured across the schema's washout range on the reference planform, at the
+    converged stall Reynolds and with the AERODYNAMIC twist reference (S1-D):
+
+        tip twist  +1.0   0.0   -1.0   -2.0   -3.0   -5.0   -7.0
+        stall eta  0.738 0.721 0.721  0.703  0.684  0.647  0.589
+
+    Monotone (non-strictly: 0.0 and -1.0 land on the same integration station), and
+    it only just clears the 0.60 flag at -7 deg — the schema FLOOR. Before the
+    aerodynamic-twist correction the same sweep crossed at -5 deg with room to spare;
+    the cambered s5010 tip cancels about a third of every degree of washout applied,
+    so the whole usable range now sits on the wrong side of the flag but for its last
+    point. That is a finding about this wing, not a test artefact.
+    """
+    etas, raws = [], []
+    for tw in (1.0, 0.0, -1.0, -2.0, -3.0, -5.0, -7.0):
+        p = _reference_params(tip_twist_deg=tw)
+        bd = score(p, _reference_aero(p), ObjectiveWeights(), _config(p))
+        etas.append(bd.stall_eta)
+        raws.append(bd.penalties["stall_station"].raw)
+    assert etas == sorted(etas, reverse=True), f"not monotone in washout: {etas}"
+    assert raws == sorted(raws, reverse=True), f"penalty not monotone: {raws}"
+    assert raws[0] > 0.0, f"the untwisted end of the sweep must be penalised: {raws}"
+    assert raws[-1] == 0.0, (
+        "the schema's washout FLOOR (-7 deg) is the only setting that clears the flag "
+        f"on this wing: {raws}")
+
+
+def test_stall_penalty_is_zero_inboard_with_no_cliff():
+    """Zero inboard of the flag, continuous across it — not a step.
+
+    A step would give the optimiser zero gradient on both sides and a cliff between:
+    it would either ignore the term or park exactly on the boundary."""
+    from domain_packs.bwb.objective import _stall_station_penalty
+    assert _stall_station_penalty(0.30, 0.60) == 0.0
+    assert _stall_station_penalty(0.60, 0.60) == 0.0
+    assert _stall_station_penalty(0.601, 0.60) == pytest.approx(0.0025, abs=1e-6)
+    assert _stall_station_penalty(1.00, 0.60) == pytest.approx(1.0)
+    assert _stall_station_penalty(1.50, 0.60) == 1.0     # clipped, never > 1
+
+
+def test_stall_station_uses_the_stall_reynolds_not_the_cruise_one():
+    """A wing stalls at its stall speed. Measured on the reference: CLmax 1.2057 at
+    the cruise Reynolds (409k) against 1.1208 converged — 7% apart. Getting this
+    wrong would be the error S1-C2 exists to remove, one level up."""
+    from domain_packs.bwb.objective import stall_station_at_stall_reynolds
+    from domain_packs.bwb.spanwise import solve_stall
+    p = _reference_params()
+    a = _reference_aero(p)
+    naive = solve_stall(p, a.reynolds_mac)
+    converged = stall_station_at_stall_reynolds(p, a)
+    assert converged.cl_max_wing < naive.cl_max_wing
+    assert abs(converged.cl_max_wing / naive.cl_max_wing - 1.0) > 0.02
+
+
+def test_stall_weight_scales_like_every_other_weight():
+    p = _reference_params()
+    base = score(p, _reference_aero(p), ObjectiveWeights(w10_stall_station=1.0), _config(p))
+    doubled = score(p, _reference_aero(p), ObjectiveWeights(w10_stall_station=2.0), _config(p))
+    assert doubled.penalties["stall_station"].contribution == pytest.approx(
+        2.0 * base.penalties["stall_station"].contribution)
+    assert base.penalties["stall_station"].contribution > 0.0

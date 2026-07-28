@@ -70,7 +70,10 @@ export function stations(params) {
   const tanI = Math.tan((p.sweep_inner_deg * Math.PI) / 180);
   const tanO = Math.tan((p.sweep_outer_deg * Math.PI) / 180);
   const tanD = Math.tan((p.dihedral_deg * Math.PI) / 180);
-  const midThick = (p.root_thickness_pct + p.tip_thickness_pct) / 2;
+  /* S1-C: the blend station has its own aerofoil, so its thickness is READ, not
+     assumed to be the root/tip mean. These three arrive from the server in the
+     params payload because BWBParams exposes them as computed fields. */
+  const midThick = p.mid_thickness_pct;
   const midTwist =
     p.root_twist_deg + (p.tip_twist_deg - p.root_twist_deg) * p.centre_body_fraction;
 

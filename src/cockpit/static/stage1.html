@@ -30,8 +30,14 @@
 <main id="screen-req">
   <section class="card" id="brief-card">
     <p class="microlabel">Your mission brief — freeform, edit anytime</p>
+    <!-- S1-A removed endurance, so the example must stop inviting it. The old
+         placeholder ended "...stay up for at least 45 minutes", which asks the user for
+         a requirement this tier no longer collects — the exact promise-the-tool-does-
+         not-keep that S1-A deleted the row to avoid. Replaced with a cruise speed,
+         which the solver genuinely uses. (A comment belongs OUTSIDE the opening tag:
+         placed between attributes it silently voids the placeholder.) -->
     <textarea id="brief" rows="3"
-      placeholder="I'm building a drone for supervising a farm. It should fly at around 100 m, span under 2 m, carry my 180 g camera, and stay up for at least 45 minutes. Hand launched."></textarea>
+      placeholder="I'm building a drone for supervising a farm. It should fly at around 100 m, span under 2 m, carry my 180 g camera, and cruise at about 18 m/s. Hand launched."></textarea>
     <div class="row-actions">
       <span id="parse-note" class="dim"></span>
       <button id="btn-parse" class="secondary">Parse brief</button>
@@ -47,7 +53,9 @@
     <div id="tier-mission"></div>
     <p class="microlabel">Vehicle constraints</p>
     <div id="tier-vehicle"></div>
-    <button id="btn-add" class="ghost-add">+ Add constraint — max chord, materials, anything</button>
+    <!-- S1-B: the "+ Add constraint — max chord, materials, anything" button was
+         removed. It promised anything could become a constraint; measurably, an added
+         row moved no derived value. The requirement set is closed. -->
     <p class="microlabel">Derived — always computed · open i to see what moves each one</p>
     <div id="tier-derived"></div>
   </section>

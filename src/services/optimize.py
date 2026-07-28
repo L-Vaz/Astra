@@ -58,7 +58,17 @@ class OptimizeResult(BaseModel):
 
 
 def _round_key(params: dict, ndigits: int = 4) -> tuple:
-    return tuple(round(float(params[k]), ndigits) for k in sorted(params))
+    """Dedup key for a candidate geometry.
+
+    S1-C: `params` now contains three aerofoil NAMES alongside the numbers, so the
+    key keeps strings as strings instead of forcing them through float(). Dropping
+    them instead would make two designs with identical planforms but different
+    sections look like duplicates."""
+    out = []
+    for k in sorted(params):
+        v = params[k]
+        out.append(v if isinstance(v, str) else round(float(v), ndigits))
+    return tuple(out)
 
 
 def optimize(

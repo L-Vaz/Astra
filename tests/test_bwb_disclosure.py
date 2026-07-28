@@ -26,8 +26,9 @@ from domain_packs.bwb import aero_estimates as A
 from domain_packs.bwb import intake as I
 from domain_packs.bwb.atmosphere import atmosphere_at
 
-# The ten probed display-vs-used divergences, every one of which the app used to make
-# silently while still reporting "feasible".
+# The probed display-vs-used divergences, every one of which the app used to make
+# silently while still reporting "feasible". The endurance case ("900 min" -> 600.0)
+# went with the row itself in S1-A — there is no longer a value to clamp.
 PROBED_SUBSTITUTIONS = [
     ("span_max", "100 m", 3.0),
     ("span_max", "0.1 m", 0.8),
@@ -37,7 +38,6 @@ PROBED_SUBSTITUTIONS = [
     ("v_stall_max", "99 m/s", 20.0),
     ("payload", "99 kg", 10.0),
     ("payload", "0 kg", 0.01),
-    ("endurance", "900 min", 600.0),
 ]
 
 
@@ -142,18 +142,39 @@ def test_an_ambiguity_warning_survives_a_later_derive():
 
 
 # ===================================================================================
-# S3-E1 — the lock toggles are display-only, and now say so
+# S3-E1 / S7-CAP-3 — RETIRED by S1-F. The lock toggles now constrain the solve.
+#
+# What these tests asserted, and why they are inverted rather than deleted: the pair
+# below used to prove that locking every row changed nothing, and a third test asserted
+# that the field description SAID SO. That was honest while it was true. Now the claim
+# has flipped, and the same two questions still have to be answered on every run —
+# does the label match the behaviour, and does the behaviour actually happen.
 # ===================================================================================
 
-def test_lock_status_is_documented_as_display_only():
+def test_lock_status_documents_that_it_constrains_the_solve():
     description = I.IntakeRow.model_fields["status"].description or ""
-    assert "DISPLAY ONLY" in description
-    assert "S7-CAP-3" in description, "the capability item must be named"
+    assert "DISPLAY ONLY" not in description, (
+        "locks constrain the solve since S1-F; the disclaimer must not survive the fix")
+    assert "CONSTRAINS THE SOLVE" in description
+    assert "S1-F" in description
 
 
-def test_lock_status_still_changes_nothing():
-    """The executable proof behind the label. If locks ever DO constrain the solve,
-    this fails and forces the disclaimer to be removed."""
+def test_only_the_declared_rows_are_lockable():
+    """The set is declared once and flagged per row, so a UI cannot invent a lock that
+    does nothing. `cruise_speed` and `ld_est` are outcomes and are excluded on purpose."""
+    intake = I.derive(I.default_intake())
+    flagged = {r.id for r in intake.rows if r.lockable}
+    assert flagged == set(I.LOCKABLE_ROW_IDS)
+    assert "cruise_speed" not in flagged and "ld_est" not in flagged
+
+
+def test_locking_changes_the_derived_outcome():
+    """The executable proof, now pointing the other way.
+
+    Measured on the default intake: locking every lockable row moves wing loading from
+    7.064 to 3.519 kg/m^2 and wing area from 0.4714 to 0.9378 m^2, because a locked
+    MTOW stops following the payload row.
+    """
     def signature(status):
         intake = I.default_intake()
         for row in intake.rows:
@@ -162,7 +183,7 @@ def test_lock_status_still_changes_nothing():
         return tuple((r.id, r.number) for r in I.derive(intake).rows
                      if r.tier == "derived")
 
-    assert signature("fixed") == signature("variable")
+    assert signature("fixed") != signature("variable")
 
 
 # ===================================================================================
@@ -184,7 +205,6 @@ _PERTURBATIONS = {
     "mission_type": ["Racing / speed", "Cargo / delivery"],
     "payload": ["2.5 kg", "0.3 kg"],
     "altitude": ["1500 m", "0 m"],
-    "endurance": ["120 min", "30 min"],
     "launch": ["catapult", "runway"],
     "regulatory": ["< 2 kg VLOS", "open category"],
     "span_max": ["1.6 m", "0.9 m"],
@@ -244,14 +264,17 @@ def test_every_editable_row_carries_the_flag():
         assert row.drives_computation == (row.id in I.COMPUTING_ROWS), row.id
 
 
-def test_custom_rows_are_marked_recorded_only():
-    intake = I.derive(I.apply_edits(I.default_intake(), [
-        {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"}]))
-    row = _row(intake, "custom_max_chord")
-    assert row.drives_computation is False
-    assert "not evaluated at this tier" in row.info
-    assert "constraint" not in row.info.replace("does not constrain", ""), \
-        "the old text promised custom rows become Stage-2 constraints; nothing does"
+def test_no_row_can_be_added():
+    """S1-B: replaces test_custom_rows_are_marked_recorded_only. That test pinned the
+    disclosure on a row that did nothing. The row cannot be created now, so what needs
+    pinning is that the refusal is loud and leaves no trace."""
+    intake = I.derive(I.default_intake())
+    before = len(intake.rows)
+    with pytest.raises(ValueError, match="closed set"):
+        I.apply_edits(intake, [
+            {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"}])
+    assert len(intake.rows) == before
+    assert all(r.id in I.known_row_ids() for r in intake.rows)
 
 
 # ===================================================================================
@@ -299,8 +322,7 @@ def test_bending_index_label_matches_the_formula():
     it: the LABEL was wrong, not the number (see "What NOT to do" in the plan)."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     panel = A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand")
 
@@ -322,7 +344,7 @@ def test_bending_index_label_matches_the_formula():
     "\n".join(A.estimate(
         A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                     mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                    sweep_outer_deg=18, root_thickness_pct=14, tip_thickness_pct=10,
+                    sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010",
                     root_twist_deg=1.0, tip_twist_deg=-3.0, dihedral_deg=3.0),
         atmosphere_at(0.0), 18.0, 34.335, "hand").assumptions),
 ], ids=["field-description", "assumptions"])
@@ -365,8 +387,7 @@ def test_the_launch_assumption_string_disowns_the_derivation_too():
     """The comment is for developers; this string is what the user reads."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     assumptions = " ".join(
         A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand").assumptions)
@@ -378,8 +399,13 @@ def test_the_implied_clmax_values_disagree_with_the_packs_own_cap():
     """A documenting test: keeps the inconsistency measured rather than remembered.
 
     Inverting each (launch limit, wing loading) pair gives the CLmax that limit
-    implies. The three disagree with each other and none equals CL_MAX_2D *
-    CL_MAX_3D_FACTOR, which is what "calibrated" would have required."""
+    implies. The three disagree with each other, which is what "calibrated" would have
+    forbidden.
+
+    S1-C2: the comparison against `CL_MAX_2D * CL_MAX_3D_FACTOR` is gone because both
+    constants are gone — CLmax is now solved per design from the spanwise load, so
+    there IS no single pack cap to disagree with. The inconsistency between the three
+    launch limits is unaffected and is what this test still measures."""
     from domain_packs.bwb.defaults import WING_LOADING
 
     rho = atmosphere_at(0.0).density_kgm3
@@ -388,12 +414,7 @@ def test_the_implied_clmax_values_disagree_with_the_packs_own_cap():
         wing_loading = WING_LOADING[launch]
         implied[launch] = (2.0 * wing_loading * 9.81) / (rho * v_stall ** 2)
 
-    cap = A.CL_MAX_2D * A.CL_MAX_3D_FACTOR
     assert len(set(round(v, 6) for v in implied.values())) == 3, implied
-    for launch, value in implied.items():
-        assert abs(value - cap) > 0.05, (
-            f"{launch} implies CLmax {value:.4f}, which now matches the pack cap "
-            f"{cap:.4f} — the 'calibrated' claim may have become true; re-check F8")
     assert max(implied.values()) - min(implied.values()) > 0.15, implied
 
 
@@ -436,8 +457,7 @@ def test_the_assumptions_string_quantifies_its_own_sensitivity():
     whether that is worth 1% or 11% of L/D."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     assumptions = " ".join(
         A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand").assumptions)
@@ -450,8 +470,7 @@ def test_laminar_fraction_sensitivity_is_still_what_the_string_claims():
     """The number in the disclosure is measured here, so the claim cannot go stale."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     baseline = A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand")
 

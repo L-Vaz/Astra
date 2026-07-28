@@ -73,3 +73,27 @@ def test_planform_fixture_matches_python():
         "tests/js/planform_fixture.json no longer matches schema.py. Regenerate with "
         "`python verification/generate_planform_fixture.py --write` and make sure "
         "src/cockpit/static/planform.js mirrors the same change.")
+
+
+def test_spanwise_fixture_matches_python():
+    """The Python side of the Schrenk boundary (S1-C2).
+
+    The stall solve is now the second thing that exists once per language. It is the
+    more dangerous of the two: the planform algebra is pure geometry that a reviewer
+    can eyeball, while a wrong basic-loading term changes the stall speed by a few
+    percent and looks entirely plausible on screen. The browser was measured 2.86%
+    optimistic on CLmax for exactly one commit before this fixture existed.
+
+    Asserting here rather than only in Node matters because the WSL FoamAgent env has
+    no Node: without this, a Python change would pass the whole suite on the
+    interpreter where the change was made.
+    """
+    sys.path.insert(0, str(_REPO_ROOT / "verification"))
+    import generate_spanwise_fixture as gen
+
+    with open(gen.FIXTURE_PATH) as f:
+        committed = f.read()
+    assert committed == gen.serialise(gen.build()), (
+        "tests/js/spanwise_fixture.json no longer matches spanwise.py. Regenerate with "
+        "`python verification/generate_spanwise_fixture.py --write` and make sure "
+        "src/cockpit/static/spanwise.js mirrors the same change.")

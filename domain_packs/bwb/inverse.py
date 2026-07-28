@@ -18,12 +18,14 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from .aero_estimates import (LAUNCH_VSTALL_MAX, AeroEstimate, cl_max_3d,
+                             reynolds_at,
                              estimate)
 from .atmosphere import atmosphere_at
 from .constants import VSTALL_TOL_MS
 from .defaults import DEFAULT_AR, MAX_CRUISE_CL
 from .requirements import DesignRequirements, RequirementStatus
-from .schema import BWBParams
+from .schema import (DEFAULT_MID_AIRFOIL, DEFAULT_ROOT_AIRFOIL,
+                     DEFAULT_TIP_AIRFOIL, BWBParams)
 
 MIN_TIP_CHORD = 0.042   # m; geometry gate is 0.040 — keep a hair of margin
 _AR_GATE = (2.5, 10.0)  # BWBParams cross-check range
@@ -69,6 +71,44 @@ class CapViolation(BaseModel):
     message: str
 
 
+class LockedValues(BaseModel):
+    """Quantities the solver may not move (S1-F).
+
+    A CAP and a LOCK are different instructions and were previously conflated. The
+    intake's `span_max` row is a cap: "no wider than this", and the solver is free to
+    come in under it — which it usually does. A LOCK says "this is the number", because
+    the operator has a fuselage, a print bed, or a wing already built.
+
+    Before S1-F the lock toggles were display-only, and said so: the intake's own field
+    description recorded that "the solver produces byte-identical derived values with
+    every row 'fixed' and with every row 'variable'". They now constrain the solve.
+
+    THE RULE THAT MATTERS: a lock that cannot be honoured produces a `CapViolation`, it
+    never silently unlocks. Locks conflict easily — pinning both span and area pins
+    aspect ratio too, and the schema's AR gate [2.5, 10] and root-chord range then have
+    nowhere to go. That conflict is information the operator needs, not something to
+    resolve on their behalf.
+    """
+    span_m: Optional[float] = Field(
+        default=None, description="Exact span, m. Frees area and aspect ratio.")
+    s_ref_m2: Optional[float] = Field(
+        default=None, description="Exact reference area, m^2. Frees span and AR.")
+    mtow_kg: Optional[float] = Field(
+        default=None,
+        description="Exact takeoff mass, kg. Stops the assumed MTOW following the "
+                    "payload row, which is the only thing it silently does today.")
+
+    @property
+    def any_locked(self) -> bool:
+        return any(v is not None for v in
+                   (self.span_m, self.s_ref_m2, self.mtow_kg))
+
+
+LOCK_TOL = {"span_m": 1e-3, "s_ref_m2": 1e-4}
+"""How close counts as honoured. 1 mm of span and 1 cm^2 of area — finer than either
+can be built to, and coarser than the solver's own convergence."""
+
+
 class ShapeFractions(BaseModel):
     """The 10 non-sizing parameters of a BWBParams, held fixed while the
     solver chooses area and span."""
@@ -77,8 +117,11 @@ class ShapeFractions(BaseModel):
     taper_outer: float
     sweep_inner_deg: float
     sweep_outer_deg: float
-    root_thickness_pct: float
-    tip_thickness_pct: float
+    # S1-C: the thickness pair became the section triple. Thickness is no longer a
+    # free number the solver could carry independently of the aerofoil.
+    root_airfoil: str
+    mid_airfoil: str
+    tip_airfoil: str
     root_twist_deg: float
     tip_twist_deg: float
     dihedral_deg: float
@@ -92,7 +135,8 @@ class ShapeFractions(BaseModel):
 BASELINE_SHAPE = ShapeFractions(
     centre_body_fraction=0.30, mid_chord_frac=0.55, taper_outer=0.45,
     sweep_inner_deg=38.0, sweep_outer_deg=22.0,
-    root_thickness_pct=14.0, tip_thickness_pct=9.0,
+    root_airfoil=DEFAULT_ROOT_AIRFOIL, mid_airfoil=DEFAULT_MID_AIRFOIL,
+    tip_airfoil=DEFAULT_TIP_AIRFOIL,
     root_twist_deg=2.0, tip_twist_deg=-3.0, dihedral_deg=2.0)
 
 
@@ -105,6 +149,11 @@ class InverseSolveResult(BaseModel):
                                   "or None when every target was met")
     binding_explanation: str = ""
     notes: List[str] = Field(default_factory=list)
+    lock_violations: List[CapViolation] = Field(
+        default_factory=list,
+        description="Locks the geometry could not honour (S1-F). Empty is the normal "
+                    "case; a non-empty list means the operator asked for something "
+                    "this planform family cannot deliver, stated in numbers.")
 
 
 def solve_planform(s_ref: float, ar: float, shape: ShapeFractions,
@@ -154,8 +203,9 @@ def solve_planform(s_ref: float, ar: float, shape: ShapeFractions,
         span_m=span, root_chord_m=root_chord, centre_body_fraction=cbf,
         mid_chord_frac=mf, taper_outer=taper,
         sweep_inner_deg=shape.sweep_inner_deg, sweep_outer_deg=shape.sweep_outer_deg,
-        root_thickness_pct=shape.root_thickness_pct,
-        tip_thickness_pct=shape.tip_thickness_pct,
+        root_airfoil=shape.root_airfoil,
+        mid_airfoil=shape.mid_airfoil,
+        tip_airfoil=shape.tip_airfoil,
         root_twist_deg=shape.root_twist_deg, tip_twist_deg=shape.tip_twist_deg,
         dihedral_deg=shape.dihedral_deg)
 
@@ -323,7 +373,8 @@ def check_requirements(req: DesignRequirements,
 
 
 def solve_requirements(req: DesignRequirements,
-                       shape_from: Optional[BWBParams] = None) -> InverseSolveResult:
+                       shape_from: Optional[BWBParams] = None,
+                       locked: Optional[LockedValues] = None) -> InverseSolveResult:
     """Deterministic inverse solve: requirements -> BWBParams + metric panel.
 
     Algorithm (each reused piece cited):
@@ -337,7 +388,14 @@ def solve_requirements(req: DesignRequirements,
          cap and AR under the gate, re-running 2-3 (the cockpit goal-box loop,
          moved server-side to be the single source of truth).
       5. Name the binding constraint.
+      6. S1-F: honour any LOCKED values, or report a CapViolation saying by how much
+         they could not be honoured. A lock is applied as a constraint and then
+         VERIFIED against the geometry that came back, because the schema repairs in
+         `_feasible_planform` are free to move area and span for their own reasons.
+         Checking the result rather than trusting the request is what makes "never
+         silently unlock" true regardless of what the repair machinery does.
     """
+    locked = locked or LockedValues()
     shape = ShapeFractions.from_params(shape_from) if shape_from else BASELINE_SHAPE
     atmosphere = atmosphere_at(req.cruise_altitude_m)
     rho = atmosphere.density_kgm3
@@ -347,8 +405,13 @@ def solve_requirements(req: DesignRequirements,
     launch_cap = LAUNCH_VSTALL_MAX[req.launch]
     stall_cap = min(req.v_stall_max_ms, launch_cap) if req.v_stall_max_ms else launch_cap
     span_cap = min(req.span_max_m, 3.0) if req.span_max_m else 3.0
+    # A locked span is also a cap — the tightest one — so the sizing loop below cannot
+    # spend area on span it is not allowed to have.
+    if locked.span_m is not None:
+        span_cap = min(span_cap, locked.span_m)
 
     notes: List[str] = []
+    lock_violations: List[CapViolation] = []
     ar = shape_from.aspect_ratio() if shape_from else DEFAULT_AR
     ar = min(max(ar, _AR_GATE[0]), _AR_GATE[1])
 
@@ -368,8 +431,10 @@ def solve_requirements(req: DesignRequirements,
                 s = s_new
                 params_i = _feasible_planform(s, ar_try, shape, span_cap, None)
         s_min_cl = w / (q * MAX_CRUISE_CL)
-        clmax = cl_max_3d(_feasible_planform(max(s, s_min_cl), ar_try, shape,
-                                             span_cap, None))
+        # S1-C2: CLmax is Reynolds-dependent now, and this floor is about the stall
+        # cap — so it is evaluated at that speed, not at cruise.
+        _p = _feasible_planform(max(s, s_min_cl), ar_try, shape, span_cap, None)
+        clmax = cl_max_3d(_p, reynolds_at(_p, atmosphere, stall_cap))
         s_min_stall = 2.0 * w / (rho * stall_cap ** 2 * clmax)
         floor = None
         if max(s_min_cl, s_min_stall) > s:
@@ -378,11 +443,49 @@ def solve_requirements(req: DesignRequirements,
         return s, floor
 
     s, floor = area_at(ar)
+
+    # A locked AREA replaces the sizing result outright: the operator has the wing, and
+    # what the requirements would have asked for is no longer the question. The floors
+    # are still computed, because the gap between the locked area and the area the
+    # stall cap demands is exactly what the operator needs to be told.
+    if locked.s_ref_m2 is not None:
+        s_wanted = s
+        s = locked.s_ref_m2
+        if s_wanted > s * (1.0 + 1e-9):
+            lock_violations.append(CapViolation(
+                cap="s_ref lock", required=s_wanted, achieved=s, unit="m^2",
+                blocked_by=(floor or "sizing target"),
+                message=(f"Locked wing area {s:.4f} m^2 is smaller than the "
+                         f"{s_wanted:.4f} m^2 this mission needs"
+                         + (" to hold the stall cap" if floor == "stall"
+                            else " to stay under the cruise-CL cap" if floor == "cl_cap"
+                            else " to hit the cruise-CL target")
+                         + ". The lock was honoured; the requirement was not.")))
+
+    # A locked SPAN fixes span, which with the area fixes aspect ratio. Ask for exactly
+    # that AR so the solver aims at the lock rather than being clipped to it.
+    if locked.span_m is not None and s > 0:
+        ar = locked.span_m ** 2 / s
+
     params = _feasible_planform(s, ar, shape, span_cap, notes)
+
     est = estimate(params, atmosphere, v, w, req.launch)
 
-    # step 4 — spend span budget on AR for the L/D objective
-    if req.ld_min is not None:
+    # step 4 — spend span budget on AR for the L/D objective.
+    #
+    # SKIPPED UNDER A GEOMETRY LOCK. The loop works by trading area against aspect
+    # ratio, and both locks remove exactly that freedom: with area pinned, raising AR
+    # moves span; with span pinned, it moves area. Running it anyway would quietly
+    # break the lock the operator just set in order to chase an L/D target, which is
+    # the "silent unlock" this item exists to make impossible.
+    if locked.span_m is not None or locked.s_ref_m2 is not None:
+        if req.ld_min is not None and est.ld_cruise < req.ld_min - _LD_TOL:
+            notes.append(
+                f"L/D {est.ld_cruise:.1f} is below your {req.ld_min:.1f} target and "
+                f"the solver did not chase it: the geometry lock fixes the aspect "
+                f"ratio, which is the only lever it has. Unlock span or area, or "
+                f"relax the L/D target.")
+    elif req.ld_min is not None:
         for _ in range(40):
             if est.ld_cruise >= req.ld_min - _LD_TOL:
                 break
@@ -392,6 +495,26 @@ def solve_requirements(req: DesignRequirements,
             s, floor = area_at(ar)
             params = _feasible_planform(s, ar, shape, span_cap, None)
             est = estimate(params, atmosphere, v, w, req.launch)
+
+    # VERIFY, do not assume — and do it on the FINAL geometry, after any AR loop.
+    # `_feasible_planform` repairs AR-gate and root-chord corners by moving area and
+    # span, so a lock can survive the request and die in the repair. Measuring what was
+    # delivered is the only check that a future change to those repairs cannot bypass.
+    if locked.span_m is not None and abs(params.span_m - locked.span_m) > LOCK_TOL["span_m"]:
+        lock_violations.append(CapViolation(
+            cap="span lock", required=locked.span_m, achieved=params.span_m,
+            unit="m", blocked_by="schema gates (aspect ratio / root chord)",
+            message=(f"Span locked at {locked.span_m:.3f} m but the geometry that "
+                     f"satisfies the schema is {params.span_m:.3f} m. No planform in "
+                     f"this family holds both the lock and the gates.")))
+    if locked.s_ref_m2 is not None:
+        achieved = params.planform_area_m2()
+        if abs(achieved - locked.s_ref_m2) > LOCK_TOL["s_ref_m2"]:
+            lock_violations.append(CapViolation(
+                cap="s_ref lock", required=locked.s_ref_m2, achieved=achieved,
+                unit="m^2", blocked_by="schema gates (aspect ratio / root chord)",
+                message=(f"Wing area locked at {locked.s_ref_m2:.4f} m^2 but the "
+                         f"geometry that satisfies the schema has {achieved:.4f} m^2.")))
 
     statuses = _statuses(req, est)
     unmet = [st for st in statuses if st.met is False]
@@ -447,4 +570,5 @@ def solve_requirements(req: DesignRequirements,
 
     return InverseSolveResult(
         params=params, panel=est, requirements=statuses,
-        binding_constraint=binding, binding_explanation=explanation, notes=notes)
+        binding_constraint=binding, binding_explanation=explanation, notes=notes,
+        lock_violations=lock_violations)

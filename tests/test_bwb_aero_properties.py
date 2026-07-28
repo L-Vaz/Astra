@@ -75,8 +75,7 @@ def test_cruise_feasible_is_exactly_v_above_stall(params, v_ms, mass_kg, altitud
 def test_invalid_flight_conditions_raise(v_ms, weight_n):
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     with pytest.raises(ValueError):
         A.estimate(params, atmosphere_at(0.0), v_ms, weight_n, "hand")
@@ -95,8 +94,7 @@ def test_invalid_flight_conditions_raise(v_ms, weight_n):
 def test_aero_estimate_rejects_non_finite_and_impossible_values(bad):
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     good = A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand").model_dump()
     with pytest.raises(ValueError):
@@ -136,8 +134,7 @@ def test_a_clamped_panel_says_e_is_insensitive():
     differences of exactly this quantity."""
     params = A.BWBParams(span_m=0.8, root_chord_m=0.25, centre_body_fraction=0.12,
                          mid_chord_frac=0.35, taper_outer=0.7, sweep_inner_deg=60,
-                         sweep_outer_deg=40, root_thickness_pct=14,
-                         tip_thickness_pct=9, root_twist_deg=2.0,
+                         sweep_outer_deg=40, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=2.0,
                          tip_twist_deg=-3.0, dihedral_deg=2.0)
     panel = A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand")
     assert panel.oswald_e_clamped == "floor", "premise: this geometry clamps e"
@@ -179,12 +176,17 @@ def test_oswald_wrong_sign_band_is_documented():
 def test_clmax_is_documented_as_reynolds_independent():
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     assumptions = " ".join(
         A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand").assumptions)
-    assert "does not respond to speed or altitude" in assumptions
+    # S1-C2: this disclosure is RETIRED because the defect it disclosed is fixed.
+    # CLmax responded to nothing; it is now solved from the spanwise load with each
+    # section at its own local Reynolds. The assumption line must instead name the
+    # method and the stall station.
+    assert "Schrenk" in assumptions
+    assert "semi-span" in assumptions
+    assert "does not respond to speed or altitude" not in assumptions
     assert "cl_max_3d" in (A.cl_max_3d.__doc__ or "") or \
         "Reynolds" in (A.cl_max_3d.__doc__ or "")
 
@@ -194,29 +196,34 @@ def test_forward_sweep_is_not_penalised_like_aft_sweep():
     down to -31.03 deg — was knocked down exactly like an aft-swept one (S6-F6)."""
     forward = A.BWBParams(span_m=0.8, root_chord_m=1.2, centre_body_fraction=0.12,
                           mid_chord_frac=0.35, taper_outer=0.15, sweep_inner_deg=15,
-                          sweep_outer_deg=5, root_thickness_pct=14,
-                          tip_thickness_pct=9, root_twist_deg=2.0,
+                          sweep_outer_deg=5, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=2.0,
                           tip_twist_deg=-3.0, dihedral_deg=2.0)
+    from domain_packs.bwb.spanwise import solve_stall
     assert A.effective_c4_sweep_deg(forward) < 0, "premise: this planform sweeps forward"
-    assert A.cl_max_3d(forward) == pytest.approx(A.CL_MAX_2D * A.CL_MAX_3D_FACTOR,
-                                                 rel=1e-12)
+    # S1-C2: the property is unchanged — a forward-swept quarter chord takes NO
+    # knockdown — but the baseline it is compared against is now the solved spanwise
+    # CLmax rather than a pair of constants.
+    re = 4.0e5
+    assert A.cl_max_3d(forward, re) == pytest.approx(
+        solve_stall(forward, re).cl_max_wing, rel=1e-12)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S7-CAP-4: a Reynolds-dependent section CLmax needs a sourced "
-                          "correlation (NACA 4-series data or NeuralFoil, already a "
-                          "dependency). Inventing a scaling would be worse than the "
-                          "disclosed constant.")
 def test_clmax_reynolds_dependence():
+    """S7-CAP-4, RETIRED by S1-C2. Section CLmax now comes from the committed NeuralFoil
+    screen at each station's own Reynolds, so the correlation is sourced rather than
+    invented.
+
+    The probe is weight, not cruise speed: CLmax is solved at the speed the wing
+    actually stalls at, so cruising faster cannot change it (see
+    test_clmax_does_not_depend_on_cruise_speed in the goldens module)."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
-    slow = A.estimate(params, atmosphere_at(0.0), 8.0, 34.335, "hand")
-    fast = A.estimate(params, atmosphere_at(0.0), 45.0, 34.335, "hand")
-    assert fast.reynolds_mac > 4 * slow.reynolds_mac
-    assert fast.cl_max_3d != slow.cl_max_3d
+    light = A.estimate(params, atmosphere_at(0.0), 18.0, 10.0, "hand")
+    heavy = A.estimate(params, atmosphere_at(0.0), 18.0, 120.0, "hand")
+    assert heavy.v_stall_ms > 2 * light.v_stall_ms       # premise: stall Re differs
+    assert heavy.cl_max_3d > light.cl_max_3d
 
 
 # ===================================================================================
@@ -234,8 +241,7 @@ def test_np_outside_the_root_chord_is_flagged():
     root chord — a CG recommendation with nowhere to put the mass."""
     params = A.BWBParams(span_m=0.8, root_chord_m=0.25, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.7, sweep_inner_deg=60,
-                         sweep_outer_deg=40, root_thickness_pct=14,
-                         tip_thickness_pct=9, root_twist_deg=2.0,
+                         sweep_outer_deg=40, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=2.0,
                          tip_twist_deg=-3.0, dihedral_deg=2.0)
     panel = A.estimate(params, atmosphere_at(0.0), 18.0, 34.335, "hand")
     assert panel.x_np_m > params.root_chord_m, "premise: this np is off the root chord"
@@ -258,8 +264,7 @@ def test_post_construction_mutation_is_revalidated(field, value):
     neutral_point_m returned a silently wrong 0.1727 (S6-F11)."""
     params = A.BWBParams(span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28,
                          mid_chord_frac=0.6, taper_outer=0.4, sweep_inner_deg=35,
-                         sweep_outer_deg=18, root_thickness_pct=14,
-                         tip_thickness_pct=10, root_twist_deg=1.0,
+                         sweep_outer_deg=18, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
                          tip_twist_deg=-3.0, dihedral_deg=3.0)
     with pytest.raises(ValueError):
         setattr(params, field, value)

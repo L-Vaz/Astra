@@ -6,10 +6,32 @@ pydantic-only, no OpenVSP imports here.
 import math
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from .airfoils import has_section, nearest_by_tc, tc_of
 from .atmosphere import AtmosphereState, atmosphere_at
 from .constants import STATIC_MARGIN_TARGET
+
+# Default sections. [D] — chosen from the screen, not from a source.
+#
+# Picked to (a) sit closest to the thicknesses the pack used before S1-C (root 14%,
+# tip 9%) so the geometry shift is small and attributable, (b) be inside the trim
+# band, and (c) carry high model confidence where possible. Measured at Re 4e5:
+#
+#   e474    t/c 14.1%  Cm0 +0.0000  CLmax 1.292  confidence 0.97
+#   e472    t/c 12.1%  Cm0 -0.0000  CLmax 1.329  confidence 0.97
+#   s5010   t/c  9.8%  Cm0 -0.0010  CLmax 1.297  confidence 0.27   cl0 +0.120
+#
+# The root and blend are symmetric Eppler sections — a thick, near-neutral centre
+# body is what a BWB actually wants, and thick REFLEXED sections are rare. The tip
+# is a Selig flying-wing section, which unlike the symmetric ones still makes lift
+# at zero incidence (cl0 +0.120). Its confidence of 0.27 is the weakest link here:
+# NeuralFoil has seen few shapes like it, so its numbers are the least trustworthy
+# in the default aircraft. Falsified if the trim solve (S1-D) shows this combination
+# cannot trim within the washout the schema allows.
+DEFAULT_ROOT_AIRFOIL = "e474"
+DEFAULT_MID_AIRFOIL = "e472"
+DEFAULT_TIP_AIRFOIL = "s5010"
 
 
 class MissionSpec(BaseModel):
@@ -19,11 +41,15 @@ class MissionSpec(BaseModel):
     cruise_altitude_m: float = Field(ge=0, le=4000, description="Cruise altitude AMSL in m")
     mtow_kg: Optional[float] = Field(default=None, gt=0, le=25,
                                      description="Max takeoff mass in kg; estimated from payload if absent")
-    endurance_min: Optional[float] = Field(default=None, gt=0, le=600,
-                                           description="Recorded goal only — not evaluated (propulsion/energy out of scope)")
-    range_km: Optional[float] = Field(default=None, gt=0, le=500,
-                                      description="Recorded goal only — not evaluated (propulsion/energy out of scope)")
     launch: Literal["hand", "catapult", "runway"] = "hand"
+
+    # S1-A: `endurance_min` and `range_km` were removed. They were recorded-only goals
+    # that no equation read, and a requirement nothing consumes reads as a promise the
+    # tool does not keep. Endurance is a propulsion/energy quantity and Stage 1 is
+    # aerodynamics-only. No `extra="forbid"` here on purpose: pydantic's default is to
+    # ignore unknown keys, which is what lets `mission_derived.json` files written
+    # before this change still load. The CL^1.5/CD figure of merit survives as
+    # AeroEstimate.power_fom (renamed from endurance_fom) — it compares shapes, not times.
 
     @model_validator(mode="after")
     def cross_checks(self) -> "MissionSpec":
@@ -49,9 +75,19 @@ class BWBParams(BaseModel):
     then `effective_c4_sweep_deg` and `cl_max_3d` raised ZeroDivisionError while
     `neutral_point_m` returned a SILENTLY WRONG 0.1727 and `mean_tc` a wrong 0.11.
     CLAUDE.md flags mutable-by-reference state as a live pattern in this codebase, so
-    the constructor's guarantees have to survive assignment."""
+    the constructor's guarantees have to survive assignment.
 
-    model_config = ConfigDict(validate_assignment=True)
+    S1-C: THE SECTION OWNS THICKNESS. `root_thickness_pct` and `tip_thickness_pct`
+    used to be free inputs dialled independently of the aerofoil, which was
+    incoherent — thickness is a property of a shape, not a knob beside it. They are
+    now COMPUTED from the chosen sections and serialised with the model, so a card
+    can always show how much depth the choice actually gives you.
+
+    `extra="forbid"` so a construction still passing `root_thickness_pct=14` fails
+    loudly. Pydantic's default would ignore it and silently build the DEFAULT
+    aerofoil instead — a wrong aircraft with no error."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
     span_m: float = Field(ge=0.8, le=3.0, description="Total span, tip to tip")
     root_chord_m: float = Field(ge=0.25, le=1.2, description="Centre-body root chord")
     centre_body_fraction: float = Field(ge=0.12, le=0.45,
@@ -61,11 +97,94 @@ class BWBParams(BaseModel):
     taper_outer: float = Field(ge=0.15, le=0.7, description="Tip chord / blend chord")
     sweep_inner_deg: float = Field(ge=15, le=60, description="Centre-body LE sweep")
     sweep_outer_deg: float = Field(ge=5, le=40, description="Outer panel LE sweep")
-    root_thickness_pct: float = Field(ge=8, le=20, description="Root airfoil t/c %")
-    tip_thickness_pct: float = Field(ge=5, le=14, description="Tip airfoil t/c %")
+    # The three aerofoil stations. Each fixes the thickness at that station; see
+    # DEFAULT_ROOT_AIRFOIL below for why these three are the defaults.
+    root_airfoil: str = Field(default=DEFAULT_ROOT_AIRFOIL,
+                              description="Centre-body section")
+    mid_airfoil: str = Field(default=DEFAULT_MID_AIRFOIL,
+                             description="Section at the centre-body/wing blend")
+    tip_airfoil: str = Field(default=DEFAULT_TIP_AIRFOIL, description="Tip section")
     root_twist_deg: float = Field(ge=-2, le=5, description="Root incidence")
     tip_twist_deg: float = Field(ge=-7, le=2, description="Tip twist (negative = washout)")
     dihedral_deg: float = Field(ge=0, le=8)
+
+    # -- thickness, owned by the section (S1-C) --------------------------------
+    # `computed_field` rather than a plain property so these appear in model_dump()
+    # and reach the cockpit card. The maintainer's requirement was that choosing a
+    # section must COMMUNICATE the depth it gives you, which it cannot do if the
+    # number never leaves the model.
+    @computed_field(description="Root t/c %, from the root section")
+    @property
+    def root_thickness_pct(self) -> float:
+        return round(tc_of(self.root_airfoil) * 100.0, 4)
+
+    @computed_field(description="Blend-station t/c %, from the mid section")
+    @property
+    def mid_thickness_pct(self) -> float:
+        return round(tc_of(self.mid_airfoil) * 100.0, 4)
+
+    @computed_field(description="Tip t/c %, from the tip section")
+    @property
+    def tip_thickness_pct(self) -> float:
+        return round(tc_of(self.tip_airfoil) * 100.0, 4)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _absorb_computed_thickness(cls, data):
+        """Let a round-trip of `model_dump()` back through `model_validate()` work.
+
+        `computed_field` puts the three thickness values INTO model_dump, and
+        `extra="forbid"` would then reject them coming back — breaking every
+        store-and-reload path in the cockpit and the candidate store.
+
+        They are dropped only when they AGREE with the sections, which is what a
+        genuine round-trip looks like. A stale caller passing a thickness that no
+        section supports still fails loudly, which was the point of forbidding
+        extras: silently ignoring `root_thickness_pct=14` would build the DEFAULT
+        aerofoil and report a wrong aircraft with no error."""
+        if not isinstance(data, dict):
+            return data
+        pairs = (("root_thickness_pct", "root_airfoil", DEFAULT_ROOT_AIRFOIL),
+                 ("mid_thickness_pct", "mid_airfoil", DEFAULT_MID_AIRFOIL),
+                 ("tip_thickness_pct", "tip_airfoil", DEFAULT_TIP_AIRFOIL))
+        if not any(k in data for k, _, _ in pairs):
+            return data
+        data = dict(data)
+
+        # A file written BEFORE S1-C has thicknesses and no sections at all. That
+        # aircraft is not reproducible — no section is exactly 14.00% t/c — so the
+        # nearest one is resolved instead. Without this, every session stored before
+        # this change 500s on load, which is how it was found: the suites were green
+        # and the running cockpit was not.
+        legacy = (not any(sk in data for _, sk, _ in pairs)
+                  and any(k in data for k, _, _ in pairs))
+        if legacy:
+            for key, section_key, _ in pairs:
+                if data.get(key) is not None:
+                    data[section_key] = nearest_by_tc(float(data[key]) / 100.0)
+            if "mid_airfoil" not in data:
+                # Pre-S1-C geometry had no blend section; it used the root/tip mean.
+                r = data.get("root_thickness_pct")
+                t = data.get("tip_thickness_pct")
+                if r is not None and t is not None:
+                    data["mid_airfoil"] = nearest_by_tc((float(r) + float(t)) / 200.0)
+
+        for key, section_key, fallback in pairs:
+            if key not in data:
+                continue
+            supplied = data.pop(key)
+            name = data.get(section_key, fallback)
+            if not has_section(name):
+                continue                       # the section check will report it
+            actual = round(tc_of(name) * 100.0, 4)
+            if legacy:
+                continue                       # nearest-match, never exact by design
+            if supplied is not None and abs(float(supplied) - actual) > 1e-3:
+                raise ValueError(
+                    f"{key}={supplied} does not match {section_key}={name!r}, which "
+                    f"is {actual:.2f}% t/c. Thickness is set BY the section (S1-C) — "
+                    f"choose a different aerofoil rather than passing a thickness.")
+        return data
 
     @model_validator(mode="after")
     def cross_checks(self) -> "BWBParams":
@@ -73,8 +192,16 @@ class BWBParams(BaseModel):
         if tip_chord < 0.04:
             raise ValueError(
                 f"tip chord {tip_chord:.3f} m below 0.04 m manufacturable minimum")
+        for field in ("root_airfoil", "mid_airfoil", "tip_airfoil"):
+            name = getattr(self, field)
+            if not has_section(name):
+                raise ValueError(
+                    f"{field}={name!r} is not in the screened section library")
         if self.tip_thickness_pct > self.root_thickness_pct:
-            raise ValueError("tip airfoil thicker than root airfoil")
+            raise ValueError(
+                f"tip section {self.tip_airfoil!r} ({self.tip_thickness_pct:.1f}% t/c) "
+                f"is thicker than root section {self.root_airfoil!r} "
+                f"({self.root_thickness_pct:.1f}%) — a BWB thins outboard")
         s_ref = self.planform_area_m2()
         ar = self.span_m ** 2 / s_ref
         if not 2.5 <= ar <= 10.0:

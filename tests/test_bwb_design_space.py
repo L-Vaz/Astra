@@ -19,7 +19,7 @@ from domain_packs.bwb.schema import BWBParams
 def _base() -> BWBParams:
     return BWBParams(span_m=1.8, root_chord_m=0.5, centre_body_fraction=0.28,
                      mid_chord_frac=0.55, taper_outer=0.5, sweep_inner_deg=34,
-                     sweep_outer_deg=20, root_thickness_pct=13, tip_thickness_pct=9,
+                     sweep_outer_deg=20, root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010",
                      root_twist_deg=2, tip_twist_deg=-3, dihedral_deg=3)
 
 

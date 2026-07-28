@@ -15,6 +15,7 @@ from typing import Callable, List, Optional
 from pydantic import BaseModel, Field
 
 from .aero_estimates import (AeroEstimate, LAUNCH_VSTALL_MAX, cl_max_3d,
+                             reynolds_at,
                              estimate)
 from .defaults import MAX_CRUISE_CL
 from .inverse import MIN_TIP_CHORD as _MIN_TIP_CHORD  # noqa: F401 (re-export)
@@ -66,8 +67,13 @@ class _Lens(BaseModel):
     taper_outer: float
     sweep_inner_deg: float
     sweep_outer_deg: float
-    root_thickness_pct: float
-    tip_thickness_pct: float
+    # S1-C: each lens names its three sections. Thickness follows from them, so a
+    # lens can no longer ask for a thickness no aerofoil actually has. Sections were
+    # chosen by ONE rule, applied to the thicknesses each lens already used: the
+    # highest-CLmax section inside the trim band within +/-0.8% of that thickness.
+    root_airfoil: str
+    mid_airfoil: str
+    tip_airfoil: str
     root_twist_deg: float
     tip_twist_deg: float
     dihedral_deg: float = 2.0
@@ -81,7 +87,7 @@ LENSES: List[_Lens] = [
                     "the sections to cut parasite drag.",
           ar=6.5, centre_body_fraction=0.28, mid_chord_frac=0.55,
           taper_outer=0.50, sweep_inner_deg=34, sweep_outer_deg=20,
-          root_thickness_pct=12, tip_thickness_pct=8,
+          root_airfoil="oa212", mid_airfoil="s3", tip_airfoil="s5020",
           root_twist_deg=2, tip_twist_deg=-2, size_to_cl_star=True),
     _Lens(key="span_efficiency", title="Span efficiency",
           objective="Cut induced drag with a higher aspect ratio at the same "
@@ -89,14 +95,14 @@ LENSES: List[_Lens] = [
                     "allow; usually paid for in root bending and span.",
           ar=8.5, centre_body_fraction=0.24, mid_chord_frac=0.55,
           taper_outer=0.45, sweep_inner_deg=32, sweep_outer_deg=18,
-          root_thickness_pct=13, tip_thickness_pct=8.5,
+          root_airfoil="e328", mid_airfoil="oa212", tip_airfoil="oa209",
           root_twist_deg=2, tip_twist_deg=-3),
     _Lens(key="easy_launch", title="Easy launch",
           objective="Lowest stall speed: bigger wing, modest aspect ratio, "
                     "extra washout for a docile departure.",
           ar=5.0, centre_body_fraction=0.32, mid_chord_frac=0.58,
           taper_outer=0.55, sweep_inner_deg=34, sweep_outer_deg=18,
-          root_thickness_pct=14, tip_thickness_pct=9,
+          root_airfoil="e474", mid_airfoil="e472", tip_airfoil="oa209",
           root_twist_deg=2, tip_twist_deg=-4, size_to_cl_star=False),
     _Lens(key="control_margin", title="Control margin",
           objective="Move the neutral point aft with sweep and add washout "
@@ -105,7 +111,7 @@ LENSES: List[_Lens] = [
                     "of conditions.",
           ar=5.5, centre_body_fraction=0.30, mid_chord_frac=0.55,
           taper_outer=0.50, sweep_inner_deg=44, sweep_outer_deg=28,
-          root_thickness_pct=15, tip_thickness_pct=9,
+          root_airfoil="e475", mid_airfoil="e474", tip_airfoil="oa209",
           root_twist_deg=3, tip_twist_deg=-5),
 ]
 
@@ -203,7 +209,8 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
         # stall requirement binds every candidate, not just CL*-sized ones
         params0 = _solve_planform(s, lens, None, span_cap)
         v_cap, cap_reason = effective_stall_cap(launch, stall_cap)
-        s_floor = max(2.0 * w / (rho * v_cap ** 2 * cl_max_3d(params0)),
+        s_floor = max(2.0 * w / (rho * v_cap ** 2 * cl_max_3d(
+                          params0, reynolds_at(params0, atmosphere, v_cap))),
                       w / (q * MAX_CRUISE_CL))
         if s_floor > s:
             notes.append(f"Wing grown to {s_floor:.3f} m^2 to honour "
@@ -232,9 +239,12 @@ def _size_wing(lens: _Lens, derived: MissionDerived,
 
     # constraints: cruise CL cap and the effective stall cap
     s_min_cl = w / (q * MAX_CRUISE_CL)
-    clmax = cl_max_3d(params)
     launch_cap = LAUNCH_VSTALL_MAX[launch]
     v_cap, cap_reason = effective_stall_cap(launch, stall_cap)
+    # S1-C2: CLmax is Reynolds-dependent, so it must be evaluated at the speed this
+    # floor is about — the stall cap — not at cruise. (v_cap now has to be resolved
+    # before clmax, which is why the two lines swapped order.)
+    clmax = cl_max_3d(params, reynolds_at(params, atmosphere, v_cap))
     s_min_stall = 2.0 * w / (rho * v_cap ** 2 * clmax)
     s_bound = max(s_min_cl, s_min_stall)
     if s_bound > s:
@@ -435,6 +445,31 @@ def absolute_notes(panel: AeroEstimate) -> List[str]:
     if panel.cl_cruise > panel.cl_max_3d:
         out.append(f"Cruise CL {panel.cl_cruise:.3f} exceeds CLmax "
                    f"{panel.cl_max_3d:.3f} — this design cannot fly at this speed.")
+    # S1-C2. The stall SPEED was always on the card; WHERE the wing stalls was not,
+    # because CLmax was a constant and there was no station to report. This is the
+    # more consequential of the two for a tailless configuration: a high stall speed
+    # is an inconvenience, an outboard stall is a departure mode. Stated on its own
+    # terms — not as a gate — because the maintainer's ruling was flag and penalise.
+    # S1-D. A tailless aircraft has nothing but its own wing to balance itself with, so
+    # "does it trim" is a first-class Stage-1 verdict rather than a tier-1 detail. Said
+    # with the two escape routes, because "cannot trim" alone is not actionable.
+    if not panel.trims_as_built:
+        detail = (f"needs {panel.tip_twist_for_trim_deg:+.1f}° tip twist"
+                  if panel.tip_twist_for_trim_deg is not None else "twist has no "
+                  "pitch authority on this planform")
+        if not panel.trim_twist_reachable and panel.static_margin_at_trim is not None:
+            detail += (f", outside the buildable range — or move the CG to "
+                       f"{panel.x_cg_for_trim_m:.3f} m, which leaves only "
+                       f"{panel.static_margin_at_trim:.1%} static margin")
+        out.append(
+            f"Does not trim itself at cruise: Cm = {panel.cm_trim_residual:+.4f} about "
+            f"the recommended CG ({detail}).")
+    if panel.stall_is_outboard:
+        out.append(
+            f"Stall begins OUTBOARD, at {panel.stall_station_frac:.0%} of semi-span. "
+            f"On a swept tailless wing the lift lost there is aft of the CG, so the "
+            f"nose pitches UP into the stall with no tail to recover. More washout "
+            f"moves it inboard (Schrenk, NACA TM-948).")
     return out
 
 
@@ -446,12 +481,30 @@ def _drag_provenance(panel: AeroEstimate) -> List[str]:
     return [
         f"Parasite drag CD0 = {panel.cd0:.4f} (wetted-area buildup at "
         f"Re = {panel.reynolds_mac:.3g})",
+        # S1-E: the same number built the other way. Stated together because they
+        # disagree, and the disagreement is the honest content — a reader who sees only
+        # one has no way to know how firm it is.
+        f"Cross-check from the measured section data: strip-integrated profile CD = "
+        f"{panel.cd_profile_sections:.4f} at cruise CL, {panel.cd0_sections_at_zero_lift:.4f} "
+        f"at zero lift — the wetted-area correlation reads "
+        f"{panel.cd0_model_disagreement:.2f}x that. Unreconciled; CFD settles it",
         f"Induced drag k = 1/(pi*e*AR), e = {panel.oswald_e:.3f}, AR = {panel.aspect_ratio:.2f}",
         f"Cruise CL = W/(q*S) = {panel.cl_cruise:.3f} -> L/D = {panel.ld_cruise:.1f} "
         f"(best possible L/D for this shape: {panel.ld_max:.1f} at CL* = {panel.cl_star:.3f})",
-        f"Stall {panel.v_stall_ms:.1f} m/s at CLmax(3D) = {panel.cl_max_3d:.2f}",
+        f"Stall {panel.v_stall_ms:.1f} m/s at CLmax(3D) = {panel.cl_max_3d:.2f}, "
+        f"first at {panel.stall_station_frac:.0%} of semi-span "
+        f"({'outboard' if panel.stall_is_outboard else 'inboard'}) — Schrenk "
+        f"span load (NACA TM-948), self-consistent at the stall Reynolds",
         f"Neutral point estimate x_np = {panel.x_np_m:.3f} m; CG for "
         f"8% static margin at x = {panel.x_cg_for_target_sm_m:.3f} m",
+        # S1-H. Worth stating because sweep supplies dihedral effect silently and the
+        # amount is not small — and because it grows exactly where roll authority
+        # shrinks, at low speed.
+        f"Effective dihedral {panel.effective_dihedral_deg:.1f}° at cruise rising to "
+        f"{panel.effective_dihedral_at_clmax_deg:.1f}° at CLmax "
+        f"({panel.effective_dihedral_from_sweep_deg:+.1f}° of it from "
+        f"{panel.effective_c2_sweep_deg:.1f}° half-chord sweep, the rest geometric) "
+        f"— McCormick p.547",
     ]
 
 
@@ -602,7 +655,8 @@ def _capped_baseline(derived: MissionDerived, span_cap: float,
     shape = ShapeFractions.from_params(params)
     cap, cap_reason = effective_stall_cap(launch, stall_cap)
     rho = atmosphere.density_kgm3
-    s_floor = 2.0 * derived.weight_n / (rho * cap ** 2 * cl_max_3d(params))
+    s_floor = 2.0 * derived.weight_n / (
+        rho * cap ** 2 * cl_max_3d(params, reynolds_at(params, atmosphere, cap)))
     s = max(params.planform_area_m2(), s_floor)
     ar = params.span_m ** 2 / params.planform_area_m2()
     resolved = _feasible_planform(s, ar, shape, span_cap, notes, s_floor=s_floor,

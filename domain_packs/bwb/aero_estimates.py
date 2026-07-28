@@ -47,21 +47,25 @@ LAMINAR_FRACTION = 0.30
 # optimistic edge of the real range.
 INTERFERENCE_MARGIN = 1.10
 
-# NACA 4-series section CLmax at Re ~ 7e5 (Abbott & von Doenhoff section data).
-# Fixed at that Reynolds number: cl_max_3d is bit-identical across Re 1.8e5-1.0e6,
-# which is the dominant low-Re effect this tier does not model (S6-F5 / S7-CAP-4).
-CL_MAX_2D = 1.30
-
-# Raymer: finite-wing knockdown from section CLmax to wing CLmax, before sweep.
-CL_MAX_3D_FACTOR = 0.90
+# S1-C2: CL_MAX_2D = 1.30 and CL_MAX_3D_FACTOR = 0.90 ARE GONE.
+#
+# `CL_MAX_2D` was one section value for every aircraft, cited to "NACA 4-series at
+# Re ~ 7e5" — the wrong section family (conventionally cambered, i.e. what a TAILED
+# aircraft uses) at roughly 3.5x the Reynolds number this project flies at. Capability
+# now comes per station from the committed NeuralFoil screen.
+#
+# `CL_MAX_3D_FACTOR` was an unsourced allowance for the fact that a wing does not stall
+# everywhere at once. That is no longer an allowance — `spanwise.solve_stall` computes
+# WHERE the wing first stalls, so the gap the 0.90 stood in for is now the result rather
+# than an input.
 
 # ENGINEERING JUDGMENT (Astra): the highest stall speed each launch method tolerates,
 # m/s. NOT derived from defaults.WING_LOADING — inverting these against that table
-# implies CLmax 1.02 (hand) / 0.95 (catapult) / 0.81 (runway), three different values,
-# none of which equals this pack's own CL_MAX_2D * CL_MAX_3D_FACTOR = 1.17. The
-# previous comment claimed they were "calibrated so the pack's own wing-loading table
-# sits at the boundary"; they are three independent judgments. Revisit against
-# Sadraey §5 / Raymer §5 before treating them as calibrated.
+# implies CLmax 1.02 (hand) / 0.95 (catapult) / 0.81 (runway), three different values.
+# They are three independent judgments. Notably the hand figure of 1.02 is close to
+# what the Schrenk solve now returns for a real tailless section set, where the old
+# constant chain gave an optimistic 1.17.
+# Revisit against Sadraey §5 / Raymer §5 before treating them as calibrated.
 # `test_bwb_disclosure.py::test_the_implied_clmax_values_disagree_with_the_packs_own_cap`
 # keeps that inconsistency measured rather than remembered.
 LAUNCH_VSTALL_MAX = {"hand": 10.5, "catapult": 13.0, "runway": 16.0}
@@ -97,11 +101,24 @@ class AeroEstimate(BaseModel):
     ld_cruise: float
     cl_star: float = Field(description="CL of best L/D: sqrt(pi e AR CD0)")
     ld_max: float
-    endurance_fom: float = Field(description="CL^1.5/CD at cruise (power ~ 1/this)")
+    power_fom: float = Field(
+        description="CL^1.5/CD at cruise. Level-flight power required scales as "
+                    "1/this, so larger is better. A figure of merit for comparing "
+                    "SHAPES — not a time, and not an endurance in minutes. Renamed "
+                    "from endurance_fom in S1-A; the quantity is unchanged.")
 
     # stall / launch
     cl_max_3d: float
     v_stall_ms: float
+    stall_station_frac: float = Field(
+        default=0.0,
+        description="Where stall begins, as a fraction of semi-span (0 = root, 1 = tip). "
+                    "Computed from the spanwise load (S1-C2), not assumed.")
+    stall_is_outboard: bool = Field(
+        default=False,
+        description="True when stall begins outboard. On a swept tailless wing that "
+                    "moves the centre of lift forward and pitches the aircraft UP, "
+                    "deeper into the stall, with no tail to recover with.")
     cruise_feasible: bool = True
     """False when the requested cruise speed is BELOW the stall speed (S6-F1).
 
@@ -114,6 +131,45 @@ class AeroEstimate(BaseModel):
     stall; 0.2 means 20% above it."""
     launch_limit_ms: Optional[float] = None
     launch_ok: Optional[bool] = None
+
+    # S1-E: profile drag from the measured section data, integrated across the span.
+    # REPORTED, NOT USED IN THE POLAR — see domain_packs/bwb/section_drag.py.
+    cd_profile_sections: float = Field(
+        default=0.0,
+        description="Strip-integrated section CD at the cruise CL and each station's "
+                    "own Reynolds. Includes the VISCOUS lift-dependent part, so it is "
+                    "not interchangeable with cd0 and must never be added to it.")
+    cd0_sections_at_zero_lift: float = Field(
+        default=0.0,
+        description="The same integral at CL = 0 — the quantity comparable with cd0.")
+    cd0_model_disagreement: float = Field(
+        default=0.0,
+        description="cd0 / cd0_sections_at_zero_lift. Measured 1.375 on the reference "
+                    "wing: the wetted-area correlation reads 37% higher than the sum "
+                    "of the measured section drags, and its own lumped interference "
+                    "margin is only 1.10. Unresolved — reported, not reconciled.")
+    cd_sections_span_clamped: float = Field(
+        default=0.0,
+        description="Fraction of the half-span whose local lift coefficient fell off "
+                    "the stored CL ladder at the CRUISE CL and was clamped to its end.")
+
+    # S1-G: the planform's INVISCID span efficiency, from Prandtl's lifting line.
+    # REPORTED, NOT USED IN THE POLAR — see domain_packs/bwb/lifting_line.py for why.
+    span_efficiency_planar: float = Field(
+        default=0.0,
+        description="e = 1/(1+delta) from the lifting-line Fourier solution: the "
+                    "planform's induced drag against the elliptic minimum, with no "
+                    "viscous or interference content. Monotone, unclamped, e <= 1 by "
+                    "construction. NOT the Oswald e used in `cd_cruise`.")
+    span_efficiency_delta: float = Field(
+        default=0.0,
+        description="delta = SUM n (A_n/A_1)^2. Zero for an elliptic wing.")
+    oswald_e_span_gap: float = Field(
+        default=0.0,
+        description="span_efficiency_planar - oswald_e. A large positive gap is "
+                    "EXPECTED, not a defect: Raymer's Oswald fit carries viscous "
+                    "lift-dependent drag and interference that the inviscid solve "
+                    "does not. Surfaced so the two are never confused.")
 
     oswald_e_clamped: Optional[str] = Field(
         default=None,
@@ -129,9 +185,62 @@ class AeroEstimate(BaseModel):
                      "OPTIMISTIC. Treat the CG recommendation as a lower bound on "
                      "required nose-heaviness until VSPAERO confirms it (S6-F13)."))
     x_cg_for_target_sm_m: float
+
+    # trim, washout-only (S1-D). See domain_packs/bwb/trim.py for the derivation.
+    cm_trim_residual: float = Field(
+        default=0.0,
+        description="Pitching moment about x_cg_for_target_sm_m at the cruise CL, "
+                    "nose-up positive. Zero means the wing flies itself with no "
+                    "control input. A tailless aircraft has nothing else to trim with.")
+    trims_as_built: bool = Field(
+        default=True,
+        description="|cm_trim_residual| within trim.CM_TRIM_TOLERANCE.")
+    tip_twist_for_trim_deg: Optional[float] = Field(
+        default=None,
+        description="Tip twist that would zero the residual, holding everything else "
+                    "fixed. None when twist has no pitch authority on this planform.")
+    trim_twist_reachable: bool = Field(
+        default=False,
+        description="That twist is inside the schema's tip-twist range. False means "
+                    "washout ALONE cannot trim this wing — the sweep, the CG or the "
+                    "sections must change.")
+    x_cg_for_trim_m: Optional[float] = Field(
+        default=None,
+        description="CG that trims the wing at cruise CL instead. Trim and static "
+                    "margin are two demands on one CG position; this is the other one.")
+    static_margin_at_trim: Optional[float] = Field(
+        default=None,
+        description="Static margin left over at x_cg_for_trim_m. Below the target "
+                    "means balance was bought with stability; negative means the wing "
+                    "can be balanced or stable but not both.")
+
     cg_placement_infeasible: bool = False
     """x_np fell outside (0, root_chord): 6.8% of the envelope, up to 2.48x the root
     chord. The CG this implies may have nowhere to sit on the airframe (S6-F13b)."""
+
+    # lateral-directional (S1-H) — reported, never optimised. See dihedral.py.
+    effective_dihedral_deg: float = Field(
+        default=0.0,
+        description="Total dihedral effect at the CRUISE CL, in degrees of equivalent "
+                    "geometric dihedral: the wing's own dihedral plus the contribution "
+                    "of sweep (McCormick p.547). Scales with CL, so it is a different "
+                    "number at every speed.")
+    effective_dihedral_from_sweep_deg: float = Field(
+        default=0.0,
+        description="The sweep half of the total. Negative when the half-chord line "
+                    "sweeps forward, which this schema reaches.")
+    effective_dihedral_at_clmax_deg: float = Field(
+        default=0.0,
+        description="The same total at CLmax — the slow end, where dihedral effect is "
+                    "strongest and roll authority is weakest.")
+    cl_beta_per_rad: float = Field(
+        default=0.0,
+        description="Roll due to sideslip at cruise, per radian. Negative is "
+                    "stabilising. Superseded by the VLM value whenever one exists.")
+    effective_c2_sweep_deg: float = Field(
+        default=0.0,
+        description="Half-chord sweep, tangent-averaged. The line McCormick's dihedral "
+                    "increment is written at — NOT the quarter chord.")
 
     # proxies
     root_bending_index_nm: float = Field(
@@ -187,7 +296,11 @@ def mean_tc(params: BWBParams) -> float:
     a2 = b2 * (c_mid + c_tip) / 2.0
     t_root = params.root_thickness_pct / 100.0
     t_tip = params.tip_thickness_pct / 100.0
-    t_mid = 0.5 * (t_root + t_tip)
+    # S1-C: the blend station has its OWN section now, so its thickness is read
+    # rather than assumed to be the mean of root and tip. Before this the geometry
+    # built by OpenVSP and the t/c used for form factor could disagree whenever the
+    # mid section was not exactly halfway.
+    t_mid = params.mid_thickness_pct / 100.0
     return (a1 * (t_root + t_mid) / 2.0 + a2 * (t_mid + t_tip) / 2.0) / (a1 + a2)
 
 
@@ -219,6 +332,24 @@ def effective_c4_sweep_deg(params: BWBParams) -> float:
     b1, b2 = params.half_widths()
     t1 = math.tan(math.radians(params.sweep_inner_deg)) - 0.25 * (c_root - c_mid) / b1
     t2 = math.tan(math.radians(params.sweep_outer_deg)) - 0.25 * (c_mid - c_tip) / b2
+    return math.degrees(math.atan((b1 * t1 + b2 * t2) / (b1 + b2)))
+
+
+def effective_c2_sweep_deg(params: BWBParams) -> float:
+    """Half-width-weighted HALF-CHORD sweep (S1-H).
+
+    Same tangent-space average as the other two, for the same reason (S6-F4). Per
+    trapezoid: tan(Lc/2) = tan(LLE) - 0.5*(cr - ct)/half_width — the 0.5 being the
+    chord fraction, exactly as 0.25 gives the quarter chord.
+
+    Exists because McCormick's sweep contribution to effective dihedral is written at
+    the HALF chord specifically, and reusing the quarter-chord value would silently
+    change the answer: on the reference wing the two differ by about 8 degrees, and the
+    dihedral increment is proportional to tan(sweep)."""
+    c_root, c_mid, c_tip = params.chords()
+    b1, b2 = params.half_widths()
+    t1 = math.tan(math.radians(params.sweep_inner_deg)) - 0.5 * (c_root - c_mid) / b1
+    t2 = math.tan(math.radians(params.sweep_outer_deg)) - 0.5 * (c_mid - c_tip) / b2
     return math.degrees(math.atan((b1 * t1 + b2 * t2) / (b1 + b2)))
 
 
@@ -317,22 +448,73 @@ def parasite_drag_coeff(params: BWBParams, re_mac: float) -> float:
     return cf * ff * swet_ratio * INTERFERENCE_MARGIN
 
 
-def cl_max_3d(params: BWBParams) -> float:
-    """Section CLmax knocked down for finite span and quarter-chord sweep
-    (Raymer: CLmax ~ 0.9 * Clmax * cos(Lc/4)).
+def reynolds_at(params: BWBParams, atmosphere: AtmosphereState, v_ms: float) -> float:
+    """Chord Reynolds number at the mean aerodynamic chord, for a given speed."""
+    return v_ms * params.mean_aero_chord_m() / atmosphere.kinematic_viscosity_m2s
 
-    Independent of Reynolds number, thickness and washout — verified bit-identical
-    across Re 1.8e5-1.0e6, mean t/c 0.064-0.168 and washout 0-12 deg — so v_stall_ms
-    and the whole launch_ok gate are too. That is the most consequential blind spot for
-    a low-Re small UAV (section Clmax is ~0.9 at Re 1.5e5 and ~1.45 at 1e6). Fixing it
-    needs a sourced correlation, not an invented scaling: S7-CAP-4.
 
-    The knockdown applies to AFT sweep only (S6-F6). `math.cos` is even, so a
-    forward-swept quarter chord — which happens in 5.4% of the envelope, down to
-    -31.03 deg — was penalised exactly like aft sweep, while Raymer's correlation is an
-    aft-sweep one."""
+def cl_max_3d(params: BWBParams, reynolds_mac: float) -> float:
+    """Wing CLmax, computed from where the wing actually stalls (S1-C2).
+
+    Was `CL_MAX_2D * 0.90 * cos(sweep)` — one hard-coded section value and one
+    unsourced knockdown, identical for every aircraft ever produced here, and
+    independent of Reynolds number, thickness and washout. That was the most
+    consequential blind spot in the pack for a low-Re small UAV.
+
+    Now `spanwise.solve_stall` finds the station where local demand first reaches local
+    capability (Schrenk, NACA TM-948 — see that module). The 0.90 is gone because the
+    non-simultaneous-stall allowance it stood in for is now the computed result.
+
+    REYNOLDS IS REQUIRED, and is a real argument rather than a convenience: section
+    CLmax falls with Reynolds, and the tip runs at a small fraction of the MAC value
+    (measured on the reference wing: 163k at the tip against 409k at the MAC). Pass the
+    Reynolds at the speed you care about — `stall_solution` iterates it to the actual
+    stall speed, which is NOT the cruise speed.
+
+    THE SWEEP FACTOR IS A PATCH, NOT PART OF THE METHOD. TM-948 is a straight
+    monoplane-wing derivation with no sweep term anywhere. `cos(Lc/4)` is retained as a
+    separately applied correction and is the weakest link in this result. It is applied
+    to AFT sweep only (S6-F6): `math.cos` is even, so a forward-swept quarter chord —
+    5.4% of the envelope, down to -31.03 deg — would otherwise be penalised exactly like
+    aft sweep."""
+    from .spanwise import solve_stall
     sweep_deg = effective_c4_sweep_deg(params)
-    return CL_MAX_2D * CL_MAX_3D_FACTOR * math.cos(math.radians(max(sweep_deg, 0.0)))
+    wing = solve_stall(params, reynolds_mac).cl_max_wing
+    return wing * math.cos(math.radians(max(sweep_deg, 0.0)))
+
+
+def stall_solution(params: BWBParams, atmosphere: AtmosphereState, weight_n: float,
+                   max_iter: int = 8, tol: float = 1e-4):
+    """(v_stall_ms, cl_max_3d, spanwise solution) solved self-consistently.
+
+    A wing stalls at its STALL speed, not at cruise, so the Reynolds number that sets
+    CLmax depends on the answer. Measured on the golden reference: evaluating at the
+    cruise Reynolds (409k) gives CLmax 1.206, while the self-consistent stall Reynolds
+    (235k) gives 1.133 — 6% lower, and V_stall 3% higher. Ignoring that would be the
+    same error this item exists to remove, committed at aircraft level instead of
+    station level.
+
+    Converges in 3-4 iterations from the cruise-speed start."""
+    from .spanwise import solve_stall
+    s = params.planform_area_m2()
+    mac = params.mean_aero_chord_m()
+    rho = atmosphere.density_kgm3
+    nu = atmosphere.kinematic_viscosity_m2s
+    cos_sweep = math.cos(math.radians(max(effective_c4_sweep_deg(params), 0.0)))
+
+    # Start from a plausible speed rather than an arbitrary Reynolds: any positive
+    # start converges, but starting near the answer keeps it to a few passes.
+    v = math.sqrt(2.0 * weight_n / (rho * s * 1.0))
+    sol = None
+    for _ in range(max_iter):
+        sol = solve_stall(params, max(v * mac / nu, 1.0))
+        clmax = sol.cl_max_wing * cos_sweep
+        v_new = math.sqrt(2.0 * weight_n / (rho * s * clmax))
+        if abs(v_new - v) <= tol * max(v, 1e-6):
+            v = v_new
+            break
+        v = v_new
+    return v, sol.cl_max_wing * cos_sweep, sol
 
 
 def neutral_point_m(params: BWBParams) -> float:
@@ -402,8 +584,9 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
     cl_star = math.sqrt(cd0 / k)
     ld_max = cl_star / (2.0 * cd0)
 
-    clmax = cl_max_3d(params)
-    v_stall = math.sqrt(2.0 * weight_n / (rho_kgm3 * s * clmax))
+    # S1-C2: solved self-consistently — CLmax depends on Reynolds, Reynolds on the stall
+    # speed, and the stall speed on CLmax. See `stall_solution`.
+    v_stall, clmax, stall = stall_solution(params, atmosphere, weight_n)
     launch_limit = LAUNCH_VSTALL_MAX[launch] if launch is not None else None
 
     x_np = neutral_point_m(params)
@@ -432,9 +615,13 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         f"CD0 0.020-0.035)",
         f"Oswald e = {e:.3f} from Raymer fits (AR {ar:.2f}, effective LE sweep "
         f"{sweep_eff:.1f} deg)",
-        f"Section CLmax {CL_MAX_2D} (NACA 4-series, Re~7e5) x {CL_MAX_3D_FACTOR} "
-        f"finite-wing x cos(sweep) — fixed at that Reynolds number, so CLmax here "
-        f"does not respond to speed or altitude",
+        f"CLmax {clmax:.3f} computed from the spanwise load (Schrenk, NACA TM-948): "
+        f"stall begins at {stall.stall_eta:.0%} semi-span"
+        + (" — OUTBOARD, which pitches a swept tailless wing UP into the stall"
+           if stall.stall_is_outboard else " (inboard)")
+        + f". Sections evaluated at their own local Reynolds; solved self-consistently "
+          f"at the stall speed, not at cruise. The cos(sweep) factor is a PATCH — "
+          f"TM-948 is a straight-wing method with no sweep term",
         "Neutral point = planform quarter-MAC estimate; VSPAERO x_np supersedes it",
         f"Static margin target {STATIC_MARGIN_TARGET:.0%} MAC when placing the CG "
         f"(engineering judgment, tailless-BWB practice)",
@@ -462,6 +649,28 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
             f"(0 to {root_chord:.3f} m), so the CG this implies may be physically "
             f"unplaceable on the airframe")
 
+    # S1-D: trim about the CG this panel already recommends, at the CL it already
+    # computed. Imported here rather than at module scope because trim.py imports
+    # `neutral_point_m` from this module.
+    from .trim import solve_trim
+    x_cg_target = x_np - STATIC_MARGIN_TARGET * mac
+    trim = solve_trim(params, cl, x_cg_target, re_mac)
+
+    # S1-G: reported beside the Oswald fit, never substituted for it.
+    from .lifting_line import span_efficiency
+    delta_ll, e_planar = span_efficiency(params)
+
+    # S1-E: the same treatment for profile drag — measured section data beside the
+    # wetted-area correlation, with the gap between them stated rather than averaged.
+    from .section_drag import profile_drag
+    sec_drag = profile_drag(params, cl, re_mac)
+
+    # S1-H: dihedral effect scales with CL, so it is reported at both ends of the
+    # useful range — cruise, and CLmax where it is strongest and the ailerons weakest.
+    from .dihedral import effective_dihedral
+    dihedral_cruise = effective_dihedral(params, cl)
+    dihedral_slow = effective_dihedral(params, clmax)
+
     return AeroEstimate(
         s_ref_m2=s, aspect_ratio=ar, span_m=params.span_m, mac_m=mac,
         wing_loading_kgm2=mass_kg / s,
@@ -469,8 +678,9 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         v_ms=v_ms, rho_kgm3=rho_kgm3, weight_n=weight_n, reynolds_mac=re_mac,
         cd0=cd0, oswald_e=e, cl_cruise=cl, cd_cruise=cd, ld_cruise=cl / cd,
         cl_star=cl_star, ld_max=ld_max,
-        endurance_fom=cl ** 1.5 / cd,
+        power_fom=cl ** 1.5 / cd,
         cl_max_3d=clmax, v_stall_ms=v_stall,
+        stall_station_frac=stall.stall_eta, stall_is_outboard=stall.stall_is_outboard,
         cruise_feasible=cruise_feasible, stall_margin=stall_margin,
         launch_limit_ms=launch_limit,
         # `is not None`, not truthiness: a limit of 0.0 would have skipped the gate.
@@ -478,10 +688,28 @@ def estimate(params: BWBParams, atmosphere: AtmosphereState, v_ms: float,
         # disagree about the same breach (constants.VSTALL_TOL_MS).
         launch_ok=(v_stall <= launch_limit + VSTALL_TOL_MS)
         if launch_limit is not None else None,
+        cd_profile_sections=sec_drag.cd_profile,
+        cd0_sections_at_zero_lift=sec_drag.cd_profile_at_zero_lift,
+        cd0_model_disagreement=sec_drag.disagreement_ratio,
+        cd_sections_span_clamped=(sec_drag.span_fraction_below_ladder
+                                  + sec_drag.span_fraction_above_ladder),
+        span_efficiency_planar=e_planar, span_efficiency_delta=delta_ll,
+        oswald_e_span_gap=e_planar - e,
         oswald_e_clamped=oswald_clamp,
         cg_placement_infeasible=cg_placement_infeasible,
         x_np_m=x_np,
-        x_cg_for_target_sm_m=x_np - STATIC_MARGIN_TARGET * mac,
+        x_cg_for_target_sm_m=x_cg_target,
+        cm_trim_residual=trim.cm_cg,
+        trims_as_built=trim.trims_as_built,
+        tip_twist_for_trim_deg=trim.tip_twist_for_trim_deg,
+        trim_twist_reachable=trim.tip_twist_in_range,
+        x_cg_for_trim_m=trim.x_cg_for_trim_m,
+        static_margin_at_trim=trim.static_margin_at_trim,
+        effective_dihedral_deg=dihedral_cruise.total_deg,
+        effective_dihedral_from_sweep_deg=dihedral_cruise.sweep_deg,
+        effective_dihedral_at_clmax_deg=dihedral_slow.total_deg,
+        cl_beta_per_rad=dihedral_cruise.cl_beta_per_rad,
+        effective_c2_sweep_deg=dihedral_cruise.half_chord_sweep_deg,
         root_bending_index_nm=weight_n * params.span_m / 8.0,
         tip_re=v_ms * c_tip / atmosphere.kinematic_viscosity_m2s,
         roll_damping_index=params.span_m ** 2,

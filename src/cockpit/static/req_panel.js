@@ -61,7 +61,12 @@ export function flightCtx() {
   const atmosphere = ATMOSPHERE.resolveAtmosphere(
     r.cruise_altitude_m, C.S.atmosphereTable);
   return { atmosphere, v: +r.cruise_speed_ms,
-    w: +r.mtow_kg * 9.81, launch: r.launch || 'hand' };
+    w: +r.mtow_kg * 9.81, launch: r.launch || 'hand',
+    // S1-C2: the stall solve runs Schrenk in the browser and needs the selected
+    // sections' Reynolds curves. Passed through the flight context rather than held
+    // as module state in spanwise.js — an ES module imported under two specifiers is
+    // two instances with two caches, which the parity test caught on its first run.
+    sectionCurves: C.S.sectionCurves };
 }
 
 function collect() {
@@ -150,7 +155,11 @@ export function refreshAchieved() {
     const target = e.check.checked ? +e.num.value : null;
     const v = est[field];
     let met = null;
-    if (target != null) {
+    /* S1-C2: `vStall` is null until the section curves arrive. JS coerces null to 0 in
+       a numeric comparison, so `null <= target` is TRUE — the stall requirement would
+       have shown a green "met" against a stall speed that had not been computed. A
+       missing value is not a passing value. */
+    if (target != null && v != null) {
       const tol = metTolerances();  // solver-owned (inverse.MET_TOLERANCES)
       if (key === 'ld_min') met = v >= target - (tol.ld_min || 0);
       else if (key === 'cl_cruise_target') met = Math.abs(v - target) <= (tol.cl_cruise_target_rel || 0) * target;

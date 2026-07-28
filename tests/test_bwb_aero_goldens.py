@@ -30,8 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from domain_packs.bwb.aero_estimates import (CL_MAX_2D, CL_MAX_3D_FACTOR,
-                                             INTERFERENCE_MARGIN,
+from domain_packs.bwb.aero_estimates import (INTERFERENCE_MARGIN,
                                              LAMINAR_FRACTION,
                                              LAUNCH_VSTALL_MAX,
                                              STATIC_MARGIN_TARGET,
@@ -65,6 +64,9 @@ REFERENCE_PARAMS = GOLDEN["reference"]["params"]
 REFERENCE_ALTITUDE_M = GOLDEN["reference"]["altitude_m"]
 REFERENCE_SPEED_MS = GOLDEN["reference"]["speed_ms"]
 REFERENCE_WEIGHT_N = GOLDEN["reference"]["weight_n"]
+# S1-C2: CLmax depends on Reynolds, so the geometry golden must pin the Reynolds it
+# was measured at. This is the reference panel's own cruise MAC value.
+REFERENCE_RE_MAC = GOLDEN["panel"]["reynolds_mac"]
 REFERENCE_LAUNCH = GOLDEN["reference"]["launch"]
 
 GOLDEN_PANEL = GOLDEN["panel"]
@@ -126,7 +128,12 @@ def test_golden_geometry_component(reference_params, name):
         "form_factor_mean_tc": lambda p: form_factor(mean_tc(p)),
         "effective_le_sweep_deg": effective_le_sweep_deg,
         "effective_c4_sweep_deg": effective_c4_sweep_deg,
-        "cl_max_3d": cl_max_3d,
+        # S1-C2: CLmax takes a Reynolds number now, pinned at the reference panel's
+        # cruise value so this golden stays a fixed-condition probe.
+        "cl_max_3d_at_cruise_re": lambda p: cl_max_3d(p, REFERENCE_RE_MAC),
+        "stall_station_frac": lambda p: estimate(
+            p, atmosphere_at(0.0), REFERENCE_SPEED_MS, REFERENCE_WEIGHT_N,
+            "hand").stall_station_frac,
         "neutral_point_m": neutral_point_m,
     }
     assert fns[name](reference_params) == pytest.approx(
@@ -191,10 +198,27 @@ def test_declared_constants_are_pinned():
     """
     assert LAMINAR_FRACTION == 0.30
     assert INTERFERENCE_MARGIN == 1.10
-    assert CL_MAX_2D == 1.30
-    assert CL_MAX_3D_FACTOR == 0.90
+    # S1-C2: CL_MAX_2D (1.30) and CL_MAX_3D_FACTOR (0.90) are no longer pinned here
+    # because they no longer exist. Both were unsourced global levers; CLmax is now
+    # solved from the spanwise load instead of assumed. Their absence is asserted
+    # below so they cannot quietly return.
     assert STATIC_MARGIN_TARGET == 0.08
     assert LAUNCH_VSTALL_MAX == {"hand": 10.5, "catapult": 13.0, "runway": 16.0}
+
+
+def test_the_unsourced_clmax_constants_stay_deleted():
+    """S1-C2 removed `CL_MAX_2D = 1.30` (wrong section family at 3.5x the wrong
+    Reynolds) and `CL_MAX_3D_FACTOR = 0.90` (an unsourced allowance for the wing not
+    stalling everywhere at once). Both are now computed — the first per station from
+    the section screen, the second as the result of finding where stall begins.
+
+    Reintroducing either would mean a guessed number is back in the stall chain, which
+    sets wing area, which sets everything."""
+    from domain_packs.bwb import aero_estimates as A
+    for gone in ("CL_MAX_2D", "CL_MAX_3D_FACTOR"):
+        assert not hasattr(A, gone), (
+            f"aero_estimates.{gone} is back — CLmax is being assumed again instead of "
+            f"solved from the spanwise load")
 
 
 def test_static_margin_target_is_not_duplicated_inconsistently():
@@ -234,7 +258,7 @@ def test_invariants_hold_across_the_envelope(reference_params, alt, v, mass):
     assert e.cl_star <= e.cl_max_3d + 1e-9
 
     # field definitions, locked against refactor drift
-    assert e.endurance_fom == pytest.approx(
+    assert e.power_fom == pytest.approx(
         e.cl_cruise ** 1.5 / e.cd_cruise, rel=1e-9)
     assert e.x_cg_for_target_sm_m == pytest.approx(
         e.x_np_m - STATIC_MARGIN_TARGET * e.mac_m, abs=1e-12)
@@ -296,16 +320,37 @@ def test_quarter_chord_sweep_never_exceeds_leading_edge_sweep():
     assert effective_c4_sweep_deg(p) <= effective_le_sweep_deg(p) + 1e-9
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="S6-F5: CL_MAX_2D is hardcoded at Re~7e5, so cl_max_3d is "
-                          "bit-identical across Re 1.8e5-1.0e6. Section CLmax is ~0.9 "
-                          "at Re 1.5e5 and ~1.45 at 1e6, so v_stall and the entire "
-                          "launch gate are blind to Reynolds — the dominant low-Re effect.")
 def test_clmax_responds_to_reynolds_number(reference_params):
+    """S6-F5 / S7-CAP-4, RETIRED by S1-C2. This was an xfail backlog entry: CL_MAX_2D
+    was hardcoded at Re~7e5, so cl_max_3d came back bit-identical across Re 1.8e5-1.0e6
+    while real section CLmax runs ~0.9 at Re 1.5e5 and ~1.45 at 1e6 — v_stall and the
+    whole launch gate were blind to the dominant low-Re effect.
+
+    Capability now comes per station from the committed NeuralFoil screen at that
+    station's own Reynolds, so the response exists. Kept as a live regression guard.
+
+    THE PROBE HAD TO CHANGE, and the reason is itself a result. CLmax is solved at the
+    speed the wing actually STALLS at, not at cruise — so cruising faster cannot change
+    how much lift the wing can make, and the old cruise-speed probe now correctly
+    measures nothing. Weight is the lever: a heavier aircraft stalls faster, which
+    raises the stall Reynolds, which raises CLmax."""
+    light = estimate(reference_params, atmosphere_at(0.0), 18.0, 10.0, "hand")
+    heavy = estimate(reference_params, atmosphere_at(0.0), 18.0, 120.0, "hand")
+    assert heavy.v_stall_ms > 2 * light.v_stall_ms          # the premise holds
+    assert heavy.cl_max_3d > light.cl_max_3d, (
+        "CLmax must RISE with Reynolds — the boundary layer separates later")
+
+
+def test_clmax_does_not_depend_on_cruise_speed(reference_params):
+    """The other half of the same result. Stall is a property of the wing, its weight
+    and the air — not of how fast you happen to be cruising. Before S1-C2 this held for
+    the wrong reason (CLmax was a constant); it now holds for the right one, and that
+    is worth pinning so a future edit cannot make cruise speed leak into stall."""
     slow = estimate(reference_params, atmosphere_at(0.0), 8.0, REFERENCE_WEIGHT_N, "hand")
     fast = estimate(reference_params, atmosphere_at(0.0), 45.0, REFERENCE_WEIGHT_N, "hand")
-    assert fast.reynolds_mac > 4 * slow.reynolds_mac       # the premise holds
-    assert fast.cl_max_3d != slow.cl_max_3d                # the response does not
+    assert fast.reynolds_mac > 4 * slow.reynolds_mac        # the premise holds
+    assert fast.cl_max_3d == pytest.approx(slow.cl_max_3d, rel=1e-12)
+    assert fast.v_stall_ms == pytest.approx(slow.v_stall_ms, rel=1e-12)
 
 
 def test_cruise_beyond_stall_is_flagged(reference_params):

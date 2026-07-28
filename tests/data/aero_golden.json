@@ -2,19 +2,19 @@
   "cd0_vs_reynolds": [
     [
       200000.0,
-      0.01661929492744257
+      0.016622258323618605
     ],
     [
       500000.0,
-      0.012889979435278616
+      0.01289227785503315
     ],
     [
       1000000.0,
-      0.010801443562635233
+      0.010803369574339635
     ],
     [
       2000000.0,
-      0.009164910809276335
+      0.00916654500987055
     ]
   ],
   "form_factor": [
@@ -36,12 +36,13 @@
     ]
   ],
   "geometry": {
-    "cl_max_3d": 1.1208492861603039,
+    "cl_max_3d_at_cruise_re": 1.1374469210517324,
     "effective_c4_sweep_deg": 16.666400854229398,
     "effective_le_sweep_deg": 23.267718929043593,
-    "form_factor_mean_tc": 1.2488566127991974,
-    "mean_tc": 0.11851063829787235,
-    "neutral_point_m": 0.24976166981040424
+    "form_factor_mean_tc": 1.2490531990023939,
+    "mean_tc": 0.11859255319148937,
+    "neutral_point_m": 0.24976166981040424,
+    "stall_station_frac": 0.7027626604064969
   },
   "oswald_efficiency": [
     [
@@ -147,49 +148,67 @@
   ],
   "panel": {
     "aspect_ratio": 5.5263885051119095,
-    "cd0": 0.013600219111871812,
-    "cd_cruise": 0.023443859445744,
+    "cd0": 0.013602644174877509,
+    "cd0_model_disagreement": 1.3746889050611126,
+    "cd0_sections_at_zero_lift": 0.009895070895529483,
+    "cd_cruise": 0.023446284508749696,
+    "cd_profile_sections": 0.010315500213886454,
+    "cd_sections_span_clamped": 0.0,
+    "cl_beta_per_rad": -0.06117192203956986,
     "cl_cruise": 0.37349749636505963,
-    "cl_max_3d": 1.1208492861603039,
-    "cl_star": 0.43901845706893666,
-    "endurance_fom": 9.736490255121012,
+    "cl_max_3d": 1.065854982574593,
+    "cl_star": 0.4390575961429124,
+    "cm_trim_residual": -0.027529390166407583,
+    "effective_c2_sweep_deg": 9.57843918583846,
+    "effective_dihedral_at_clmax_deg": 8.947295273859734,
+    "effective_dihedral_deg": 5.0840545207799,
+    "effective_dihedral_from_sweep_deg": 2.0840545207799,
     "launch_limit_ms": 10.5,
-    "ld_cruise": 15.931570364062406,
-    "ld_max": 16.140124414823273,
+    "ld_cruise": 15.929922552363367,
+    "ld_max": 16.13868562973221,
     "mac_m": 0.33196149949341447,
     "oswald_e": 0.8162597232813551,
+    "oswald_e_span_gap": 0.16198555806376658,
+    "power_fom": 9.73548320420366,
     "reynolds_mac": 409065.98276939226,
     "rho_kgm3": 1.224999155888,
     "roll_damping_index": 2.5600000000000005,
     "root_bending_index_nm": 6.867000000000001,
     "s_ref_m2": 0.4632320000000001,
+    "span_efficiency_delta": 0.02223851120954528,
+    "span_efficiency_planar": 0.9782452813451217,
     "span_m": 1.6,
-    "stall_margin": 0.7323265530388959,
+    "stall_margin": 0.6892938943234431,
+    "stall_station_frac": 0.7027626604064969,
+    "static_margin_at_trim": 0.00582499461407662,
     "tip_re": 162659.55482175123,
+    "tip_twist_for_trim_deg": -11.550494864656367,
     "v_ms": 18.0,
-    "v_stall_ms": 10.390650635946146,
+    "v_stall_ms": 10.655339524096808,
     "washout_deg": 4.0,
     "weight_n": 34.335,
     "wing_loading_kgm2": 7.555609284332687,
     "x_cg_for_target_sm_m": 0.22320474985093108,
+    "x_cg_for_trim_m": 0.2478279958637743,
     "x_np_m": 0.24976166981040424
   },
-  "panel_launch_ok": true,
+  "panel_launch_ok": false,
   "reference": {
     "altitude_m": 0.0,
     "launch": "hand",
     "params": {
       "centre_body_fraction": 0.28,
       "dihedral_deg": 3.0,
+      "mid_airfoil": "e472",
       "mid_chord_frac": 0.6,
+      "root_airfoil": "e474",
       "root_chord_m": 0.55,
-      "root_thickness_pct": 14,
       "root_twist_deg": 1.0,
       "span_m": 1.6,
       "sweep_inner_deg": 35,
       "sweep_outer_deg": 18,
       "taper_outer": 0.4,
-      "tip_thickness_pct": 10,
+      "tip_airfoil": "s5010",
       "tip_twist_deg": -3.0
     },
     "speed_ms": 18.0,
@@ -239,15 +258,16 @@
     "params": {
       "centre_body_fraction": 0.45,
       "dihedral_deg": 2.0,
+      "mid_airfoil": "e472",
       "mid_chord_frac": 0.85,
+      "root_airfoil": "e474",
       "root_chord_m": 0.25,
-      "root_thickness_pct": 14,
       "root_twist_deg": 2.0,
       "span_m": 1.8,
       "sweep_inner_deg": 60,
       "sweep_outer_deg": 40,
       "taper_outer": 0.7,
-      "tip_thickness_pct": 9,
+      "tip_airfoil": "s5010",
       "tip_twist_deg": -3.0
     }
   }

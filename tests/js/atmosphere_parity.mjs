@@ -65,8 +65,14 @@ const params = {
   taper_outer: 0.45,
   sweep_inner_deg: 38,
   sweep_outer_deg: 22,
-  root_thickness_pct: 14,
-  tip_thickness_pct: 9,
+  /* S1-C: thickness comes from the sections (e474 / e472 / s5010, the pack
+     defaults) and arrives in the params payload as computed fields. */
+  root_airfoil: 'e474',
+  mid_airfoil: 'e472',
+  tip_airfoil: 's5010',
+  root_thickness_pct: 14.07,
+  mid_thickness_pct: 12.09,
+  tip_thickness_pct: 9.82,
   root_twist_deg: 2,
   tip_twist_deg: -3,
   dihedral_deg: 2,
@@ -77,8 +83,17 @@ const panel = estimate(params, {
   w: 49.05,
   launch: 'hand',
 });
-assert.ok(Math.abs(panel.reMac - 642731.9151803288) < 1e-6);
-assert.ok(Math.abs(panel.tipRe - 269593.61211841356) < 1e-7);
-assert.ok(Math.abs(panel.ldCruise - 14.691544825265458) < 1e-12);
+/* Every constant below comes from PYTHON, printed at full precision:
+     from domain_packs.bwb.aero_estimates import estimate
+     estimate(params, atmosphere_at(1275), 25.0, 49.05, "hand")
+   The previous ldCruise expectation had been taken from this script's own output,
+   so the test compared the mirror against itself and passed while the two sides
+   disagreed by 8%. Two real defects were hiding behind that (both now fixed in
+   aero_mirror.js): skinFriction evaluated the laminar run at the full-chord
+   Reynolds number instead of the transition one (S6-F2a), and effLeSweepDeg
+   averaged angles instead of tangents (S6-F4). */
+assert.ok(Math.abs(panel.reMac - 642731.91518032877) < 1e-6);
+assert.ok(Math.abs(panel.tipRe - 269593.61211849638) < 1e-7);
+assert.ok(Math.abs(panel.ldCruise - 13.433997134931692) < 1e-12);
 
 console.log('JavaScript atmosphere parity: PASS');

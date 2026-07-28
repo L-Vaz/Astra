@@ -50,7 +50,7 @@ REFERENCE = {
     "params": dict(
         span_m=1.6, root_chord_m=0.55, centre_body_fraction=0.28, mid_chord_frac=0.6,
         taper_outer=0.4, sweep_inner_deg=35, sweep_outer_deg=18,
-        root_thickness_pct=14, tip_thickness_pct=10, root_twist_deg=1.0,
+        root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010", root_twist_deg=1.0,
         tip_twist_deg=-3.0, dihedral_deg=3.0,
     ),
     "altitude_m": 0.0,
@@ -81,8 +81,9 @@ CD0_RE_LADDER = [2e5, 5e5, 1e6, 2e6]
 # exceeds the leading-edge sweep (see the S6-F4 xfail).
 SWEEP_CASE = dict(
     span_m=1.8, root_chord_m=0.25, centre_body_fraction=0.45, mid_chord_frac=0.85,
-    taper_outer=0.7, sweep_inner_deg=60, sweep_outer_deg=40, root_thickness_pct=14,
-    tip_thickness_pct=9, root_twist_deg=2.0, tip_twist_deg=-3.0, dihedral_deg=2.0,
+    taper_outer=0.7, sweep_inner_deg=60, sweep_outer_deg=40,
+    root_airfoil="e474", mid_airfoil="e472", tip_airfoil="s5010",
+    root_twist_deg=2.0, tip_twist_deg=-3.0, dihedral_deg=2.0,
 )
 
 
@@ -104,7 +105,13 @@ def compute() -> dict:
             "form_factor_mean_tc": form_factor(mean_tc(params)),
             "effective_le_sweep_deg": effective_le_sweep_deg(params),
             "effective_c4_sweep_deg": effective_c4_sweep_deg(params),
-            "cl_max_3d": cl_max_3d(params),
+            # S1-C2: CLmax now depends on Reynolds, so a golden for it must state the
+            # Reynolds it was measured at. Pinned to the reference panel's own MAC
+            # Reynolds — note this is the CRUISE value, deliberately, so the golden is
+            # a fixed-condition probe. `panel.cl_max_3d` is the self-consistent
+            # stall-speed value and is pinned separately in the panel block.
+            "cl_max_3d_at_cruise_re": cl_max_3d(params, panel.reynolds_mac),
+            "stall_station_frac": panel.stall_station_frac,
             "neutral_point_m": neutral_point_m(params),
         },
         # Pairs, not object keys: JSON object keys are strings, and round-tripping a

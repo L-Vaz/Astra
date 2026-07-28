@@ -31,12 +31,21 @@ _PARAM_RANGES = {
     "taper_outer": (0.15, 0.7),
     "sweep_inner_deg": (15.0, 60.0),
     "sweep_outer_deg": (5.0, 40.0),
-    "root_thickness_pct": (8.0, 20.0),
-    "tip_thickness_pct": (5.0, 14.0),
     "root_twist_deg": (-2.0, 5.0),
     "tip_twist_deg": (-7.0, 2.0),
     "dihedral_deg": (0.0, 8.0),
 }
+
+# S1-C: thickness is no longer a continuous field to draw — the section owns it. Drawn
+# from a fixed set of triples instead, each already thinning outboard so the draw is
+# not wasted on combinations the validator rejects. Spans 8.4% to 15.0% root thickness,
+# which covers the range the old (8-20, 5-14) float ranges reached in practice.
+_SECTION_SETS = [
+    ("e474", "e472", "s5010"),     # 14.07 / 12.09 /  9.82  — the pack default
+    ("e475", "e474", "oa209"),     # 14.99 / 14.07 /  9.01  — thickest root
+    ("e328", "oa212", "oa209"),    # 13.33 / 12.01 /  9.01
+    ("oa212", "s3", "s5020"),      # 12.01 / 11.00 /  8.40  — thinnest
+]
 
 
 def _floats(lo: float, hi: float):
@@ -53,6 +62,8 @@ def bwb_params(draw) -> BWBParams:
     Roughly half of all in-range combinations fail them, so we draw and `assume`.
     """
     kwargs = {name: draw(_floats(lo, hi)) for name, (lo, hi) in _PARAM_RANGES.items()}
+    root, mid, tip = draw(st.sampled_from(_SECTION_SETS))
+    kwargs.update(root_airfoil=root, mid_airfoil=mid, tip_airfoil=tip)
     try:
         return BWBParams(**kwargs)
     except ValidationError:

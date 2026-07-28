@@ -62,18 +62,15 @@ body {
 }
 .row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 8px; }
 
-button.primary, button.secondary, .ghost-add {
+button.primary, button.secondary {
   font: inherit; font-size: 13px; cursor: pointer; border-radius: var(--radius);
   padding: 7px 14px; border: 1px solid var(--border);
   background: var(--panel2); color: var(--text);
 }
 button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
-button.secondary:hover, .ghost-add:hover { border-color: var(--accent); }
-.ghost-add {
-  width: 100%; margin-top: 6px; border-style: dashed; color: var(--dim);
-  background: none; text-align: left;
-}
+button.secondary:hover { border-color: var(--accent); }
+/* S1-B: .ghost-add styled the removed "+ Add constraint" button and has no user left. */
 
 /* ---------- requirement rows ---------- */
 .req-row { border-bottom: 1px solid var(--border); }

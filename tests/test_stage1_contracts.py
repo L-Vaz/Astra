@@ -239,8 +239,9 @@ def test_reparsing_a_brief_preserves_user_edits():
     ik = I.derive(I.parse_brief(BRIEF))
     ik = I.derive(I.apply_edits(ik, [
         {"id": "mtow_cap", "value": "4.5 kg", "status": "fixed"},
-        {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"},
     ]))
     reparsed = I.derive(I.merge_brief(ik, BRIEF))
     assert _row(reparsed, "mtow_cap").number == pytest.approx(4.5)
-    assert any(r.id == "custom_max_chord" for r in reparsed.rows)
+    assert _row(reparsed, "mtow_cap").status == "fixed"
+    # S1-B: the custom-row leg of this test was removed with the closed set. The merge
+    # contract that mattered is the edited row surviving a reparse.

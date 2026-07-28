@@ -67,8 +67,8 @@ function substitutionFor(row) {
             using ${esc(row.used_value)}</span>`;
 }
 
-/* S3-E2/E3: six of the twelve editable rows and every custom row change no number at
-   all. They were presented identically to the six that do. */
+/* S3-E2/E3: five of the eleven editable rows change no number at all. They were
+   presented identically to the six that do. */
 function recordedOnlyFor(row) {
   if (row.status === 'derived' || row.drives_computation) return '';
   return '<span class="badge muted" title="recorded on this list; not evaluated at '
@@ -100,8 +100,9 @@ function renderIntake() {
       </div>`;
     const info = document.createElement('div');
     info.className = 'req-info' + (S.openInfo.has(row.id) ? '' : ' hidden');
-    let html = esc(row.info || 'Custom requirement — recorded on this list only. It is '
-      + 'not evaluated at this tier and does not constrain the solver.');
+    /* S1-B: every row is one the pack declares, so row.info is always set. The old
+       fallback described a user-added "Custom requirement", which can no longer exist. */
+    let html = esc(row.info || '');
     if (!derived && !row.drives_computation) {
       html += '<br><b>Recorded only.</b> Editing this row does not change any number '
         + 'on this screen — it is kept on the record for a later stage.';
@@ -215,34 +216,10 @@ function updateStaleChip() {
   $('btn-gallery').textContent = stale ? 'View designs (stale)' : 'View designs';
 }
 
-let addCount = 0;
-function addRow() {
-  addCount += 1;
-  const holder = $('tier-vehicle');
-  const div = document.createElement('div');
-  div.className = 'req-row';
-  div.innerHTML = `
-    <div class="req-main">
-      <span class="icon-btn locked">🔒</span>
-      <input class="req-value" style="flex:1; text-align:left" placeholder="Name — e.g. Max chord" data-k="label">
-      <input class="req-value" placeholder="value — e.g. ≤ 0.35 m" data-k="value">
-      <span class="badge you">you set</span>
-    </div>`;
-  holder.appendChild(div);
-  const commit = () => {
-    const label = div.querySelector('[data-k=label]').value.trim();
-    const value = div.querySelector('[data-k=value]').value.trim();
-    if (!label || !value) return;
-    const id = 'custom_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + addCount;
-    div.remove();
-    saveEdits([{ id, label, value, status: 'fixed' }]);
-  };
-  for (const inp of div.querySelectorAll('input')) {
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
-  }
-  div.querySelector('[data-k=value]').addEventListener('blur', commit);
-  div.querySelector('[data-k=label]').focus();
-}
+/* S1-B: addRow() was removed with the "+ Add constraint" button. It minted ids of the
+   form `custom_<slug>_<n>`, which the solver recognised nowhere — the row was recorded
+   and nothing else. apply_edits now refuses an unknown id with a 422 naming the closed
+   set, so there is no client path that could produce one. */
 
 /* ======================= gallery screen ======================= */
 
@@ -500,7 +477,6 @@ async function boot() {
       updateStaleChip();
     } catch (e) { toast(`parse failed: ${e.message}`); $('parse-note').textContent = ''; }
   });
-  $('btn-add').addEventListener('click', addRow);
   $('btn-generate').addEventListener('click', () => generateConcepts(true));
   $('btn-gallery').addEventListener('click', () => showScreen('gallery'));
   $('btn-back-req').addEventListener('click', () => showScreen('req'));

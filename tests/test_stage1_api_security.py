@@ -190,38 +190,45 @@ def test_oversize_edit_value_rejected(stage1_session):
     assert _versions_on_disk(sid) == before
 
 
-def test_row_count_is_capped(stage1_session):
-    """Under the per-request edit limit, but repeated: the cap is on the intake, not
-    on the request, or 64 requests of 64 custom rows each rebuild the same problem."""
+def test_the_row_count_cannot_grow_at_all(stage1_session):
+    """S1-B: replaces test_row_count_is_capped. MAX_ROWS = 64 bounded a runaway client
+    because every unknown edit id became a new row. Unknown ids are now refused, so the
+    row list is fixed and the attack is closed at its source rather than capped
+    downstream — 96 attempted additions add nothing and write no version."""
     from domain_packs.bwb import intake as intake_pack
 
     client, sid = stage1_session
-    last = None
+    before_rows = client.get(f"/api/stage1/intake?session={sid}").json()["intake"]["rows"]
+    before_versions = _versions_on_disk(sid)
+
     for batch in range(3):
-        last = client.post("/api/stage1/intake", json={
+        response = client.post("/api/stage1/intake", json={
             "session_id": sid,
             "edits": [{"id": f"custom_{batch}_{i}", "label": f"Row {i}",
                        "value": "1"} for i in range(32)]})
-        if last.status_code != 200:
-            break
-    assert last.status_code == 422, "row count grew without bound"
-    assert str(intake_pack.MAX_ROWS) in last.text
+        assert response.status_code == 422, response.text
+        assert f"custom_{batch}_0" in response.text, "the refusal must name the row"
 
+    after_rows = client.get(f"/api/stage1/intake?session={sid}").json()["intake"]["rows"]
+    assert len(after_rows) == len(before_rows)
+    assert _versions_on_disk(sid) == before_versions, "a refused edit wrote a version"
+    assert all(r["id"] in intake_pack.known_row_ids() for r in after_rows)
+
+
+def test_a_refused_batch_does_not_lock_the_user_out(stage1_session):
+    """A refusal must not leave the intake unusable: valid edits still apply after it,
+    and — because apply_edits raises before any write — the refused batch's VALID edits
+    are not partially applied either."""
+    client, sid = stage1_session
+
+    response = client.post("/api/stage1/intake", json={
+        "session_id": sid,
+        "edits": [{"id": "payload", "value": "3.25 kg"},
+                  {"id": "not_a_real_row", "label": "Nope", "value": "1"}]})
+    assert response.status_code == 422, response.text
     rows = client.get(f"/api/stage1/intake?session={sid}").json()["intake"]["rows"]
-    assert len(rows) <= intake_pack.MAX_ROWS
-
-
-def test_editing_existing_rows_still_works_at_the_row_cap(stage1_session):
-    """The cap must not lock the user out of their own intake: only NEW custom rows
-    are refused."""
-    from domain_packs.bwb import intake as intake_pack
-
-    client, sid = stage1_session
-    for batch in range(3):
-        client.post("/api/stage1/intake", json={
-            "session_id": sid,
-            "edits": [{"id": f"custom_{batch}_{i}", "label": f"Row {i}",
-                       "value": "1"} for i in range(32)]})
+    payload = next(r for r in rows if r["id"] == "payload")
+    assert payload["number"] != pytest.approx(3.25), "partial write from a refused batch"
 
     response = client.post("/api/stage1/intake", json={
         "session_id": sid, "edits": [{"id": "payload", "value": "1.75 kg"}]})

@@ -7,11 +7,14 @@
  * always supersede these. Keep in sync with the Python module.
  */
 import * as PLANFORM from './planform.js?v=atm1';
+import * as SPANWISE from './spanwise.js?v=atm1';
 
 export const LAMINAR_FRACTION = 0.30;
 export const INTERFERENCE_MARGIN = 1.10;
-export const CL_MAX_2D = 1.30;
-export const CL_MAX_3D_FACTOR = 0.90;
+/* CL_MAX_2D = 1.30 and CL_MAX_3D_FACTOR = 0.90 were DELETED here (S1-C2), as they
+   were in aero_estimates.py. One hard-coded section value and one unsourced
+   knockdown produced the same CLmax for every aircraft this project has ever drawn.
+   Both are now computed by spanwise.js. */
 export const LAUNCH_VSTALL_MAX = { hand: 10.5, catapult: 13.0, runway: 16.0 };
 export const STATIC_MARGIN_TARGET = 0.08;
 
@@ -34,13 +37,25 @@ function meanTc(p) {
   const { b1, b2 } = halfWidths(p);
   const a1 = b1 * (cr + cMid) / 2, a2 = b2 * (cMid + cTip) / 2;
   const tr = +p.root_thickness_pct / 100, tt = +p.tip_thickness_pct / 100;
-  const tm = (tr + tt) / 2;
+  /* S1-C: the blend station has its own aerofoil, so read its t/c instead of
+     assuming the root/tip mean. Mirrors aero_estimates.mean_tc exactly. */
+  const tm = +p.mid_thickness_pct / 100;
   return (a1 * (tr + tm) / 2 + a2 * (tm + tt) / 2) / (a1 + a2);
 }
 
+/* Half-width-weighted leading-edge sweep, averaged in TANGENT space.
+
+   SECOND PRE-EXISTING PARITY BUG, found alongside the skin-friction one and fixed
+   here: this averaged ANGLES while effC4SweepDeg below averages tangents (S6-F4).
+   One definition feeds Oswald e and the other feeds CLmax, so the browser had drag
+   and stall running on contradictory conventions, and by Jensen's inequality the two
+   do not agree. Tangent averaging is the geometrically meaningful mean — it is the
+   sweep of the line joining the panel leading edges over the same span. */
 function effLeSweepDeg(p) {
   const { b1, b2 } = halfWidths(p);
-  return (b1 * +p.sweep_inner_deg + b2 * +p.sweep_outer_deg) / (b1 + b2);
+  const t1 = Math.tan(rad(+p.sweep_inner_deg));
+  const t2 = Math.tan(rad(+p.sweep_outer_deg));
+  return Math.atan((b1 * t1 + b2 * t2) / (b1 + b2)) * 180 / Math.PI;
 }
 
 function effC4SweepDeg(p) {
@@ -51,10 +66,23 @@ function effC4SweepDeg(p) {
   return Math.atan((b1 * t1 + b2 * t2) / (b1 + b2)) * 180 / Math.PI;
 }
 
+/* Mixed laminar/turbulent flat-plate Cf. Mirrors aero_estimates.skin_friction_coeff.
+
+   PRE-EXISTING PARITY BUG, found while wiring sections (S1-C) and fixed here: the
+   laminar segment must be evaluated at the TRANSITION Reynolds number, not the
+   full-chord one (S6-F2a). Python was corrected; this mirror was not, so the browser
+   ran a Cf about 9.5% low — measured at Re 642732, JS 0.003900356434 against Python
+   0.00431070101 — which made cd0 ~10.5% low and cruise L/D ~8% optimistic on screen.
+
+   Blasius Cf ~ 1/sqrt(Re), so evaluating the first 30% of the chord at the
+   full-chord Re understates its friction by 1/sqrt(0.30) = 1.83x.
+
+   The parity test did not catch it because its expected value had been taken from
+   this file's own output, so it compared the mirror against itself. */
 export function skinFriction(re) {
-  re = Math.max(re, 1e4);
-  const cfT = 0.455 / Math.pow(Math.log10(re), 2.58);
-  const cfL = 1.328 / Math.sqrt(re);
+  re = Math.max(re, 1e4);                       // RE_FLOOR
+  const cfT = 0.455 / Math.pow(Math.log10(re), 2.58);   // Raymer eq. 12.27
+  const cfL = 1.328 / Math.sqrt(Math.max(LAMINAR_FRACTION * re, 1.0));
   return LAMINAR_FRACTION * cfL + (1 - LAMINAR_FRACTION) * cfT;
 }
 
@@ -75,8 +103,40 @@ export function parasiteDrag(p, reMac) {
     * (1.977 + 0.52 * tc) * INTERFERENCE_MARGIN;
 }
 
-export function clMax3d(p) {
-  return CL_MAX_2D * CL_MAX_3D_FACTOR * Math.cos(rad(effC4SweepDeg(p)));
+/* Wing CLmax from where the wing actually stalls (S1-C2). Mirrors
+   aero_estimates.cl_max_3d, including the sweep factor's status: TM-948 is a straight
+   monoplane derivation with NO sweep term, so cos(Lc/4) is a separately applied patch,
+   and it is applied to AFT sweep only — Math.cos is even, so a forward-swept quarter
+   chord would otherwise be penalised exactly like an aft-swept one (S6-F6). */
+export function clMax3d(p, reynoldsMac, curves) {
+  const wing = SPANWISE.solveStall(p, reynoldsMac, curves).clMaxWing;
+  return wing * Math.cos(rad(Math.max(effC4SweepDeg(p), 0)));
+}
+
+/* Stall speed, CLmax and the spanwise solution, solved SELF-CONSISTENTLY. Mirrors
+   aero_estimates.stall_solution.
+
+   A wing stalls at its stall speed, not at cruise, so the Reynolds number that sets
+   CLmax depends on the answer. Measured on the golden reference: 1.206 at the cruise
+   Reynolds against 1.133 self-consistent — 6% apart. Skipping the iteration in the
+   browser would reintroduce that error on screen only, which is the worst place for
+   it, because the screen is what the operator believes. */
+export function stallSolution(p, atmosphere, weightN, curves, maxIter = 8, tol = 1e-4) {
+  const pf = PLANFORM.planform(p);
+  const rho = atmosphere.density_kgm3;
+  const nu = atmosphere.kinematic_viscosity_m2s;
+  const cosSweep = Math.cos(rad(Math.max(effC4SweepDeg(p), 0)));
+
+  let v = Math.sqrt(2 * weightN / (rho * pf.s * 1.0));
+  let sol = null;
+  for (let i = 0; i < maxIter; i++) {
+    sol = SPANWISE.solveStall(p, Math.max(v * pf.mac / nu, 1), curves);
+    const clmax = sol.clMaxWing * cosSweep;
+    const vNew = Math.sqrt(2 * weightN / (rho * pf.s * clmax));
+    if (Math.abs(vNew - v) <= tol * Math.max(v, 1e-6)) { v = vNew; break; }
+    v = vNew;
+  }
+  return { vStall: v, clMax3d: sol.clMaxWing * cosSweep, stall: sol };
 }
 
 export function neutralPoint(p) {
@@ -114,8 +174,18 @@ export function estimate(p, ctx) {
   const cd = cd0 + k * cl * cl;
   const clStar = Math.sqrt(cd0 / k);
 
-  const clmax = clMax3d(p);
-  const vStall = Math.sqrt(2 * ctx.w / (rho * s * clmax));
+  /* The stall block needs the selected sections' Reynolds curves, which arrive from
+     the server (spanwise.curve_payload). If they have not landed yet, every stall
+     quantity is NULL — not a fallback constant. The deleted CL_MAX_2D path is exactly
+     how the browser came to read 2.86% optimistic; a blank field is honest and a
+     plausible wrong stall speed is not. */
+  const haveCurves = SPANWISE.hasCurves(
+    ctx.sectionCurves, p.root_airfoil, p.mid_airfoil, p.tip_airfoil);
+  const stallBlock = haveCurves
+    ? stallSolution(p, ctx.atmosphere, ctx.w, ctx.sectionCurves)
+    : { vStall: null, clMax3d: null, stall: null };
+  const clmax = stallBlock.clMax3d;
+  const vStall = stallBlock.vStall;
   const cap = LAUNCH_VSTALL_MAX[ctx.launch] ?? null;
   const xNp = neutralPoint(p);
 
@@ -127,7 +197,10 @@ export function estimate(p, ctx) {
     ldCruise: cl / cd,
     clStar, ldMax: clStar / (2 * cd0),
     clMax3d: clmax, vStall,
-    launchLimit: cap, launchOk: cap == null ? null : vStall <= cap,
+    stallEta: stallBlock.stall ? stallBlock.stall.stallEta : null,
+    stallIsOutboard: stallBlock.stall ? stallBlock.stall.stallIsOutboard : null,
+    launchLimit: cap,
+    launchOk: (cap == null || vStall == null) ? null : vStall <= cap,
     xNp, xCgTarget: xNp - STATIC_MARGIN_TARGET * mac,
     bending: ctx.w * +p.span_m / 8,
     tipRe: ctx.v * cTip / nu,

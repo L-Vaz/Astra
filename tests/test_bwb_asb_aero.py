@@ -4,6 +4,7 @@ These need the aerosandbox stack; skipped where it is not installed (e.g. the
 OpenVSP venv). They check the BWBParams -> Airplane adapter mirrors vsp_builder
 station-for-station, and that the evaluated aero is physical and deterministic.
 """
+import inspect
 import sys
 from pathlib import Path
 
@@ -18,30 +19,37 @@ from domain_packs.bwb.defaults import derive
 from domain_packs.bwb.schema import BWBParams, MissionSpec
 
 
-def test_thickness_snap_error_is_bounded():
-    """S7-I2: the fast tier snaps t/c to integer percent, so it scores a slightly
-    DIFFERENT geometry than the preview shows. The simplification is deliberate
-    (NeuralFoil's NACA-4 parametrization); what was missing is a number bounding it.
+def test_the_thickness_snap_is_gone():
+    """S1-C: replaces test_thickness_snap_error_is_bounded.
 
-    Measured over the legal thickness range in 0.01-point steps, so the worst case is
-    a measurement rather than an estimate."""
-    worst_tc, worst_error = None, 0.0
-    for step in range(400, 3001):
-        tc = step / 100.0                    # 4.00 .. 30.00 %
-        error = asb_aero.tc_snap_error(tc)
-        if error > worst_error:
-            worst_tc, worst_error = tc, error
-    assert worst_error <= asb_aero.MAX_TC_SNAP_ERROR + 1e-12, (
-        f"t/c snap error reaches {worst_error:.2%} at t/c {worst_tc}%, above the "
-        f"stated bound {asb_aero.MAX_TC_SNAP_ERROR:.2%}")
-    # and the bound is not vacuous
-    assert worst_error > 0.10, worst_error
+    This tier used to build every station as a symmetric NACA 00xx snapped to an
+    integer percent, worth up to 12.5% t/c error at the thinnest legal section and —
+    worse — scoring a different shape than the preview drew. The snap was justified
+    by NeuralFoil's NACA-4 parametrization being fast, but NeuralFoil takes arbitrary
+    coordinates, so it never held once sections were real.
+
+    Nothing may reintroduce it: the fast tier must score the aerofoil that was
+    chosen."""
+    for gone in ("tc_snap_error", "MAX_TC_SNAP_ERROR", "_symmetric_naca"):
+        assert not hasattr(asb_aero, gone), (
+            f"asb_aero.{gone} is back — the fast tier is approximating the section "
+            f"again instead of building it")
+    source = inspect.getsource(asb_aero.bwbparams_to_airplane)
+    for station in ("root_airfoil", "mid_airfoil", "tip_airfoil"):
+        assert f"p.{station}" in source, (
+            f"the airplane builder no longer reads p.{station}")
 
 
-def test_the_probed_snap_case_is_within_the_bound():
-    """The probe's example: 0.060 requested, 0.065 at one station — 7.7% relative."""
-    assert asb_aero.tc_snap_error(6.5) == pytest.approx(0.5 / 6.5, rel=1e-12)
-    assert asb_aero.tc_snap_error(6.5) < asb_aero.MAX_TC_SNAP_ERROR
+def test_the_section_reaches_the_airplane_unrounded():
+    """S1-C: replaces test_the_probed_snap_case_is_within_the_bound, which pinned the
+    size of a rounding error that no longer exists. The station thickness the fast
+    tier builds must now be the section's own, to full precision."""
+    p = _derived().params
+    plane = asb_aero.bwbparams_to_airplane(p)
+    names = [x.airfoil.name.lower() for x in plane.wings[0].xsecs]
+    for chosen in (p.root_airfoil, p.mid_airfoil, p.tip_airfoil):
+        assert any(chosen.lower() in n for n in names), (
+            f"section {chosen!r} did not reach the airplane; got {names}")
 
 
 def _derived():

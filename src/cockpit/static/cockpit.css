@@ -155,6 +155,22 @@ details.dnode.leaf > summary::before { content: '·'; }
 .ctl-info { margin-top: 3px; font-size: 10.5px; color: var(--dim); font-style: italic; }
 .ctl.derived-ctl { border-style: dashed; }
 .ctl-aero { margin-top: 3px; font-size: 10.5px; color: var(--instant); }
+
+/* S1-C aerofoil stations: read-only, so styled as a readout rather than a control.
+   Depth in mm is what decides whether a spar and a battery fit, so it is emphasised
+   over the ratio. */
+.sec-table { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.sec-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px;
+  align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--line, #2a2a2a); }
+.sec-row:last-child { border-bottom: 0; }
+.sec-label { font-size: 11.5px; display: flex; flex-direction: column; }
+.sec-why { font-size: 9.5px; color: var(--dim); }
+.sec-name { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--accent); }
+.sec-tc { font-family: ui-monospace, Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+.sec-tc span { font-size: 9.5px; color: var(--dim); margin-left: 2px; }
+.sec-depth { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 600;
+  font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
+.sec-depth span { font-size: 9.5px; color: var(--dim); font-weight: 400; }
 .aer-delta { color: var(--warn); font-size: 10.5px; }
 .derived-tag { font-size: 9.5px; color: var(--accent); border: 1px solid var(--accent);
   border-radius: 8px; padding: 0 5px; }
@@ -163,7 +179,6 @@ details.dnode.leaf > summary::before { content: '·'; }
   color: var(--dim); text-transform: uppercase; }
 details.advanced summary { cursor: pointer; color: var(--accent); margin: 12px 0 8px;
   font-size: 12px; }
-.goalnote { font-size: 10.5px; color: var(--warn); margin: -8px 0 12px; }
 
 /* ---- viewport ---- */
 #viewport { position: relative; min-width: 0; }

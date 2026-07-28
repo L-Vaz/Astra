@@ -33,7 +33,8 @@ from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 from domain_packs.bwb.atmosphere import (  # noqa: E402
     atmosphere_at, atmosphere_provenance, atmosphere_table_payload)
 from domain_packs.bwb.defaults import PAYLOAD_FRACTION, derive  # noqa: E402
-from domain_packs.bwb.aero_estimates import LAUNCH_VSTALL_MAX  # noqa: E402
+from domain_packs.bwb.aero_estimates import (  # noqa: E402
+    LAUNCH_VSTALL_MAX, estimate as aero_estimate)
 from domain_packs.bwb.derivation import derive_graph  # noqa: E402
 from domain_packs.bwb.inverse import (  # noqa: E402
     MET_TOLERANCES, check_requirements, solve_requirements)
@@ -42,6 +43,10 @@ from domain_packs.bwb.schema import (  # noqa: E402
     BWBParams, GeometryReport, MissionDerived, MissionSpec)
 from domain_packs.bwb.sensitivity import (  # noqa: E402
     requirement_sensitivity_table, sensitivity_table)
+from domain_packs.bwb.spanwise import curve_payload  # noqa: E402
+from domain_packs.bwb.handoff import SCHEMA_VERSION, build_handoff  # noqa: E402
+from domain_packs.bwb.inverse import LockedValues  # noqa: E402
+from domain_packs.bwb.airfoils import has_section  # noqa: E402
 from services import candidates as cand_svc  # noqa: E402
 from services import design_session as ds  # noqa: E402
 from services.geometry import GeometryRejected, build_geometry as build_geometry_svc  # noqa: E402
@@ -229,10 +234,25 @@ def _geometry_report(sid: str, version: Optional[int] = None) -> Optional[Geomet
 
 
 def _current_params(sid: str) -> Optional[Dict[str, Any]]:
+    """The current geometry, ALWAYS normalised through BWBParams (S1-C).
+
+    The stored `params.json` was previously returned raw. That was invisible until
+    the section became the owner of thickness: a file written before S1-C has
+    `root_thickness_pct` and no aerofoil at all, so the cockpit rendered "—" for
+    every section name and a blank blend row while both test suites were green.
+    Round-tripping through the model applies the legacy migration (nearest section
+    by t/c) and guarantees the browser always receives the CURRENT schema, not
+    whatever shape happened to be on disk."""
     geo = ds.latest_dir(sid, "geometry")
     if geo and os.path.exists(os.path.join(geo, "params.json")):
         with open(os.path.join(geo, "params.json")) as f:
-            return json.load(f)
+            stored = json.load(f)
+        try:
+            return BWBParams.model_validate(stored).model_dump()
+        except ValidationError:
+            # A stored geometry outside the current gates must not brick the screen;
+            # the geometry report surfaces the violation separately.
+            return stored
     plan = _plan_derived(sid)
     return plan.params.model_dump() if plan else None
 
@@ -449,9 +469,40 @@ def _requirements_status(sid: str, req: Optional[DesignRequirements] = None
 # API
 # ---------------------------------------------------------------------------
 
+_SECTION_FIELDS = ("root_airfoil", "mid_airfoil", "tip_airfoil")
+
+
+def _section_curves_for(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Reynolds curves for whichever sections this geometry actually uses (S1-C2)."""
+    if not params:
+        return {}
+    names = [params.get(f) for f in _SECTION_FIELDS]
+    return curve_payload(*[n for n in names if isinstance(n, str) and has_section(n)])
+
+
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {"ok": True, "service": "astra-cockpit"}
+
+
+@app.get("/api/sections/curves")
+def section_curves(names: str) -> Dict[str, Any]:
+    """Top-up route for sections the client does not yet hold (S1-C2).
+
+    Bootstrap ships the current three. A revision or a promoted candidate can change
+    them, and the browser cannot compute a stall speed for a section it has never
+    seen. An unknown name is REPORTED, not skipped: silently returning a short map
+    would leave the client waiting forever for a curve that is never coming."""
+    wanted = [n.strip() for n in names.split(",") if n.strip()]
+    if not wanted:
+        raise HTTPException(status_code=400, detail="names must be a non-empty list")
+    if len(wanted) > 16:
+        raise HTTPException(status_code=400, detail="at most 16 sections per request")
+    unknown = [n for n in wanted if not has_section(n)]
+    if unknown:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown section(s): {', '.join(sorted(unknown))}")
+    return {"curves": curve_payload(*wanted)}
 
 
 @app.get("/api/bootstrap")
@@ -478,6 +529,11 @@ def bootstrap(session: Optional[str] = None) -> Dict[str, Any]:
         "atmosphere_table": atmosphere_table_payload(),
         "mission": mission,
         "params": params,
+        # S1-C2: the browser runs Schrenk itself so that dragging stays instant, which
+        # needs section CLmax(Re) for the three selected sections. The full table is
+        # 2.33 MB; this is 30 numbers. Shipped at bootstrap so the FIRST paint already
+        # has a real stall speed rather than a blank waiting on a second round trip.
+        "section_curves": _section_curves_for(params),
         "derived": _instant_derived(mission, params) if params else None,
         "plan_assumptions": plan.assumptions if plan else [],
         "sizing_targets": {
@@ -1068,6 +1124,46 @@ def set_locks(req: LocksRequest) -> Dict[str, Any]:
     return {"locks": req.locks}
 
 
+@app.get("/api/handoff/{session_id}")
+def stage1_handoff(session_id: str) -> Dict[str, Any]:
+    """The Stage-1 -> Stage-2 artifact for this session (S1-I).
+
+    Built on demand rather than persisted: it is a VIEW of the session's current
+    geometry, requirements and locks, and a stale copy on disk would be worse than no
+    copy at all. Stage 2 does not exist yet, so the transport is deliberately the
+    simplest thing that can be versioned — `schema_version` is how a future consumer
+    tells what it is reading."""
+    sid = _validated_sid(session_id)
+    # A session id that passes the format check but does not exist raises
+    # FileNotFoundError out of the store, which uvicorn turns into a 500. A caller
+    # asking for a session that is not there has made a 404-shaped mistake, and a 500
+    # tells them the server is broken instead.
+    try:
+        raw = _current_params(sid)
+        requirements = _current_requirements(sid)
+    except FileNotFoundError:
+        raise HTTPException(404, detail=f"unknown design session: {session_id}")
+    if not raw:
+        raise HTTPException(404, detail="no geometry in this session yet")
+    params = BWBParams.model_validate(raw)
+    atmosphere = atmosphere_at(requirements.cruise_altitude_m)
+    panel = aero_estimate(params, atmosphere, requirements.cruise_speed_ms,
+                          requirements.mtow_kg * 9.81, requirements.launch)
+
+    locks_flags = _read_locks(sid)
+    locked = LockedValues(
+        span_m=params.span_m if locks_flags.get("span_max") else None,
+        s_ref_m2=params.planform_area_m2() if locks_flags.get("s_ref") else None,
+        mtow_kg=requirements.mtow_kg if locks_flags.get("mtow_cap") else None)
+
+    handoff = build_handoff(
+        params, panel, requirements,
+        requirement_status=check_requirements(requirements, params),
+        locked=locked, altitude_m=requirements.cruise_altitude_m)
+    return {"schema_version": SCHEMA_VERSION,
+            "handoff": json.loads(handoff.model_dump_json())}
+
+
 @app.get("/api/explanations/{session_id}")
 def explanations(session_id: str) -> Dict[str, Any]:
     return {"explanations": _read_explanations(session_id)}
@@ -1450,17 +1546,6 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
     if launch not in ("hand", "catapult", "runway"):
         launch = "hand"
 
-    # Endurance is clamped like its neighbours instead of passed through raw. It drives
-    # no computation (it is recorded for the propulsion stage), so "loiter for 11 hours"
-    # making every subsequent generate return 500 — forever, with GET still 200 so the
-    # UI showed a healthy list and a dead button — was indefensible (S2-B1).
-    # usable_number already clamps into the schema range and the intake's own warnings
-    # report it (S3-D2); clamp_endurance stays as the belt-and-braces conversion for a
-    # value that reached here by some other route.
-    endurance = intake_pack.usable_number(intake, "endurance")
-    if endurance is not None:
-        endurance, _ = intake_pack.clamp_endurance(endurance)
-
     payload_kg = min(max(row_num("payload", 1.0), 0.01), 10.0)
     mtow_kg = min(row_num("mtow_cap", 0.0), 25.0) or None
     if mtow_kg is not None and mtow_kg < payload_kg:
@@ -1479,7 +1564,6 @@ def _stage1_generate_locked(sid: str, req: "IntakeGenerateReq") -> Dict[str, Any
         cruise_speed_ms=min(max(row_num("cruise_speed", 18.0), 8.0), 60.0),
         cruise_altitude_m=min(max(row_num("altitude", 100.0), 0.0), 4000.0),
         mtow_kg=mtow_kg,
-        endurance_min=endurance,
         launch=launch)
     # Plan sizing comes from the SAME inverse solve the intake's feasibility
     # ran — never defaults.derive's naive planform, which rejects envelope

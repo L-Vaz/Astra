@@ -127,9 +127,8 @@ def test_speed_units_are_converted(typed, expected):
         expected)
 
 
-@pytest.mark.parametrize("typed,expected", [("90 min", 90.0), ("1.5 h", 90.0)])
-def test_time_units_are_converted(typed, expected):
-    assert _row(_edit("endurance", typed), "endurance").number == pytest.approx(expected)
+# S1-A: test_time_units_are_converted went with the endurance row. Minutes and hours
+# are no longer units this pack recognises, because no row is measured in them.
 
 
 def test_a_unit_from_the_wrong_dimension_is_refused_by_name():
@@ -164,17 +163,15 @@ def test_text_rows_are_never_marked_unparsed():
     ("6 ft", "length", 1.8288),
     ("250 g", "mass", 0.25),
     ("25 kt", "speed", 12.861111111111112),
-    ("2 h", "time", 120.0),
 ])
 def test_brief_and_edit_paths_agree(typed, dimension, expected):
     """The same string must mean the same thing however it arrives.
 
     Before this the BRIEF path converted mm/cm and the EDIT path did not, so
     "1800 mm" was 1.8 m when written in a brief and 1800 m when typed into the row."""
-    rid = {"length": "span_max", "mass": "payload", "speed": "v_stall_max",
-           "time": "endurance"}[dimension]
-    keyword = {"span_max": "span", "payload": "payload", "v_stall_max": "stall",
-               "endurance": "endurance"}[rid]
+    rid = {"length": "span_max", "mass": "payload", "speed": "v_stall_max"}[dimension]
+    keyword = {"span_max": "span", "payload": "payload",
+               "v_stall_max": "stall"}[rid]
     from_edit = _row(_edit(rid, typed), rid).number
     from_brief = _row(I.parse_brief(f"{keyword} {typed}"), rid).number
     assert from_edit == pytest.approx(expected)
@@ -203,11 +200,14 @@ def test_null_value_restores_the_assumed_default():
                                                    default.origin)
 
 
-def test_null_value_removes_a_custom_row():
-    added = I.apply_edits(I.default_intake(),
-                          [{"id": "custom_chord", "label": "Max chord",
-                            "value": "0.35 m"}])
-    cleared = I.apply_edits(added, [{"id": "custom_chord", "value": None}])
+def test_a_legacy_unknown_row_is_dropped_when_cleared():
+    """S1-B: replaces test_null_value_removes_a_custom_row. No client can create such a
+    row now, but an intake stored before the set was closed could still carry one, so
+    `_restore_default` must still drop what it has no default for."""
+    stale = I.default_intake()
+    stale.rows.append(I.IntakeRow(id="custom_chord", tier="vehicle",
+                                  label="Max chord", value="0.35 m", status="fixed"))
+    cleared = I.apply_edits(stale, [{"id": "custom_chord", "value": None}])
     assert not any(r.id == "custom_chord" for r in cleared.rows)
 
 
@@ -224,8 +224,11 @@ def test_probe_brief_parses_span_and_altitude_correctly():
     assert _row(ik, "span_max").origin == "you_said"
     assert _row(ik, "altitude").origin == "you_said"
     assert _row(ik, "payload").number == pytest.approx(0.25)
-    assert _row(ik, "endurance").number == pytest.approx(45.0)
     assert _row(ik, "launch").value == "hand"
+    # PROBE_BRIEF still says "45 min endurance". After S1-A that clause names no row,
+    # and — the part worth pinning — the orphaned 45 is not captured by a neighbour.
+    assert not any(r.id == "endurance" for r in ik.rows)
+    assert all(r.number != pytest.approx(45.0) for r in ik.rows if r.number is not None)
 
 
 @pytest.mark.parametrize("brief", [
@@ -290,22 +293,43 @@ def test_an_explicit_stall_beats_the_launch_default():
 
 
 # ===================================================================================
-# S2-B1 — endurance is recorded and capped, never fatal
+# S1-A — endurance is gone, and stays gone
+#
+# This section replaces the S2-B1 clamp tests. Those pinned the behaviour of a row that
+# was recorded and never computed with; the clamp existed only to stop an out-of-range
+# value from making every later generate return 500. With the row deleted there is
+# nothing to clamp, so what needs pinning is that the words are inert and that the
+# numbers they used to own are not silently adopted by another row.
 # ===================================================================================
 
-@pytest.mark.parametrize("brief,expected", [
-    ("loiter for 11 hours", 600.0),
-    ("12 hour endurance", 600.0),
-    ("endurance 900 min", 600.0),
-    ("45 min endurance", 45.0),
+@pytest.mark.parametrize("brief", [
+    "loiter for 11 hours",
+    "12 hour endurance",
+    "endurance 900 min",
+    "45 min endurance",
+    "surveillance, 2 m span, hand launch, fly for 24 hours",
 ])
-def test_endurance_is_clamped_at_parse_time(brief, expected):
-    """MissionSpec caps endurance_min at 600. Parsing 660 and letting every later
-    generate raise is indefensible for a row that drives no computation."""
-    row = _row(I.parse_brief(brief), "endurance")
-    assert row.number == pytest.approx(expected)
-    if expected == 600.0:
-        assert "capped at 600 min" in row.source
+def test_endurance_words_create_no_row_and_leak_into_no_other(brief):
+    ik = I.parse_brief(brief)
+    assert not any(r.id == "endurance" for r in ik.rows)
+    for stray in (11.0, 12.0, 900.0, 45.0, 24.0, 600.0):
+        assert all(r.number != pytest.approx(stray)
+                   for r in ik.rows if r.number is not None), \
+            f"{brief!r}: {stray} was adopted by a row it does not belong to"
+
+
+def test_endurance_is_not_a_mission_field():
+    """MissionSpec must not carry endurance_min or range_km, and must still LOAD a
+    stored spec that has them — the ~40 mission_derived.json files written before
+    S1-A would otherwise be unreadable."""
+    from domain_packs.bwb.schema import MissionSpec
+    assert "endurance_min" not in MissionSpec.model_fields
+    assert "range_km" not in MissionSpec.model_fields
+    legacy = MissionSpec.model_validate({
+        "payload_kg": 1.0, "cruise_speed_ms": 18.0, "cruise_altitude_m": 100.0,
+        "endurance_min": 45.0, "range_km": 12.0, "launch": "hand"})
+    assert legacy.payload_kg == pytest.approx(1.0)
+    assert not hasattr(legacy, "endurance_min")
 
 
 # ===================================================================================
@@ -339,14 +363,16 @@ def test_an_unparsed_row_is_reported_as_unusable():
 # S2-D5 — parsing a brief merges, never resets
 # ===================================================================================
 
-def test_parse_preserves_user_edits_and_custom_rows():
+def test_parse_preserves_user_edits():
+    """S1-B: the custom-row half of this test went with the closed set. The edit-
+    preservation half is the part that mattered — parsing a brief after editing used to
+    silently revert an edited mtow_cap to its assumed default."""
     edited = I.apply_edits(I.parse_brief(PROBE_BRIEF), [
         {"id": "mtow_cap", "value": "4.5 kg", "status": "fixed"},
-        {"id": "custom_max_chord", "label": "Max chord", "value": "0.35 m"},
     ])
     merged = I.merge_brief(edited, "surveillance, 2.2 m span, hand launch")
     assert _row(merged, "mtow_cap").number == pytest.approx(4.5)
-    assert any(r.id == "custom_max_chord" for r in merged.rows)
+    assert _row(merged, "mtow_cap").status == "fixed"
 
 
 def test_brief_overriding_an_edit_is_reported():

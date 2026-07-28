@@ -12,6 +12,7 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import * as ATMOSPHERE from './atmosphere.js?v=atm1';
 import * as AERO from './aero_mirror.js?v=atm1';
 import * as PLANFORM from './planform.js?v=atm1';
+import * as SPANWISE from './spanwise.js?v=atm1';
 import * as REQ from './req_panel.js?v=atm1';
 import * as WHY from './why_panel.js?v=atm1';
 
@@ -51,6 +52,8 @@ const S = {
   reqSchema: null,        // DesignRequirements json-schema properties (bounds)
   reqMeta: null,          // solver met-tolerances + per-launch stall caps
   atmosphereTable: null,  // canonical server-supplied USSA1976 rows + metadata
+  sectionCurves: {},      // S1-C2: {section: {log_re, clmax, cl_alpha}} for the stall
+                          // solve. Only the sections in use — the table is 2.33 MB.
 };
 
 const PARAM_META = {
@@ -68,10 +71,10 @@ const PARAM_META = {
                           aero: 'more sweep ⇒ neutral point aft (stability ↑) in exchange for CLmax ↓ (stall speed ↑)' },
   sweep_outer_deg:      { label: 'Outer LE sweep', unit: 'deg', dp: 1, info: 'Outer panel sweep. With washout, provides pitch stability for a tailless BWB.',
                           aero: 'more sweep ⇒ neutral point aft (stability ↑) in exchange for CLmax ↓ (stall speed ↑)' },
-  root_thickness_pct:   { label: 'Root thickness', unit: '% t/c', dp: 1, info: 'Root airfoil thickness ratio. Structure/volume vs drag.',
-                          aero: 'thicker ⇒ CD0 ↑ (L/D ↓) in exchange for spar depth & volume ↑' },
-  tip_thickness_pct:    { label: 'Tip thickness', unit: '% t/c', dp: 1, info: 'Tip airfoil thickness ratio. Must not exceed root thickness.',
-                          aero: 'thicker ⇒ CD0 ↑ slightly; stiffer tip' },
+  /* S1-C: root_thickness_pct and tip_thickness_pct are no longer sliders. Thickness
+     is a property of the aerofoil, not a knob beside it — you set it by choosing a
+     section. They are still SHOWN, as read-only depth readouts, because what the
+     section gives you has to be visible before you commit to it. */
   root_twist_deg:       { label: 'Root incidence', unit: 'deg', dp: 1, info: 'Root setting angle relative to the body datum.',
                           aero: 'sets cruise trim attitude; more incidence ⇒ body flies flatter' },
   tip_twist_deg:        { label: 'Tip twist (washout)', unit: 'deg', dp: 1, info: 'Negative = washout. A tailless BWB needs washout, never wash-in.',
@@ -79,9 +82,17 @@ const PARAM_META = {
   dihedral_deg:         { label: 'Dihedral', unit: 'deg', dp: 1, info: 'Spanwise upward angle. Adds roll stability.',
                           aero: 'more dihedral ⇒ roll stability ↑; negligible drag cost at these angles' },
 };
-const PRIMARY_REAL = ['span_m', 'sweep_outer_deg', 'root_thickness_pct'];
+const PRIMARY_REAL = ['span_m', 'sweep_outer_deg'];
 const ADVANCED = ['root_chord_m', 'centre_body_fraction', 'mid_chord_frac', 'taper_outer',
-  'sweep_inner_deg', 'tip_thickness_pct', 'root_twist_deg', 'tip_twist_deg', 'dihedral_deg'];
+  'sweep_inner_deg', 'root_twist_deg', 'tip_twist_deg', 'dihedral_deg'];
+
+/* The three aerofoil stations and the depth each one gives you. Read-only: the
+   section is chosen, the thickness follows. */
+const SECTION_STATIONS = [
+  ['root_airfoil', 'root_thickness_pct', 'Root section', 'centre body — holds the payload'],
+  ['mid_airfoil', 'mid_thickness_pct', 'Blend section', 'body/wing junction'],
+  ['tip_airfoil', 'tip_thickness_pct', 'Tip section', 'sets tip stall behaviour'],
+];
 
 /* ------------------------------------------------- deterministic math mirror */
 /* One copy of the planform and station algebra, in planform.js (S7-I1). This file
@@ -115,8 +126,10 @@ function crossChecks(p) {
     params: ['taper_outer', 'mid_chord_frac', 'root_chord_m'],
     message: `tip chord ${(pf.cTip * 1000).toFixed(0)} mm is below the ${TIP_CHORD_MIN * 1000} mm manufacturable minimum` });
   if (+p.tip_thickness_pct > +p.root_thickness_pct) issues.push({
-    params: ['tip_thickness_pct', 'root_thickness_pct'],
-    message: 'tip airfoil is thicker than the root airfoil' });
+    params: ['tip_airfoil', 'root_airfoil'],
+    message: `tip section ${p.tip_airfoil} (${(+p.tip_thickness_pct).toFixed(1)}% t/c) `
+      + `is thicker than root section ${p.root_airfoil} `
+      + `(${(+p.root_thickness_pct).toFixed(1)}%) — a BWB thins outboard` });
   if (pf.ar < AR_RANGE[0] || pf.ar > AR_RANGE[1]) issues.push({
     params: ['span_m', 'root_chord_m'],
     message: `aspect ratio ${pf.ar.toFixed(2)} outside sane BWB range [${AR_RANGE[0]}, ${AR_RANGE[1]}]` });
@@ -454,6 +467,36 @@ function controlRow(key, opts = {}) {
   return div;
 }
 
+/* S1-C: the aerofoil stations, and the structural depth each one buys you.
+   Read-only by design — thickness belongs to the section, so it is reported here
+   rather than dialled. The absolute depth in millimetres is the number that decides
+   whether a spar and a battery actually fit, so it is shown next to the ratio. */
+function sectionPanel() {
+  const div = document.createElement('div');
+  div.className = 'ctl';
+  const p = S.params;
+  const chords = planform(p);
+  const chordAt = { root_thickness_pct: +p.root_chord_m,
+                    mid_thickness_pct: chords.cMid,
+                    tip_thickness_pct: chords.cTip };
+  const rows = SECTION_STATIONS.map(([nameKey, tcKey, label, why]) => {
+    const tc = +p[tcKey];
+    const depthMm = tc / 100 * chordAt[tcKey] * 1000;
+    return `
+      <div class="sec-row">
+        <div class="sec-label">${label}<span class="sec-why">${why}</span></div>
+        <div class="sec-name">${p[nameKey] ?? '—'}</div>
+        <div class="sec-tc">${isFinite(tc) ? tc.toFixed(1) : '—'}<span>% t/c</span></div>
+        <div class="sec-depth">${isFinite(depthMm) ? depthMm.toFixed(0) : '—'}<span> mm deep</span></div>
+      </div>`;
+  }).join('');
+  div.innerHTML = `
+    <div class="ctl-head"><label>Aerofoil sections</label><span class="unit">thickness follows the section</span></div>
+    <div class="sec-table">${rows}</div>
+    <div class="ctl-aero">the section sets the thickness — pick a different aerofoil to change the depth</div>`;
+  return div;
+}
+
 function buildGeometryTab() {
   const pane = document.getElementById('tab-geometry');
   pane.innerHTML = '<div class="group-title">Primary controls</div>';
@@ -481,7 +524,7 @@ function buildGeometryTab() {
     getOriginal: () => S.original.centre_body_fraction * S.original.span_m,
     set: setCentreWidth }));
   pane.appendChild(controlRow('sweep_outer_deg'));
-  pane.appendChild(controlRow('root_thickness_pct'));
+  pane.appendChild(sectionPanel());
 
   const stab = document.createElement('div');
   stab.className = 'ctl';
@@ -516,18 +559,17 @@ function buildMissionTab() {
     ['cruise_speed_ms', 'Cruise speed', 'm/s', 8, 60, false],
     ['cruise_altitude_m', 'Cruise altitude', 'm AMSL', 0, 4000, false],
     ['mtow_kg', 'MTOW (optional)', 'kg', 0.5, 25, true],
-    ['range_km', 'Intended range', 'km', 1, 500, true],
-    ['endurance_min', 'Intended endurance', 'min', 1, 600, true],
+    // S1-A: `range_km` and `endurance_min` were removed. They carried a "recorded goal
+    // only — NOT evaluated" note, which is a field admitting it does nothing. Deleting
+    // the field is the honest version of that note.
   ];
   for (const [key, label, unit, lo, hi, optional] of fields) {
-    const goal = key === 'range_km' || key === 'endurance_min';
     const div = document.createElement('div');
     div.className = 'ctl';
     div.innerHTML = `
       <div class="ctl-head"><label>${label}</label><span class="unit">${unit}</span></div>
       <div class="ctl-row"><input type="number" step="any" min="${lo}" max="${hi}"
-        placeholder="${optional ? 'not set' : ''}" data-mkey="${key}" style="flex:1"></div>
-      ${goal ? '<div class="goalnote" style="margin:4px 0 0">Recorded goal only — NOT evaluated. Propulsion and energy modelling are outside the current aero-only scope; this value never influences sizing.</div>' : ''}`;
+        placeholder="${optional ? 'not set' : ''}" data-mkey="${key}" style="flex:1"></div>`;
     const inp = div.querySelector('input');
     inp.addEventListener('change', () => {
       const raw = inp.value.trim();
@@ -692,7 +734,8 @@ function aeroCtx(mission) {
   const mtowGiven = mission.mtow_kg != null && mission.mtow_kg !== '';
   const mtow = mtowGiven ? +mission.mtow_kg : +mission.payload_kg / PAYLOAD_FRACTION;
   return { atmosphere, v: +mission.cruise_speed_ms,
-    w: mtow * 9.81, launch: mission.launch || 'hand' };
+    w: mtow * 9.81, launch: mission.launch || 'hand',
+    sectionCurves: S.sectionCurves };
 }
 
 function evidenceBadges(c) {
@@ -1219,6 +1262,25 @@ async function refreshVersions() {
   renderStale();
 }
 
+/* Top up the section Reynolds curves when the geometry starts using a section the
+   browser has never seen — promoting a candidate, restoring a version, or applying a
+   chat revision can all do that (S1-C2). Until the fetch lands, aero_mirror reports
+   every stall quantity as null and the panels show "—"; it does NOT fall back to a
+   constant, because that is precisely the failure being retired here. */
+let curveFetchInFlight = null;
+function ensureSectionCurves() {
+  const p = S.params;
+  if (!p) return;
+  const missing = SPANWISE.missingCurves(
+    S.sectionCurves, p.root_airfoil, p.mid_airfoil, p.tip_airfoil).filter(Boolean);
+  if (!missing.length || curveFetchInFlight) return;
+  curveFetchInFlight = fetch(`/api/sections/curves?names=${encodeURIComponent(missing.join(','))}`)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+    .then(d => { S.sectionCurves = { ...S.sectionCurves, ...d.curves }; syncAll(true); })
+    .catch(e => toast('err', `section data for ${missing.join(', ')} unavailable: ${e.message}`))
+    .finally(() => { curveFetchInFlight = null; });
+}
+
 /* ----------------------------------------------------------------- helpers */
 function toast(kind, msg) {
   const t = document.createElement('div');
@@ -1236,6 +1298,7 @@ function syncAll(skipMesh) {
   // which would freeze the readout panels while the cockpit is backgrounded
   setTimeout(() => {
     syncPending = false;
+    ensureSectionCurves();
     document.querySelectorAll('.ctl').forEach(c => c._sync && c._sync());
     if (!skipMesh) refreshPreviewMesh();
     renderDerived();
@@ -1274,6 +1337,7 @@ async function boot() {
   S.reqStatus = b.requirements_status;
   S.reqSchema = b.requirements_schema.properties;
   S.reqMeta = b.requirements_meta;
+  S.sectionCurves = { ...(b.section_curves || {}) };
 
   document.getElementById('session-chip').textContent =
     `session: ${S.sid} · ${b.pending_explanations} change(s) queued for chat`;
