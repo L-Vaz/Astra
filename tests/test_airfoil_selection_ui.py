@@ -112,3 +112,4 @@ def test_requirements_section_row_hands_ownership_to_the_airfoil_gate():
     row = next(row for row in default_intake().rows if row.id == "airfoil")
     assert row.value == "Chosen in Airfoil sets"
     assert "Airfoil sets" in row.info
+    assert row.status == "derived", "the ownership status must not say recorded only"
