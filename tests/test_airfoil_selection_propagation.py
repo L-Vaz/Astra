@@ -82,6 +82,8 @@ def test_candidate_batch_records_selection_and_stales_when_selection_changes(
         "mid": item["params"]["mid_airfoil"],
         "tip": item["params"]["tip_airfoil"],
     } == approval["schedule"] for item in batch["candidates"])
+    baseline = next(item for item in batch["candidates"] if item["is_baseline"])
+    assert baseline["params"] == approval["selected_params"]
 
     recommendation = service.get_recommendations(sid)
     replacement = service.select(sid, recommendation["strategies"][1]["schedule_hash"])

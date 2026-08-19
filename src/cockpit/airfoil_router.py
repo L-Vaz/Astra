@@ -200,13 +200,21 @@ def airfoil_detail(
             "coordinates": coordinates["coordinates"],
             "coordinate_sha256": coordinates["sha256"],
             "prestall_lift": [
-                [0.0, aero.cl0],
-                [aero.alpha_clmax_deg, aero.clmax],
+                [
+                    aero.alpha_clmax_deg * index / 5.0,
+                    min(
+                        aero.clmax,
+                        aero.cl0 + aero.cl_alpha_per_deg
+                        * aero.alpha_clmax_deg * index / 5.0,
+                    ),
+                ]
+                for index in range(5)
             ],
             "clmax": {
                 "value": aero.clmax,
                 "alpha_deg": aero.alpha_clmax_deg,
-                "is_measured_peak": aero.stalled,
+                "is_sweep_peak": aero.stalled,
+                "source": "committed NeuralFoil alpha sweep [C]",
             },
             "cd_vs_cl": ladder,
             "reynolds": reynolds,

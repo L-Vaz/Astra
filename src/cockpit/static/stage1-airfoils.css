@@ -63,6 +63,12 @@
 }
 .airfoil-modal-head { display: flex; justify-content: space-between; align-items: center; }
 .airfoil-modal-head h2 { margin: 0; }
+.airfoil-detail-tabs { display: flex; gap: 6px; margin: 12px 0; border-bottom: 1px solid var(--border); }
+.airfoil-detail-tabs button {
+  color: var(--dim); background: transparent; border: 0; border-bottom: 2px solid transparent;
+  padding: 8px 10px; cursor: pointer;
+}
+.airfoil-detail-tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); }
 .airfoil-modal-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .airfoil-plot, .airfoil-facts {
   background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
@@ -75,6 +81,11 @@
 #airfoil-detail-metrics dd { margin: 0; text-align: right; }
 #airfoil-evidence { overflow-wrap: anywhere; }
 #airfoil-evidence p { margin: 6px 0; }
+.airfoil-evidence-panel {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 14px;
+}
+.airfoil-evidence-state { color: var(--accent); }
 
 @media (max-width: 840px) {
   .airfoil-card-grid { grid-template-columns: 1fr; }

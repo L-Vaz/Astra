@@ -8,6 +8,73 @@
 
 export const AIRFOIL_CONTINUE_EVENT = 'astra:stage1-airfoil-continued';
 
+export function createAirfoilSectionProvider(pointCount = 96) {
+  const coordinates = new Map();
+
+  function resample(points) {
+    if (!Array.isArray(points) || points.length < 2) return null;
+    const source = points.map(([x, z]) => [Number(x), Number(z)]);
+    const cumulative = [0];
+    for (let index = 1; index < source.length; index += 1) {
+      cumulative.push(cumulative[index - 1] + Math.hypot(
+        source[index][0] - source[index - 1][0],
+        source[index][1] - source[index - 1][1],
+      ));
+    }
+    const length = cumulative[cumulative.length - 1];
+    let segment = 0;
+    return Array.from({ length: pointCount }, (_, index) => {
+      const target = length * index / (pointCount - 1);
+      while (segment < cumulative.length - 2 && cumulative[segment + 1] < target) {
+        segment += 1;
+      }
+      const segmentLength = cumulative[segment + 1] - cumulative[segment];
+      const fraction = segmentLength > 0
+        ? (target - cumulative[segment]) / segmentLength : 0;
+      return [
+        source[segment][0] * (1 - fraction) + source[segment + 1][0] * fraction,
+        source[segment][1] * (1 - fraction) + source[segment + 1][1] * fraction,
+      ];
+    });
+  }
+
+  function set(name, points) {
+    const sampled = resample(points);
+    if (sampled) coordinates.set(name, sampled);
+  }
+
+  function sectionLoop(params, station) {
+    const root = coordinates.get(params.root_airfoil);
+    const mid = coordinates.get(params.mid_airfoil);
+    const tip = coordinates.get(params.tip_airfoil);
+    if (!root || !mid || !tip) {
+      throw new Error('Exact approved airfoil coordinates are not loaded');
+    }
+    const eta = Math.min(1, Math.max(0, Math.abs(station.y) / (params.span_m / 2)));
+    const boundary = Number(params.centre_body_fraction);
+    const inner = eta <= boundary;
+    const fraction = inner
+      ? (boundary > 0 ? eta / boundary : 0)
+      : (eta - boundary) / (1 - boundary);
+    const first = inner ? root : mid;
+    const second = inner ? mid : tip;
+    const twist = station.tw * Math.PI / 180;
+    const output = [];
+    for (let index = 0; index < pointCount; index += 1) {
+      const xc = first[index][0] * (1 - fraction) + second[index][0] * fraction;
+      const zc = first[index][1] * (1 - fraction) + second[index][1] * fraction;
+      const dx = (xc - 0.25) * station.chord;
+      const dz = zc * station.chord;
+      const xr = 0.25 * station.chord + dx * Math.cos(twist) + dz * Math.sin(twist);
+      const zr = -dx * Math.sin(twist) + dz * Math.cos(twist);
+      output.push(station.xle + xr, station.y, station.z + zr);
+    }
+    return output;
+  }
+
+  return { pointCount, set, sectionLoop, has: (name) => coordinates.has(name) };
+}
+
 const STRATEGIES = ['balanced', 'efficiency', 'low_speed_control'];
 const STATIONS = ['root', 'mid', 'tip'];
 const LABELS = {
@@ -82,7 +149,9 @@ function summary(card) {
   ].join(' · ');
 }
 
-export function createAirfoilSetsController({ THREE, api, sessionId, onContinue }) {
+export function createAirfoilSetsController({
+  THREE, api, sessionId, onContinue, sectionProvider,
+}) {
   const state = {
     sessionId,
     recommendation: null,
@@ -91,7 +160,57 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     activeStation: 'root',
     details: new Map(),
     loft: null,
+    modalOpener: null,
   };
+
+  function activateDetailTab(name, focus = false) {
+    document.querySelectorAll('[role="tab"][data-airfoil-tab]').forEach((tab) => {
+      const active = tab.dataset.airfoilTab === name;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      if (active && focus) tab.focus();
+    });
+    document.querySelectorAll('[role="tabpanel"][data-airfoil-panel]').forEach((panel) => {
+      panel.classList.toggle('hidden', panel.dataset.airfoilPanel !== name);
+    });
+  }
+
+  function installDetailTabs() {
+    const grid = byId('airfoil-modal')?.querySelector('.airfoil-modal-grid');
+    if (!grid || byId('airfoil-detail-tabs')) return;
+    const evidence = byId('airfoil-evidence');
+    const tablist = document.createElement('div');
+    tablist.id = 'airfoil-detail-tabs';
+    tablist.className = 'airfoil-detail-tabs';
+    tablist.setAttribute('role', 'tablist');
+    tablist.setAttribute('aria-label', 'Airfoil section detail');
+    tablist.innerHTML = `<button role="tab" data-airfoil-tab="aerodynamics"
+      aria-controls="airfoil-panel-aerodynamics" aria-selected="true">Aerodynamics</button>
+      <button role="tab" data-airfoil-tab="evidence"
+      aria-controls="airfoil-panel-evidence" aria-selected="false" tabindex="-1">
+      Evidence & References</button>`;
+    const aeroPanel = document.createElement('div');
+    aeroPanel.id = 'airfoil-panel-aerodynamics';
+    aeroPanel.className = 'airfoil-modal-grid';
+    aeroPanel.dataset.airfoilPanel = 'aerodynamics';
+    aeroPanel.setAttribute('role', 'tabpanel');
+    aeroPanel.setAttribute('aria-labelledby', 'airfoil-tab-aerodynamics');
+    while (grid.firstChild) aeroPanel.appendChild(grid.firstChild);
+    const evidencePanel = document.createElement('section');
+    evidencePanel.id = 'airfoil-panel-evidence';
+    evidencePanel.className = 'airfoil-evidence-panel hidden';
+    evidencePanel.dataset.airfoilPanel = 'evidence';
+    evidencePanel.setAttribute('role', 'tabpanel');
+    evidencePanel.setAttribute('aria-labelledby', 'airfoil-tab-evidence');
+    if (evidence) evidencePanel.appendChild(evidence);
+    grid.replaceWith(tablist, aeroPanel, evidencePanel);
+    const tabs = tablist.querySelectorAll('[role="tab"]');
+    tabs[0].id = 'airfoil-tab-aerodynamics';
+    tabs[1].id = 'airfoil-tab-evidence';
+    tabs.forEach((tab) => tab.addEventListener('click', () => {
+      activateDetailTab(tab.dataset.airfoilTab, true);
+    }));
+  }
 
   function setBusy(isBusy, message = 'Computing coordinated schedules…') {
     const loading = byId('airfoil-loading');
@@ -149,7 +268,7 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     });
     cards.querySelectorAll('.airfoil-station').forEach((button) => {
       button.addEventListener('click', () => openDetail(
-        button.dataset.strategy, button.dataset.station,
+        button.dataset.strategy, button.dataset.station, button,
       ));
     });
 
@@ -233,7 +352,13 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
       ['Polar valid', detail.validity.polar_in_envelope ? 'yes' : 'no'],
     ].map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('');
     const experimental = detail.references?.experimental;
+    const grade = detail.references?.evidence_grade || 'C';
+    const stateLabel = experimental
+      ? (detail.references?.partial_match ? `Measured — partial match [${grade}]`
+        : `Measured — matching conditions [${grade}]`)
+      : `Computational only [C] · missing experimental data`;
     byId('airfoil-evidence').innerHTML = `
+      <p class="airfoil-evidence-state"><b>${esc(stateLabel)}</b></p>
       <p><b>Polar:</b> ${esc(detail.evidence.polar)}</p>
       <p><b>Coordinates:</b> ${esc(detail.evidence.coordinates)}</p>
       <p><b>Coordinate SHA-256:</b> <code>${esc(detail.coordinate_sha256)}</code></p>
@@ -250,11 +375,14 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
         + `&strategy=${encodeURIComponent(strategy)}&station=${station}`,
       ));
     }
-    return state.details.get(key);
+    const detail = state.details.get(key);
+    sectionProvider?.set(detail.name, detail.coordinates);
+    return detail;
   }
 
-  async function openDetail(strategy, station) {
+  async function openDetail(strategy, station, opener = null) {
     state.activeStrategy = strategy; state.activeStation = station;
+    if (opener) state.modalOpener = opener;
     setBusy(true, `Loading ${station} section evidence…`); showError(null);
     try {
       const detail = await detailFor(strategy, station);
@@ -262,6 +390,7 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
       const modal = byId('airfoil-modal');
       modal.classList.remove('hidden');
       modal.setAttribute('aria-hidden', 'false');
+      activateDetailTab('aerodynamics');
       byId('btn-airfoil-modal-close').focus();
     } catch (error) { showError(error); } finally { setBusy(false); }
   }
@@ -270,6 +399,7 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     const modal = byId('airfoil-modal');
     modal?.classList.add('hidden');
     modal?.setAttribute('aria-hidden', 'true');
+    state.modalOpener?.focus();
   }
 
   async function renderLoft(card) {
@@ -322,8 +452,18 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     } catch (error) { showError(error); }
   }
 
-  function continueToConcepts() {
+  async function continueToConcepts() {
     if (!state.selection || state.recommendation?.stale) return;
+    const card = state.recommendation.strategies.find(
+      (item) => item.schedule_hash === state.selection.schedule_hash,
+    );
+    if (!card) return;
+    setBusy(true, 'Loading exact sections for Concepts…'); showError(null);
+    try {
+      await Promise.all(STATIONS.map((station) => detailFor(card.strategy, station)));
+    } catch (error) {
+      showError(error); setBusy(false); return;
+    }
     const detail = {
       sessionId: state.sessionId,
       selectionVersion: state.selection.version,
@@ -333,9 +473,11 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     };
     window.dispatchEvent(new CustomEvent(AIRFOIL_CONTINUE_EVENT, { detail }));
     if (onContinue) onContinue(detail);
+    setBusy(false);
   }
 
   function bind() {
+    installDetailTabs();
     byId('btn-airfoil-recompute')?.addEventListener('click', recompute);
     byId('btn-airfoil-continue')?.addEventListener('click', continueToConcepts);
     byId('btn-airfoil-modal-close')?.addEventListener('click', closeDetail);
@@ -345,6 +487,21 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
     document.addEventListener('keydown', (event) => {
       if (byId('airfoil-modal')?.classList.contains('hidden')) return;
       if (event.key === 'Escape') closeDetail();
+      if (event.target?.matches?.('[role="tab"][data-airfoil-tab]')) {
+        const tabs = [...document.querySelectorAll('[role="tab"][data-airfoil-tab]')];
+        const index = tabs.indexOf(event.target);
+        if (event.key === 'ArrowLeft') activateDetailTab(
+          tabs[(index + tabs.length - 1) % tabs.length].dataset.airfoilTab, true,
+        );
+        if (event.key === 'ArrowRight') activateDetailTab(
+          tabs[(index + 1) % tabs.length].dataset.airfoilTab, true,
+        );
+        if (event.key === 'Home') activateDetailTab(tabs[0].dataset.airfoilTab, true);
+        if (event.key === 'End') activateDetailTab(
+          tabs[tabs.length - 1].dataset.airfoilTab, true,
+        );
+        return;
+      }
       const index = STATIONS.indexOf(state.activeStation);
       if (event.key === 'ArrowLeft') {
         void openDetail(state.activeStrategy, STATIONS[(index + 2) % 3]);

@@ -19,7 +19,7 @@ def _selector():
 def _params() -> BWBParams:
     return BWBParams(
         span_m=1.6,
-        root_chord_m=0.55,
+        root_chord_m=0.58,
         centre_body_fraction=0.28,
         mid_chord_frac=0.60,
         taper_outer=0.40,
@@ -87,6 +87,16 @@ def test_station_state_carries_section_conditions_bounds_and_evidence():
         assert {"cruise_reynolds", "low_speed_reynolds", "cruise_lift",
                 "low_speed_lift"} <= set(state["validity"])
         assert state["evidence"]["grade"] == "C"
+
+
+def test_low_speed_screen_uses_the_requested_condition_without_raising_it_to_grid():
+    recommendation = _recommend()
+
+    for state in recommendation["station_state"].values():
+        assert state["evaluated_low_speed_ms"] == pytest.approx(
+            state["requested_low_speed_ms"]
+        )
+        assert state["polar_floor_bound"] is False
 
 
 def test_coupled_winners_stop_only_after_schedule_and_trim_are_stable():

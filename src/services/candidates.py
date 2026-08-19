@@ -19,15 +19,16 @@ it (S4-C3, S5-H11).
 What rollback does and does not preserve (the previous wording here — "rollback /
 versions keep working unchanged" — was false): promotion writes a normal geometry
 version, so the geometry line rolls back like any other stage. The CANDIDATE batch
-does not roll back with it. Moving the plan forward orphans the old batch (its
-directory survives under plan_v<old> but nothing lists it); moving the plan back
-resurrects the batch that belongs to that plan version, which is why the
+does not roll back with it. Moving the plan forward leaves the old batch visible but
+stale for comparison; moving the plan back restores the batch that belongs to that
+plan version, which is why the
 plan-version comparison above exists — it is returned as `stale` with a reason
 rather than presented as current.
 """
 import json
 import math
 import os
+import re
 import shutil
 import time
 from typing import Any, Dict, List, Optional
@@ -145,6 +146,14 @@ def _load_candidate(sid: str, key: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _load_candidate_at_plan(sid: str, key: str, plan_version: int) -> Dict[str, Any]:
+    path = os.path.join(_batch_dir(sid, plan_version), key, "candidate.json")
+    if not os.path.exists(path):
+        raise CandidateError(f"unknown candidate '{key}' for plan v{plan_version}")
+    with open(path) as f:
+        return json.load(f)
+
+
 def _save_candidate(sid: str, record: Dict[str, Any]) -> None:
     # Atomic (S1-B2): the gallery polls these files while a build/screen/promote is
     # rewriting them, and a half-written candidate.json is a 500 on the next read.
@@ -253,14 +262,36 @@ def _batch_meta(sid: str) -> Optional[Dict[str, Any]]:
         return json.load(f)
 
 
-def _staleness(sid: str) -> Dict[str, Any]:
+def _latest_stored_batch_meta(sid: str) -> Optional[Dict[str, Any]]:
+    """Return the newest stored batch even when selection advanced the plan.
+
+    Approval now creates a converged plan version.  Selecting a replacement set
+    therefore moves from (for example) plan_v2 to plan_v3; retaining plan_v2 as a
+    visible stale gallery is required for comparison instead of presenting an empty,
+    apparently-current batch.
+    """
+    root = os.path.join(ds.session_dir(sid), "candidates")
+    if not os.path.isdir(root):
+        return None
+    versions = []
+    for name in os.listdir(root):
+        match = re.fullmatch(r"plan_v(\d+)", name)
+        if match and os.path.isfile(os.path.join(root, name, "index.json")):
+            versions.append(int(match.group(1)))
+    if not versions:
+        return None
+    with open(os.path.join(_batch_dir(sid, max(versions)), "index.json")) as f:
+        return json.load(f)
+
+
+def _staleness(sid: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Why (and whether) the stored batch no longer describes the current state.
 
     Two independent inputs, both compared at READ time (S4-C3, S5-H11): the
     requirements the batch was sized under, and the plan version it belongs to. A plan
     ROLLBACK used to resurrect a stale batch silently — index.json recorded
     plan_version and nothing ever compared it."""
-    meta = _batch_meta(sid)
+    meta = _batch_meta(sid) if meta is None else meta
     if meta is None:
         return {"stale": False, "reasons": []}
     reasons = []
@@ -303,9 +334,11 @@ def _is_stale(sid: str) -> bool:
 def list_candidates(sid: str) -> Dict[str, Any]:
     meta = _batch_meta(sid)
     if meta is None:
+        meta = _latest_stored_batch_meta(sid)
+    if meta is None:
         return {"plan_version": _plan_version(sid), "generated": None,
                 "candidates": [], "stale": False, "unreadable": []}
-    staleness = _staleness(sid)
+    staleness = _staleness(sid, meta)
 
     # Degrade per candidate (S5-H8): one missing directory used to raise for the whole
     # listing, so a single deleted folder made the entire gallery disappear. `.get`
@@ -314,7 +347,9 @@ def list_candidates(sid: str) -> Dict[str, Any]:
     candidates, unreadable = [], []
     for k in meta.get("keys", []):
         try:
-            candidates.append(_load_candidate(sid, k))
+            candidates.append(_load_candidate_at_plan(
+                sid, k, int(meta.get("plan_version"))
+            ))
         except (CandidateError, json.JSONDecodeError, OSError):
             unreadable.append(k)
     return {"plan_version": meta.get("plan_version"),

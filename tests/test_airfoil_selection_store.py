@@ -8,7 +8,7 @@ import os
 import pytest
 
 from domain_packs.bwb.defaults import derive
-from domain_packs.bwb.schema import MissionSpec
+from domain_packs.bwb.schema import BWBParams, MissionSpec
 
 
 @pytest.fixture()
@@ -100,6 +100,34 @@ def test_approval_is_idempotent_but_a_different_schedule_creates_v2(planned_sess
                                        "airfoil_selections", "v1", "selection.json"))
     assert os.path.isfile(os.path.join(ds.session_dir(planned_session),
                                        "airfoil_selections", "v2", "selection.json"))
+
+
+def test_approval_writes_converged_plan_once_and_records_both_plan_identities(
+        planned_session, modules):
+    service, ds = modules
+    recommendation = service.recommend(planned_session)
+    chosen = recommendation["strategies"][0]
+
+    approval = service.select(planned_session, chosen["schedule_hash"])
+    retry = service.select(planned_session, chosen["schedule_hash"])
+
+    assert approval["source_plan_version"] == 1
+    assert approval["source_plan_hash"] == recommendation["sources"]["plan_hash"]
+    assert approval["plan_version_created"] == 2
+    assert approval["plan_hash_created"]
+    assert retry == approval
+    assert ds.get_state(planned_session)["stages"]["plan"]["latest"] == 2
+    plan_path = os.path.join(
+        ds.session_dir(planned_session), "plan", "v2", "mission_derived.json"
+    )
+    with open(plan_path) as stream:
+        created = json.load(stream)
+    assert created["params"] == chosen["params"]
+    assert created["s_ref_target_m2"] == pytest.approx(
+        BWBParams.model_validate(chosen["params"]).planform_area_m2()
+    )
+    assert service.get_recommendations(planned_session)["stale"] is False
+    assert service.get_selection(planned_session)["stale"] is False
 
 
 def test_parallel_repeated_approval_allocates_one_version(planned_session, modules):

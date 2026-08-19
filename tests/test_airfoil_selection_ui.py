@@ -55,6 +55,10 @@ def test_station_modal_has_outline_separate_lift_and_drag_graphs_and_evidence():
     assert "cd_vs_cl" in source
     assert "coordinate_sha256" in source
     assert "references" in source
+    assert "Evidence & References" in source
+    assert "role=\"tab\"" in source
+    assert "role=\"tabpanel\"" in source
+    assert "aria-selected" in source
 
 
 def test_stale_cards_remain_visible_while_continue_is_disabled_and_recompute_exists():
@@ -84,6 +88,14 @@ def test_selected_coordinates_drive_a_threejs_loft_preview():
     assert "detail.coordinates" in source
     assert "airfoil-loft-canvas" in source
     assert "coordinate" in source.lower()
+
+
+def test_concepts_preview_consumes_exact_coordinate_section_provider():
+    airfoils = _read(JS)
+    stage1 = _read(STAGE1_JS)
+    assert "export function createAirfoilSectionProvider" in airfoils
+    assert "airfoilSectionProvider" in stage1
+    assert "sectionLoop(s.chord, s.tc" not in stage1
 
 
 def test_airfoil_assets_are_responsive_and_do_not_touch_findings_dom():

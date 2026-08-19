@@ -8,9 +8,11 @@ import time
 from typing import Any, Dict, Optional
 
 from domain_packs.bwb.airfoil_selection import recommend_airfoil_sets
+from domain_packs.bwb.atmosphere import atmosphere_provenance
 from domain_packs.bwb.schema import MissionDerived
 
 from . import design_session as ds
+from .intent import build_enriched_requirement
 
 
 class AirfoilConflict(RuntimeError):
@@ -126,12 +128,94 @@ def _is_stale(payload: Dict[str, Any], session_id: str) -> bool:
         return True
 
 
+def _selection_bridges_created_plan(recommendation: Dict[str, Any],
+                                    session_id: str) -> bool:
+    """A selection-created plan is an output of this recommendation, not a new input.
+
+    Without this explicit provenance bridge, selecting a set advances the plan and
+    immediately makes the cards that produced it stale.  Any later plan write still
+    breaks the bridge because its version/hash no longer match ``plan_*_created``.
+    """
+    try:
+        selection = _read_latest(
+            _selection_root(session_id), "selection.json", "selection"
+        )
+        current = current_sources(session_id)
+    except (FileNotFoundError, AirfoilConflict):
+        return False
+    return (
+        selection.get("recommendation_version") == recommendation.get("version")
+        and selection.get("recommendation_hash")
+        == recommendation.get("recommendation_hash")
+        and selection.get("source_plan_version")
+        == recommendation.get("sources", {}).get("plan_version")
+        and selection.get("source_plan_hash")
+        == recommendation.get("sources", {}).get("plan_hash")
+        and selection.get("plan_version_created") == current.get("plan_version")
+        and selection.get("plan_hash_created") == current.get("plan_hash")
+        and selection.get("sources") == current
+    )
+
+
 def get_recommendations(session_id: str) -> Dict[str, Any]:
     payload = _read_latest(
         _recommendation_root(session_id), "recommendations.json", "recommendation"
     )
-    payload["stale"] = _is_stale(payload, session_id)
+    stale = _is_stale(payload, session_id)
+    if stale and _selection_bridges_created_plan(payload, session_id):
+        stale = False
+    payload["stale"] = stale
     return payload
+
+
+def _write_selected_plan(session_id: str, recommendation: Dict[str, Any],
+                         chosen: Dict[str, Any]) -> tuple[int, str]:
+    """Persist the converged schedule geometry as the next immutable plan version."""
+    source_version = int(recommendation["sources"]["plan_version"])
+    source_path = os.path.join(
+        ds.session_dir(session_id), "plan", f"v{source_version}",
+        "mission_derived.json",
+    )
+    if _file_hash(source_path) != recommendation["sources"]["plan_hash"]:
+        raise AirfoilConflict("the recommendation source plan no longer matches disk")
+    with open(source_path) as stream:
+        source = MissionDerived.model_validate_json(stream.read())
+    params = source.params.model_validate(chosen["params"])
+    area = params.planform_area_m2()
+    speed = source.mission.cruise_speed_ms
+    density = source.atmosphere.density_kgm3
+    derived = source.model_copy(update={
+        "params": params,
+        "s_ref_target_m2": area,
+        "wing_loading_kgm2": source.mtow_kg / area,
+        "required_cl": source.weight_n / (0.5 * density * speed ** 2 * area),
+        "reynolds_mac": (
+            speed * params.mean_aero_chord_m()
+            / source.atmosphere.kinematic_viscosity_m2s
+        ),
+        "assumptions": list(source.assumptions) + [
+            "Root/mid/tip airfoil schedule approved in the Stage 1 Airfoil Sets gate"
+        ],
+    })
+    vdir = ds.new_version_dir(session_id, "plan")
+    plan_path = os.path.join(vdir, "mission_derived.json")
+    ds.atomic_write(plan_path, derived.model_dump_json(indent=2))
+    ds.atomic_write(
+        os.path.join(vdir, "enriched_requirement.txt"),
+        build_enriched_requirement(derived),
+    )
+    version = ds.record_version(session_id, "plan", {
+        "source": "airfoil_selection",
+        "source_plan_version": source_version,
+        "recommendation_version": recommendation["version"],
+        "recommendation_hash": recommendation["recommendation_hash"],
+        "schedule_hash": chosen["schedule_hash"],
+        **atmosphere_provenance(derived.atmosphere),
+    })
+    digest = _file_hash(plan_path)
+    if digest is None:
+        raise AirfoilConflict("selected airfoil plan was not written")
+    return version, digest
 
 
 def recommend(session_id: str, *, brief: Optional[str] = None,
@@ -158,16 +242,21 @@ def recommend(session_id: str, *, brief: Optional[str] = None,
         resolved_brief = brief if brief is not None else (
             str((intake or {}).get("brief") or "")
         )
-        domain = recommend_airfoil_sets(
-            params=derived.params,
-            cruise_speed_ms=derived.mission.cruise_speed_ms,
-            altitude_m=derived.mission.cruise_altitude_m,
-            weight_n=derived.weight_n,
-            launch=derived.mission.launch,
-            brief=resolved_brief,
-            candidate_limit=candidate_limit,
-            max_passes=max_passes,
-        )
+        try:
+            domain = recommend_airfoil_sets(
+                params=derived.params,
+                cruise_speed_ms=derived.mission.cruise_speed_ms,
+                altitude_m=derived.mission.cruise_altitude_m,
+                weight_n=derived.weight_n,
+                launch=derived.mission.launch,
+                brief=resolved_brief,
+                candidate_limit=candidate_limit,
+                max_passes=max_passes,
+            )
+        except ValueError as exc:
+            raise AirfoilConflict(
+                f"no feasible three-set airfoil recommendation: {exc}"
+            ) from exc
         root = _recommendation_root(session_id)
         version = _index(root) + 1
         content = {
@@ -237,13 +326,24 @@ def select(session_id: str, schedule_hash: str,
                 and current.get("schedule_hash") == schedule_hash):
             return current
 
+        source_plan_version = recommendation["sources"]["plan_version"]
+        source_plan_hash = recommendation["sources"]["plan_hash"]
+        plan_version_created, plan_hash_created = _write_selected_plan(
+            session_id, recommendation, chosen
+        )
+        selection_sources = current_sources(session_id)
+
         root = _selection_root(session_id)
         version = _index(root) + 1
         content = {
             "schema_version": 1,
             "version": version,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "sources": dict(recommendation["sources"]),
+            "sources": selection_sources,
+            "source_plan_version": source_plan_version,
+            "source_plan_hash": source_plan_hash,
+            "plan_version_created": plan_version_created,
+            "plan_hash_created": plan_hash_created,
             "recommendation_version": recommendation["version"],
             "recommendation_hash": recommendation["recommendation_hash"],
             "strategy": chosen["strategy"],

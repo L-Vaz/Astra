@@ -105,6 +105,24 @@ def test_status_semantics_are_404_409_and_422(api):
     assert stale.status_code == 409
 
 
+def test_no_feasible_three_set_result_is_a_conflict(api, monkeypatch):
+    client, sid, _candidates, _ds = api
+    from services import airfoil_selection
+
+    monkeypatch.setattr(
+        airfoil_selection,
+        "recommend_airfoil_sets",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ValueError("no three feasible airfoil schedules")
+        ),
+    )
+    response = client.post(
+        "/api/stage1/airfoils/recommend", json={"session_id": sid}
+    )
+    assert response.status_code == 409
+    assert "feasible" in response.json()["detail"]
+
+
 def test_generate_requires_current_approval_and_passes_it_explicitly(api, monkeypatch):
     client, sid, candidates, _ds = api
     missing = client.post("/api/stage1/generate", json={"session_id": sid})

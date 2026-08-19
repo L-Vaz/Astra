@@ -62,12 +62,10 @@ def _station_state(params: BWBParams, cruise_speed_ms: float, altitude_m: float,
         cruise_speed_ms,
         max(base.v_stall_ms, LAUNCH_VSTALL_MAX[launch]),
     )
-    # The exact table envelope, not a guessed margin, sets the lowest evaluable
-    # speed. Re=rho*V*c/mu = V*c/nu, hence V=Re_min*nu/c for the smallest chord.
-    re_floor = min(float(value) for value in airfoils.provenance()["re_grid"])
-    min_chord = min(params.chords())
-    supported_low = re_floor * atmosphere.kinematic_viscosity_m2s / min_chord
-    evaluated_low = min(cruise_speed_ms, max(requested_low, supported_low))
+    # Evaluate the mission condition exactly.  The polar reader reports an
+    # out-of-envelope Reynolds number and the candidate gate rejects it; silently
+    # increasing speed would recommend against a different use case.
+    evaluated_low = requested_low
 
     def samples(speed: float):
         re_mac = speed * params.mean_aero_chord_m() / atmosphere.kinematic_viscosity_m2s
