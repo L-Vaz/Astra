@@ -90,6 +90,7 @@ def test_airfoil_assets_are_responsive_and_do_not_touch_findings_dom():
     css = _read(CSS)
     assert "@media" in css
     assert "airfoil-card-grid" in css
+    assert "#topbar" in css and "flex-wrap" in css
     source = _read(JS).lower()
     assert "getelementbyid('findings" not in source
     assert 'getelementbyid("findings' not in source
