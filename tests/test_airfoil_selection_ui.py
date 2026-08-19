@@ -117,6 +117,7 @@ def test_shared_shell_only_mounts_registers_and_navigates_the_new_screen():
     assert "stage1-airfoils.js" in stage1
     assert "screen-airfoils" in stage1
     assert "createAirfoilSetsController" in stage1
+    assert '<button id="btn-generate" class="primary">Recommend airfoil sets →</button>' in html
 
 
 def test_requirements_section_row_hands_ownership_to_the_airfoil_gate():
