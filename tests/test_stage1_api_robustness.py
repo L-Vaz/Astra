@@ -31,6 +31,26 @@ def _messages(response) -> list:
     return [w["message"] for w in response.json().get("warnings", [])]
 
 
+def _approve_airfoils(client, sid: str) -> dict:
+    """Pass the Requirements -> Airfoil Sets gate before generating Concepts."""
+    recommendation = client.post(
+        "/api/stage1/airfoils/recommend", json={"session_id": sid}
+    )
+    assert recommendation.status_code == 200, recommendation.text
+    body = recommendation.json()
+    chosen = next(
+        (item for item in body["strategies"] if item["strategy"] == "balanced"),
+        body["strategies"][0],
+    )
+    selected = client.post("/api/stage1/airfoils/select", json={
+        "session_id": sid,
+        "schedule_hash": chosen["schedule_hash"],
+        "recommendation_version": body["version"],
+    })
+    assert selected.status_code == 200, selected.text
+    return selected.json()
+
+
 def _intake_path(sid: str, version: int) -> str:
     import services.design_session as ds
     return os.path.join(ds.session_dir(sid), "intake", f"v{version}", "intake.json")
@@ -75,6 +95,7 @@ def test_long_endurance_brief_still_generates(stage1_session, brief):
                          json={"session_id": sid, "brief": brief})
     assert parsed.status_code == 200, parsed.text
 
+    _approve_airfoils(client, sid)
     generated = client.post("/api/stage1/generate", json={"session_id": sid})
     assert generated.status_code == 200, generated.text
 
@@ -88,6 +109,7 @@ def test_the_plan_carries_no_endurance(stage1_session):
     client, sid = stage1_session
     client.post("/api/stage1/parse",
                 json={"session_id": sid, "brief": "loiter for 11 hours"})
+    _approve_airfoils(client, sid)
     version = client.post("/api/stage1/generate",
                           json={"session_id": sid}).json()["plan_version"]
     mission = _mission(sid, version)["mission"]
@@ -109,6 +131,7 @@ def test_negative_row_number_does_not_500(stage1_session, rid, number):
         "edits": [{"id": "payload", "value": "1.5 kg"}]}).json()["version"]
     _write_row_number(sid, version, rid, number)
 
+    _approve_airfoils(client, sid)
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
     rejected = [w for w in response.json()["warnings"]
@@ -126,6 +149,7 @@ def test_non_finite_row_number_does_not_500(stage1_session, number):
     # json.dump writes NaN/Infinity, which json.load accepts back
     _write_row_number(sid, version, "span_max", number)
 
+    _approve_airfoils(client, sid)
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
 
@@ -139,6 +163,7 @@ def test_an_unreadable_edit_is_flagged_and_does_not_500(stage1_session):
     assert row["unparsed"] is True
     assert row["value"] == "wide enough", "the user's text must survive"
     assert any("could not read" in m for m in _messages(saved))
+    _approve_airfoils(client, sid)
     assert client.post("/api/stage1/generate",
                        json={"session_id": sid}).status_code == 200
 
@@ -154,6 +179,7 @@ def test_payload_above_mtow_cap_is_reconciled_not_persisted(stage1_session):
         "edits": [{"id": "payload", "value": "6 kg"},
                   {"id": "mtow_cap", "value": "1 kg"}]})
 
+    _approve_airfoils(client, sid)
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
     assert any("payload" in m for m in _messages(response)), _messages(response)
@@ -231,6 +257,7 @@ def test_generate_does_not_clobber_explicit_requirements(stage1_session):
     client, sid = stage1_session
     _persist_requirement(client, sid, ld_min=14.0, span_max_m=2.4)
 
+    _approve_airfoils(client, sid)
     assert client.post("/api/stage1/generate",
                        json={"session_id": sid}).status_code == 200
     saved = ds.latest_requirements(sid)
@@ -247,6 +274,7 @@ def test_an_explicit_intake_row_still_overrides(stage1_session):
     client.post("/api/stage1/intake", json={
         "session_id": sid, "edits": [{"id": "span_max", "value": "1.6 m"}]})
 
+    _approve_airfoils(client, sid)
     response = client.post("/api/stage1/generate", json={"session_id": sid})
     assert response.status_code == 200, response.text
     assert ds.latest_requirements(sid)["span_max_m"] == pytest.approx(1.6)
@@ -260,6 +288,7 @@ def test_generate_override_is_recorded_in_the_requirements_version(stage1_sessio
     _persist_requirement(client, sid, span_max_m=2.4)
     client.post("/api/stage1/intake", json={
         "session_id": sid, "edits": [{"id": "span_max", "value": "1.6 m"}]})
+    _approve_airfoils(client, sid)
     client.post("/api/stage1/generate", json={"session_id": sid})
 
     overrides = ds.latest_requirements(sid)["intake_overrides"]
@@ -276,6 +305,7 @@ def test_a_fresh_session_still_gets_requirements_from_its_intake(stage1_session)
     client.post("/api/stage1/parse", json={
         "session_id": sid,
         "brief": "surveillance, 1.8 m span, stall 9 m/s, catapult launch"})
+    _approve_airfoils(client, sid)
     assert client.post("/api/stage1/generate",
                        json={"session_id": sid}).status_code == 200
 
@@ -296,6 +326,7 @@ def test_a_fresh_session_still_gets_requirements_from_its_intake(stage1_session)
 
 def test_handoff_route_returns_a_complete_artifact(stage1_session):
     client, sid = stage1_session
+    _approve_airfoils(client, sid)
     r = client.get(f"/api/handoff/{sid}")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -326,6 +357,7 @@ def test_handoff_requirement_status_matches_a_direct_check(stage1_session):
     from domain_packs.bwb.schema import BWBParams
 
     client, sid = stage1_session
+    _approve_airfoils(client, sid)
     h = client.get(f"/api/handoff/{sid}").json()["handoff"]
     direct = check_requirements(DesignRequirements.model_validate(h["requirements"]),
                                 BWBParams.model_validate(h["geometry"]))

@@ -60,6 +60,26 @@ def _messages(response) -> list:
     return [w["message"] for w in response.json().get("warnings", [])]
 
 
+def _approve_airfoils(client, sid: str) -> dict:
+    """Pass the Airfoil Sets gate once after the test's final upstream edit."""
+    recommendation = client.post(
+        "/api/stage1/airfoils/recommend", json={"session_id": sid}
+    )
+    assert recommendation.status_code == 200, recommendation.text
+    body = recommendation.json()
+    chosen = next(
+        (item for item in body["strategies"] if item["strategy"] == "balanced"),
+        body["strategies"][0],
+    )
+    selected = client.post("/api/stage1/airfoils/select", json={
+        "session_id": sid,
+        "schedule_hash": chosen["schedule_hash"],
+        "recommendation_version": body["version"],
+    })
+    assert selected.status_code == 200, selected.text
+    return selected.json()
+
+
 def _index_latest(sid: str) -> int:
     with open(os.path.join(_intake_root(sid), "index.json")) as f:
         return json.load(f)["latest"]
@@ -118,6 +138,7 @@ def test_parallel_generates_leave_a_consistent_store(stage1_session):
     import services.design_session as ds
 
     client, sid = stage1_session
+    _approve_airfoils(client, sid)
 
     def generate(_):
         return client.post("/api/stage1/generate", json={"session_id": sid})
@@ -243,10 +264,11 @@ def test_corrupt_intake_recovers_to_previous_version(stage1_session):
     assert any("v2" in m for m in _messages(read)), read.json()["warnings"]
 
     edit = client.post("/api/stage1/intake", json={
-        "session_id": sid, "edits": [{"id": "payload", "value": "3.5 kg"}]})
+        "session_id": sid, "edits": [{"id": "payload", "value": "2 kg"}]})
     assert edit.status_code == 200, edit.text
     assert any("v2" in m for m in _messages(edit))
 
+    _approve_airfoils(client, sid)
     generate = client.post("/api/stage1/generate", json={"session_id": sid})
     assert generate.status_code == 200, generate.text
 
@@ -354,6 +376,7 @@ def test_identical_generate_reuses_the_plan_version(stage1_session):
     client.post("/api/stage1/intake", json={
         "session_id": sid, "edits": [{"id": "payload", "value": "1.5 kg"}]})
 
+    _approve_airfoils(client, sid)
     versions = [client.post("/api/stage1/generate",
                             json={"session_id": sid}).json()["plan_version"]
                 for _ in range(3)]

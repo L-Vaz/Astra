@@ -135,7 +135,8 @@ def get_recommendations(session_id: str) -> Dict[str, Any]:
 
 
 def recommend(session_id: str, *, brief: Optional[str] = None,
-              candidate_limit: int = 6, max_passes: int = 5) -> Dict[str, Any]:
+              candidate_limit: int = 6, max_passes: int = 5,
+              preparation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Compute or return the immutable recommendation for current upstream state."""
     ds.get_state(session_id)  # distinguish unknown session before checking artifacts
     with ds.session_lock(session_id):
@@ -174,6 +175,7 @@ def recommend(session_id: str, *, brief: Optional[str] = None,
             "version": version,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "sources": sources,
+            "preparation": dict(preparation or {}),
         }
         content["recommendation_hash"] = _json_hash(content)
         content["stale"] = False
@@ -257,6 +259,7 @@ def select(session_id: str, schedule_hash: str,
             "considered_schedules": list(recommendation["search"]["considered"]),
             "rejected_schedules": list(recommendation["search"]["rejected"]),
             "bound_sensitivity": dict(recommendation["bound_sensitivity"]),
+            "preparation": dict(recommendation.get("preparation") or {}),
         }
         content["selection_hash"] = _json_hash(content)
         content["stale"] = False

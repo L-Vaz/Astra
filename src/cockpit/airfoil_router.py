@@ -3,18 +3,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, StrictStr
 
-from domain_packs.bwb import airfoil_coordinates, airfoils
+from domain_packs.bwb import airfoil_coordinates, airfoils, intake as intake_pack
 from domain_packs.bwb.aero_estimates import estimate as aero_estimate
 from domain_packs.bwb.atmosphere import atmosphere_at
 from domain_packs.bwb.handoff import SCHEMA_VERSION, build_handoff
-from domain_packs.bwb.inverse import LockedValues, check_requirements
+from domain_packs.bwb.inverse import LockedValues, check_requirements, solve_requirements
 from domain_packs.bwb.requirements import DesignRequirements
-from domain_packs.bwb.schema import BWBParams, MissionDerived
+from domain_packs.bwb.schema import BWBParams, MissionDerived, MissionSpec
 from services import airfoil_selection as service
 from services import candidates, design_session as ds
 
@@ -33,7 +34,7 @@ class SelectRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    session_id: StrictStr = Field(min_length=1, max_length=128)
+    session_id: Optional[StrictStr] = None
 
 
 def _http_error(exc: Exception, *, missing_is_conflict: bool = False) -> HTTPException:
@@ -46,10 +47,109 @@ def _http_error(exc: Exception, *, missing_is_conflict: bool = False) -> HTTPExc
     return HTTPException(500, str(exc))
 
 
+def _prepare_plan_from_intake(session_id: str) -> Dict[str, Any]:
+    """Synchronize the reviewed intake before computing recommendations.
+
+    The Airfoil Sets gate moved ahead of Concepts, so the legacy intake-to-plan bridge
+    now runs when recommendations are requested.  We reuse the shell's hardened store
+    helpers (recovery, disclosures, idempotent versions) without modifying its DOM or
+    route implementation.
+    """
+    from cockpit import server as shell  # lazy: server imports this router
+
+    intake, intake_version, warnings = shell._load_intake(session_id)
+    if intake_version == 0:
+        intake_version = shell._save_intake(session_id, intake)
+    if intake.feasibility and intake.feasibility.verdict == "error":
+        raise service.AirfoilConflict(
+            "requirements do not size; fix the intake before Airfoil Sets"
+        )
+    warnings = list(warnings) + shell._intake_warnings(intake)
+
+    def row_number(row_id: str, fallback: float) -> float:
+        value = intake_pack.usable_number(intake, row_id)
+        return fallback if value is None else value
+
+    launch_row = next((row for row in intake.rows if row.id == "launch"), None)
+    launch = launch_row.value.strip().lower() if launch_row else "hand"
+    if launch not in ("hand", "catapult", "runway"):
+        launch = "hand"
+    payload_kg = min(max(row_number("payload", 1.0), 0.01), 10.0)
+    mtow_kg = min(row_number("mtow_cap", 0.0), 25.0) or None
+    if mtow_kg is not None and mtow_kg < payload_kg:
+        warnings.append(shell._warning(
+            "clamped", row_id="mtow_cap", typed=f"{mtow_kg:g} kg",
+            used=f"{payload_kg:g} kg", limit=f"payload {payload_kg:g} kg",
+            message=(f"MTOW cap: {mtow_kg:g} kg is below the {payload_kg:g} kg "
+                     f"payload; raised the cap to {payload_kg:g} kg"),
+        ))
+        mtow_kg = payload_kg
+
+    mission = MissionSpec(
+        payload_kg=payload_kg,
+        cruise_speed_ms=min(max(row_number("cruise_speed", 18.0), 8.0), 60.0),
+        cruise_altitude_m=min(max(row_number("altitude", 100.0), 0.0), 4000.0),
+        mtow_kg=mtow_kg,
+        launch=launch,
+    )
+    requirements = intake_pack.to_requirements(intake).model_copy(
+        update={"cruise_speed_ms": mission.cruise_speed_ms}
+    )
+    solved = solve_requirements(requirements)
+    atmosphere = atmosphere_at(mission.cruise_altitude_m)
+    derived = MissionDerived(
+        mission=mission,
+        atmosphere=atmosphere,
+        mtow_kg=requirements.mtow_kg,
+        air_density_kgm3=atmosphere.density_kgm3,
+        weight_n=requirements.mtow_kg * 9.81,
+        wing_loading_kgm2=solved.panel.wing_loading_kgm2,
+        s_ref_target_m2=solved.panel.s_ref_m2,
+        required_cl=solved.panel.cl_cruise,
+        reynolds_mac=(mission.cruise_speed_ms * solved.params.mean_aero_chord_m()
+                      / atmosphere.kinematic_viscosity_m2s),
+        params=solved.params,
+        assumptions=(["Sized by the stage-1 intake (inverse solve at best-L/D "
+                      "cruise)"] + solved.notes),
+    )
+    plan_version = shell._write_plan_version(
+        session_id,
+        derived,
+        f"stage-1 intake v{intake_version} locked",
+        invalidate_from="fast_aero",
+    )
+    synced, overrides = shell._synced_requirements(
+        session_id, intake, mission, requirements
+    )
+    for override in overrides:
+        warnings.append(shell._warning(
+            "overridden",
+            row_id=shell._REQUIREMENT_SOURCE_ROWS[override["field"]],
+            typed=str(override["new"]),
+            used=str(override["new"]),
+            limit=str(override["previous"]),
+            message=(f"{override['field']}: replaced your saved "
+                     f"{override['previous']} with {override['new']} from the "
+                     "Stage-1 intake"),
+        ))
+    requirements_version = ds.save_requirements(
+        session_id, dict(synced, intake_overrides=overrides)
+    )
+    return {
+        "plan_version": plan_version,
+        "intake_version": intake_version,
+        "requirements_version": requirements_version,
+        "warnings": warnings,
+    }
+
+
 @router.post("/api/stage1/airfoils/recommend")
 def recommend_airfoils(req: RecommendRequest) -> Dict[str, Any]:
     try:
-        return service.recommend(req.session_id)
+        ds.get_state(req.session_id)
+        with ds.session_lock(req.session_id):
+            preparation = _prepare_plan_from_intake(req.session_id)
+            return service.recommend(req.session_id, preparation=preparation)
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -148,11 +248,22 @@ def select_airfoil(req: SelectRequest) -> Dict[str, Any]:
 @router.post("/api/stage1/generate")
 def generate_concepts(req: GenerateRequest) -> Dict[str, Any]:
     """Concept generation is impossible without a current exact approval."""
+    if not req.session_id:
+        raise HTTPException(400, "session_id is required for this request")
+    if not re.fullmatch(r"[0-9a-f]{8}", req.session_id):
+        raise HTTPException(400, "session_id must be 8 lowercase hex characters")
     try:
-        approval = service.get_selection(req.session_id, require_current=True)
-        batch = candidates.generate(
-            req.session_id, approval=approval, regenerate=True
-        )
+        ds.get_state(req.session_id)
+    except ds.SessionIdRejected as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"unknown design session: {req.session_id}") from exc
+    try:
+        with ds.session_lock(req.session_id):
+            approval = service.get_selection(req.session_id, require_current=True)
+            batch = candidates.generate(
+                req.session_id, approval=approval, regenerate=True
+            )
         return {
             "session_id": req.session_id,
             "plan_version": approval["sources"]["plan_version"],
@@ -161,6 +272,9 @@ def generate_concepts(req: GenerateRequest) -> Dict[str, Any]:
             "selection_hash": approval["selection_hash"],
             "candidates": batch["candidates"],
             "stale": batch.get("stale", False),
+            "warnings": list(
+                (approval.get("preparation") or {}).get("warnings") or []
+            ),
         }
     except Exception as exc:
         raise _http_error(exc, missing_is_conflict=True) from exc
