@@ -8,9 +8,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as PLANFORM from './planform.js?v=atm1';
-import { createAirfoilSetsController } from './stage1-airfoils.js?v=1';
+import {
+  createAirfoilSectionProvider, createAirfoilSetsController,
+} from './stage1-airfoils.js?v=1';
 
 let airfoilSetsController = null;
+const airfoilSectionProvider = createAirfoilSectionProvider();
 
 const S = {
   sid: null,
@@ -289,37 +292,20 @@ function setView(name) {
 /* The planform and station algebra come from planform.js (S7-I1). This file used to
    hold a literal hand copy of cockpit.js's, with a comment asking the next author to
    keep them in sync and nothing enforcing it. */
-const NX = 14;
 const planform = PLANFORM.planform;
-function sectionLoop(chord, tc, twistDeg, xle, y, z) {
-  const pts = [];
-  const t = tc, th = twistDeg * Math.PI / 180;
-  const yt = (x) => 5 * t * (0.2969 * Math.sqrt(x) - 0.1260 * x - 0.3516 * x * x
-    + 0.2843 * x ** 3 - 0.1036 * x ** 4);
-  const xs = [];
-  for (let i = 0; i < NX; i++) xs.push(0.5 * (1 - Math.cos(Math.PI * i / (NX - 1))));
-  for (let i = NX - 1; i >= 0; i--) pts.push([xs[i], yt(xs[i])]);
-  for (let i = 1; i < NX; i++) pts.push([xs[i], -yt(xs[i])]);
-  const out = [];
-  for (const [xc, zc] of pts) {
-    const dx = (xc - 0.25) * chord, dz = zc * chord;
-    const xr = 0.25 * chord + dx * Math.cos(th) + dz * Math.sin(th);
-    const zr = -dx * Math.sin(th) + dz * Math.cos(th);
-    out.push(xle + xr, y, z + zr);
-  }
-  return out;
-}
 const stations = PLANFORM.stations;
 function buildPreviewGeometry(p) {
   const half = stations(p);
   const full = [...half.slice(1).reverse().map((s) => ({ ...s, y: -s.y })), ...half];
-  const ring = 2 * NX - 1;
+  const ring = airfoilSectionProvider.pointCount;
   const pos = [];
-  for (const s of full) pos.push(...sectionLoop(s.chord, s.tc, s.tw, s.xle, s.y, s.z));
+  for (const s of full) pos.push(...airfoilSectionProvider.sectionLoop(p, s));
   const idx = [];
   for (let s = 0; s < full.length - 1; s++) {
-    for (let i = 0; i < ring - 1; i++) {
-      const a = s * ring + i, b = a + 1, c = a + ring, d = c + 1;
+    for (let i = 0; i < ring; i++) {
+      const next = (i + 1) % ring;
+      const a = s * ring + i, b = s * ring + next;
+      const c = a + ring, d = s * ring + ring + next;
       idx.push(a, c, b, b, c, d);
     }
   }
@@ -403,6 +389,7 @@ async function showAirfoilSets() {
   if (!airfoilSetsController) {
     airfoilSetsController = createAirfoilSetsController({
       THREE, api, sessionId: S.sid,
+      sectionProvider: airfoilSectionProvider,
       onContinue: () => generateConcepts(true),
     });
   }
