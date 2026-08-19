@@ -273,6 +273,10 @@ class GeometryReport(BaseModel):
     open_edges: int
     gates: List[GateResult]
     warnings: List[str] = Field(default_factory=list)
+    airfoil_sections: List[dict] = Field(
+        default_factory=list,
+        description="Exact root/mid/tip coordinate identities loaded into OpenVSP",
+    )
     artifacts: dict = Field(default_factory=dict,
                             description="name -> path: vsp3, stl, degen_csv, renders")
 

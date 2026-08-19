@@ -33,11 +33,17 @@ grid below brackets that with margin at both ends.
 
 Run:  /opt/conda/envs/FoamAgent/bin/python verification/generate_airfoil_table.py
       --out domain_packs/bwb/data/airfoils_neuralfoil.json
+
+Coordinate-only refresh (does not rerun NeuralFoil):
+      /opt/conda/envs/FoamAgent/bin/python verification/generate_airfoil_table.py
+      --coordinates-only
 """
 from __future__ import annotations
 
 import argparse
 import glob
+import gzip
+import hashlib
 import json
 import os
 import sys
@@ -70,6 +76,83 @@ CL_LADDER = [0.0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90]
 ALPHA_SWEEP = np.arange(-8.0, 30.01, 0.25)
 
 MODEL_SIZE = "medium"
+
+COORDINATE_SOURCE = (
+    "https://github.com/peterdsharpe/AeroSandbox/tree/master/"
+    "aerosandbox/geometry/airfoil/airfoil_database"
+)
+
+REFERENCE_LEDGER = {
+    "e472": {
+        "experimental": "https://m-selig.ae.illinois.edu/pubs/Low-Speed-Airfoil-Data-V3.pdf#page=114",
+        "coordinates": "https://m-selig.ae.illinois.edu/ads/coord_database.html",
+        "evidence_grade": "A",
+        "note": "UIUC Low-Speed Airfoil Data Vol. 3, Table 4.1 and Figure 5.45 onward.",
+    },
+    "e474": {
+        "experimental": None,
+        "coordinates": "https://m-selig.ae.illinois.edu/ads/coord_database.html",
+        "evidence_grade": "D",
+        "note": "Exact experimental polar reference not located; geometry remains available.",
+    },
+    "s5010": {
+        "experimental": "https://m-selig.ae.illinois.edu/pubs/Low-Speed-Airfoil-Data-V2.pdf#page=142",
+        "coordinates": "https://m-selig.ae.illinois.edu/ads/coord_database.html",
+        "evidence_grade": "A",
+        "note": "UIUC Low-Speed Airfoil Data Vol. 2, section 4.3/Table 4.5 and Figure 5.90 onward.",
+    },
+}
+
+
+def _coordinate_hash(coordinates: List[List[float]]) -> str:
+    canonical = json.dumps(coordinates, separators=(",", ":"),
+                           ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _write_coordinate_archive(path: str, asb, names: List[str], polar: Dict) -> None:
+    """Write exact library coordinates with provenance locked to the polar table."""
+    polar_prov = polar["provenance"]
+    if str(asb.__version__) != str(polar_prov["aerosandbox"]):
+        raise ValueError(
+            "refusing coordinate/polar version drift: "
+            f"AeroSandbox {asb.__version__} != table {polar_prov['aerosandbox']}"
+        )
+    sections = {}
+    for name in names:
+        raw = np.asarray(asb.Airfoil(name).coordinates, dtype=float)
+        if raw.ndim != 2 or raw.shape[1] != 2 or raw.shape[0] < 3:
+            raise ValueError(f"{name}: malformed AeroSandbox coordinates {raw.shape}")
+        coordinates = [[round(float(x), 8), round(float(y), 8)] for x, y in raw]
+        sections[name] = {
+            "coordinates": coordinates,
+            "sha256": _coordinate_hash(coordinates),
+        }
+    if tuple(sorted(sections)) != tuple(sorted(polar["sections"])):
+        raise ValueError("refusing coordinate archive whose names differ from polar table")
+    payload = {
+        "provenance": {
+            "generator": "verification/generate_airfoil_table.py",
+            "aerosandbox": asb.__version__,
+            "polar_table": "airfoils_neuralfoil.json",
+            "polar_payload_sha256": hashlib.sha256(
+                json.dumps(polar, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            ).hexdigest(),
+            "sections": len(sections),
+            "coordinate_decimals": 8,
+            "source": "AeroSandbox packaged airfoil_database",
+            "source_url": COORDINATE_SOURCE,
+        },
+        "references": REFERENCE_LEDGER,
+        "sections": sections,
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True,
+                     ensure_ascii=True).encode("ascii")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as stream:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as zipped:
+            zipped.write(raw)
+    print(f"wrote {path} ({os.path.getsize(path) / 1e6:.2f} MB, {len(sections)} sections)")
 
 
 def attached_branch(cl: np.ndarray, i_zero: int) -> tuple:
@@ -197,6 +280,10 @@ def main() -> int:
         REPO_ROOT, "domain_packs", "bwb", "data", "airfoils_neuralfoil.json"))
     ap.add_argument("--limit", type=int, default=0,
                     help="screen only the first N sections (smoke test)")
+    ap.add_argument("--coordinates-out", default=os.path.join(
+        REPO_ROOT, "domain_packs", "bwb", "data", "airfoil_coordinates.json.gz"))
+    ap.add_argument("--coordinates-only", action="store_true",
+                    help="generate exact coordinates against the existing polar table")
     args = ap.parse_args()
 
     try:
@@ -206,6 +293,13 @@ def main() -> int:
     except ImportError as exc:                                     # pragma: no cover
         print(f"needs the FoamAgent env (aerosandbox + neuralfoil): {exc}")
         return 2
+
+    if args.coordinates_only:
+        with open(args.out, encoding="utf-8") as stream:
+            polar = json.load(stream)
+        _write_coordinate_archive(args.coordinates_out, asb,
+                                  sorted(polar["sections"]), polar)
+        return 0
 
     db = os.path.join(os.path.dirname(asb_airfoil.__file__), "airfoil_database")
     names = sorted(os.path.basename(f)[:-4]
@@ -289,6 +383,7 @@ def main() -> int:
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(table, fh, separators=(",", ":"), sort_keys=True)
+    _write_coordinate_archive(args.coordinates_out, asb, sorted(sections), table)
     size_mb = os.path.getsize(args.out) / 1e6
     print(f"wrote {args.out}  ({size_mb:.2f} MB, {len(sections)} sections, "
           f"{len(skipped)} skipped, {time.time() - t0:.0f}s)")

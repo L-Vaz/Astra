@@ -22,12 +22,14 @@ import numpy as np
 # schema.py lives next to this file; make it importable when run by path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bwb.schema import BWBParams, GateResult, GeometryReport  # noqa: E402
+from bwb import airfoil_coordinates  # noqa: E402
 
 import openvsp as vsp  # noqa: E402
 
 # Filled in by the builder and recorded in GeometryReport, so the OpenVSP conventions
 # every downstream number depends on are stated rather than inherited (S7-I5).
 _OPENVSP_CONVENTIONS: dict = {}
+_AIRFOIL_SECTIONS: list = []
 
 
 def set_parm(gid: str, name: str, group: str, val: float, warnings: list) -> None:
@@ -81,12 +83,25 @@ def build_bwb(p: BWBParams, outdir: str, warnings: list) -> dict:
         # mirror and schema.py both assume.
         set_parm(wid, "Sweep_Location", xsec, 0.0, warnings)
 
-    # Section thickness, root -> blend -> tip. S1-C: each station reads its own
-    # aerofoil's t/c instead of interpolating the blend as the root/tip mean, so the
-    # built solid matches the sections the design actually specifies.
-    set_parm(wid, "ThickChord", "XSecCurve_0", p.root_thickness_pct / 100.0, warnings)
-    set_parm(wid, "ThickChord", "XSecCurve_1", p.mid_thickness_pct / 100.0, warnings)
-    set_parm(wid, "ThickChord", "XSecCurve_2", p.tip_thickness_pct / 100.0, warnings)
+    # Exact section geometry, root -> blend -> tip. Thickness is a consequence of
+    # these coordinates; rescaling a generic four-series curve to the same t/c would
+    # preserve neither camber nor pressure-gradient shape.
+    _AIRFOIL_SECTIONS.clear()
+    xsec_surf = vsp.GetXSecSurf(wid, 0)
+    coordinate_dir = os.path.join(outdir, "airfoils")
+    for index, name in enumerate((p.root_airfoil, p.mid_airfoil, p.tip_airfoil)):
+        path = airfoil_coordinates.write_dat(
+            name, os.path.join(coordinate_dir, f"{index}_{name}.dat"))
+        vsp.ChangeXSecShape(xsec_surf, index, vsp.XS_FILE_AIRFOIL)
+        xsec_id = vsp.GetXSec(xsec_surf, index)
+        vsp.ReadFileAirfoil(xsec_id, str(path))
+        _AIRFOIL_SECTIONS.append({
+            "station": ("root", "mid", "tip")[index],
+            "name": name,
+            "sha256": airfoil_coordinates.coordinate_sha256(name),
+            "openvsp_type": "XS_FILE_AIRFOIL",
+            "coordinate_file": str(path),
+        })
 
     # Recorded in the report so a convention change is visible in the manifest rather
     # than only in the geometry (S7-I5).
@@ -267,6 +282,7 @@ def main() -> int:
         open_edges=int(open_edges),
         gates=gates,
         warnings=warnings,
+        airfoil_sections=list(_AIRFOIL_SECTIONS),
         artifacts=artifacts,
         openvsp_conventions=_OPENVSP_CONVENTIONS,
     )
