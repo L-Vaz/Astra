@@ -116,6 +116,42 @@ def test_provenance_pins_the_data_the_numbers_came_from():
     assert "not in the polar" in prov["methods"]["span_efficiency"]
 
 
+def test_handoff_carries_the_exact_approved_file_airfoil_identity():
+    req, res = _solved()
+    selection = {
+        "version": 4,
+        "selection_hash": "selection-hash",
+        "schedule_hash": "schedule-hash",
+        "schedule": {"root": "e475", "mid": "e474", "tip": "s5010"},
+        "coordinate_hashes": {
+            "root": "root-coordinate-hash",
+            "mid": "mid-coordinate-hash",
+            "tip": "tip-coordinate-hash",
+        },
+    }
+    h = build_handoff(
+        res.params, res.panel, req, res.requirements,
+        airfoil_selection=selection,
+    )
+
+    assert h.airfoil_selection == {
+        "version": 4,
+        "selection_hash": "selection-hash",
+        "schedule_hash": "schedule-hash",
+        "sections": [
+            {"station": "root", "name": "e475",
+             "sha256": "root-coordinate-hash",
+             "openvsp_type": "XS_FILE_AIRFOIL"},
+            {"station": "mid", "name": "e474",
+             "sha256": "mid-coordinate-hash",
+             "openvsp_type": "XS_FILE_AIRFOIL"},
+            {"station": "tip", "name": "s5010",
+             "sha256": "tip-coordinate-hash",
+             "openvsp_type": "XS_FILE_AIRFOIL"},
+        ],
+    }
+
+
 def test_locks_travel_as_hard_constraints():
     """Stage 2 inherits the operator's constraints, not Stage 1's interpretation."""
     h = _handoff(LockedValues(span_m=1.5))
