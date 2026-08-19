@@ -125,9 +125,23 @@ def test_generate_requires_current_approval_and_passes_it_explicitly(api, monkey
     generated = client.post("/api/stage1/generate", json={"session_id": sid})
     assert generated.status_code == 200, generated.text
     assert generated.json()["candidates"] == [{"key": "baseline"}]
+    assert generated.json()["plan_version"] == approval["sources"]["plan_version"]
+    assert generated.json()["intake_version"] == approval["sources"]["intake_version"]
     assert captured["session_id"] == sid
     assert captured["approval"]["selection_hash"] == approval["selection_hash"]
     assert captured["regenerate"] is True
+
+
+def test_registered_router_precedes_the_legacy_generate_route(cockpit_client):
+    bootstrap = cockpit_client.get("/api/bootstrap")
+    sid = bootstrap.json()["session_id"]
+
+    response = cockpit_client.post(
+        "/api/stage1/generate", json={"session_id": sid}
+    )
+
+    assert response.status_code == 409
+    assert "airfoil" in response.json()["detail"].lower()
 
 
 def test_malformed_bodies_use_fastapi_422(api):
