@@ -300,9 +300,11 @@ def test_static_margin_has_no_drivers_and_says_it_is_a_fixed_target():
 
 
 def test_clmax_no_longer_claims_the_airfoil_row_drives_it():
-    """cl_max_3d = 1.30 * 0.90 * cos(sweep): the airfoil row moves nothing."""
+    """Intake is status-only; the next gate owns section-dependent CLmax."""
     assert "airfoil" not in I.MEASURED_DRIVERS["clmax"]
-    assert "cos(sweep)" in I._INFO["clmax"]
+    assert "Reynolds" in I._INFO["clmax"]
+    assert "Airfoil Sets" in I._INFO["clmax"]
+    assert "1.30 × 0.90" not in I._INFO["clmax"]
 
 
 def test_no_chip_names_a_row_that_does_not_exist():

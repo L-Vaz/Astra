@@ -123,10 +123,12 @@ export function createAirfoilSetsController({ THREE, api, sessionId, onContinue 
       const recommended = recommendation.mission_badge === card.strategy;
       const stationRows = STATIONS.map((station) => {
         const detail = card.stations?.[station] || {};
+        const condition = recommendation.station_state?.[station] || {};
+        const reynolds = detail.reynolds || condition.reynolds_cruise;
         return `<button class="airfoil-station" data-strategy="${card.strategy}"
           data-station="${station}" aria-label="Inspect ${station} ${esc(card.schedule[station])}">
           <span>${station}</span><strong>${esc(card.schedule[station])}</strong>
-          <small>Re ${esc(detail.reynolds ? Number(detail.reynolds).toExponential(2) : '—')}
+          <small>Re ${esc(reynolds ? Number(reynolds).toExponential(2) : '—')}
           · t/c ${compact(detail.tc, 3)}</small></button>`;
       }).join('');
       return `<article class="airfoil-card${selected ? ' selected' : ''}"

@@ -82,6 +82,10 @@
   .airfoil-intro { align-items: start; flex-direction: column; }
 }
 @media (max-width: 520px) {
+  #topbar { flex-wrap: wrap; gap: 6px; }
+  #topbar #stage-switch { order: 3; flex-basis: 100%; width: 100%; }
+  #topbar .stage-pill { flex: 1; padding-inline: 6px; }
+  #topbar #session-chip { margin-left: auto; }
   #screen-airfoils { padding: 10px; }
   .airfoil-actions { flex-wrap: wrap; }
   .airfoil-actions .primary { margin-left: 0; width: 100%; }

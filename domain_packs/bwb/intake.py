@@ -327,7 +327,8 @@ def default_intake() -> Intake:
                   source="your workshop", info=_INFO["structure"]),
         IntakeRow(id="airfoil", tier="vehicle", label="Sections",
                   value="Chosen in Airfoil sets", origin="assumed",
-                  source="Airfoil sets gate", info=_INFO["airfoil"]),
+                  source="Airfoil sets gate", status="derived",
+                  info=_INFO["airfoil"]),
         IntakeRow(id="wind", tier="vehicle", label="Wind tolerance",
                   value="≤ 8 m/s gusts", origin="assumed",
                   source="open-field typical", info=_INFO["wind"]),
@@ -1026,7 +1027,13 @@ COMPUTING_ROWS = {"payload", "altitude", "launch", "span_max", "v_stall_max",
 def derive(intake: Intake) -> Intake:
     """Recompute the derived tier + feasibility. Cruise speed is solved to the
     best-L/D fixed point: V = sqrt(2W / rho S CL*), iterated with the sizing."""
-    intake.rows = [r for r in intake.rows if r.status != "derived"]
+    # The section row is a read-only ownership/status link to the following Airfoil
+    # Sets gate, not a derived-number row rebuilt below. Preserve it while replacing
+    # the actual derived tier.
+    intake.rows = [
+        row for row in intake.rows
+        if row.status != "derived" or row.id == "airfoil"
+    ]
     intake.warnings = [w for w in intake.warnings
                        if w.kind not in _RECOMPUTED_KINDS]
     # Assumed defaults track their basis: an untouched MTOW cap follows the
