@@ -1,6 +1,6 @@
 # 0006 — Add a deterministic Airfoil Sets approval gate
 
-- **Status:** Accepted; implementation in progress
+- **Status:** Accepted and verified
 - **Date:** 2026-08-19
 - **Owners:** Astra maintainers
 - **Area:** Stage 1 airfoil selection, evidence, geometry propagation
@@ -14,18 +14,20 @@ Reproduction from the repository root:
 ```bash
 /opt/vsp-venv/bin/python - <<'PY'
 import json
+import os
 import openvsp as vsp
 from domain_packs.bwb.schema import BWBParams
-from domain_packs.bwb.vsp_builder import build
+from domain_packs.bwb.vsp_builder import build_bwb
 
-raw = json.load(open("tests/data/aero_golden.json"))
-p = BWBParams.from_dict(raw["params"])
-out = build(p, "/tmp/astra_airfoil_before_33c7")
+raw = json.load(open("tests/data/aero_golden.json"))["reference"]
+p = BWBParams.model_validate(raw["params"])
+os.makedirs("/tmp/astra_airfoil_before_33c7", exist_ok=True)
+out = build_bwb(p, "/tmp/astra_airfoil_before_33c7", [])
 vsp.ClearVSPModel()
 vsp.ReadVSPFile(out["vsp3"])
 wing = vsp.FindGeoms()[0]
 surf = vsp.GetXSecSurf(wing, 0)
-print([p.airfoil_root, p.airfoil_mid, p.airfoil_tip])
+print([p.root_airfoil, p.mid_airfoil, p.tip_airfoil])
 print([vsp.GetXSecShape(vsp.GetXSec(surf, i)) for i in range(3)])
 print(vsp.XS_FOUR_SERIES, vsp.XS_FILE_AIRFOIL)
 PY
@@ -113,5 +115,77 @@ Costs are a larger committed data artifact, additional Stage 1 state/versioning,
 
 ## Isolation contract
 
-The CFD LangGraph is unchanged. Findings DOM IDs, modules, routes, and transitions are unchanged. Shared shell edits are limited to router registration in `src/cockpit/server.py` and Airfoil screen/navigation registration in `stage1.html`/`stage1.js`, each in the separately required commit. Exact commit SHAs and the final shared interface inventory will be appended after verification.
+The CFD LangGraph is unchanged. Findings DOM IDs, modules, routes, and transitions are unchanged. Shared shell edits are limited to router registration in `src/cockpit/server.py` and Airfoil screen/navigation registration in `stage1.html`/`stage1.js`, each in the separately required commit.
 
+## Verification verdict
+
+**Solved.** The produced geometry now uses the same exact named coordinate sections as
+the approved schedule and its polar evidence. The following checks were run on
+2026-08-19 from the feature worktree:
+
+| Check | Result |
+| --- | --- |
+| Full WSL suite: `/opt/conda/envs/FoamAgent/bin/python -m pytest tests/ -q -rx` | 870 collected; 856 passed, 5 named skips, 10 strict expected failures; 421.07 s |
+| Environment doctor | PASS: 15 passed, 0 failed, 1 credential check skipped |
+| No-LLM golden | PASS: 21 passed, 0 failed, 2 simulation/evaluation phases skipped by `--no-llm` |
+| Exact-section VSPAERO smoke | PASS: 6 polar points; `e474/e472/s5010`; three `XS_FILE_AIRFOIL` curves; polar, lift-slope, and trim gates passed |
+| Real OpenVSP integration test | PASS: selected curve types `[12, 12, 12]`, with exact names and hashes in `geometry_report.json` |
+| Coordinate regeneration | PASS: 2,171 sections, 1.28 MB compressed archive, no repository diff |
+| Browser-math parity | PASS: atmosphere, planform, spanwise/stall, and station Node scripts |
+
+The no-LLM and VSPAERO commands logged four unreadable inherited FAISS indices before
+continuing; neither command consumed RAG and both completed successfully. Doctor's
+FAISS path/import checks passed. This is an existing data-index warning, not evidence
+for or against the Airfoil Sets implementation.
+
+Interactive browser verification `[C]` exercised all three strategy cards, exact
+station details and graphs, keyboard station switching and close, approval, Continue,
+reload restoration, stale-card preservation, disabled Continue, recomputation, and a
+narrow viewport. It exposed top-bar overflow; the dedicated stylesheet fix is guarded
+by `test_airfoil_assets_are_responsive_and_do_not_touch_findings_dom`. No browser
+console error was observed.
+
+## Shared-shell and public-interface inventory
+
+Only these shared files changed:
+
+| Shared file | Exact commit | Change |
+| --- | --- | --- |
+| `src/cockpit/server.py` | `19defac35e6da597ed9db844af9f5180a82c9779` | Two-line router import and registration only |
+| `src/cockpit/static/stage1.html` | `570475d1f0682c62632cdcf270100735e50b9c72` | Dedicated stylesheet import and Airfoil Sets screen/modal mount only |
+| `src/cockpit/static/stage1.js` | `570475d1f0682c62632cdcf270100735e50b9c72` | Module import, screen registration, and Requirements → Airfoil Sets → Concepts navigation only |
+
+`src/cockpit/static/stage1.css` is unchanged. No Findings file, selector, DOM ID,
+route, or transition was edited. The inherited CFD LangGraph is unchanged.
+
+The added Airfoil Sets DOM IDs are:
+
+```text
+screen-airfoils
+airfoil-loading  airfoil-error  airfoil-stale  btn-airfoil-recompute
+airfoil-cards  airfoil-loft-panel  airfoil-loft-canvas
+btn-airfoil-back  btn-airfoil-continue
+airfoil-modal  airfoil-modal-title  btn-airfoil-modal-close
+airfoil-outline  airfoil-lift-graph  airfoil-clmax  airfoil-drag-graph
+airfoil-detail-metrics  airfoil-evidence
+```
+
+The dedicated router owns the four Airfoil Sets routes and shadows the two legacy
+transitions that must enforce approval:
+
+```text
+POST /api/stage1/airfoils/recommend
+GET  /api/stage1/airfoils
+GET  /api/stage1/airfoils/detail
+POST /api/stage1/airfoils/select
+POST /api/stage1/generate
+GET  /api/handoff/{session_id}
+```
+
+Continue dispatches `astra:stage1-airfoil-continued` on `window` and invokes the
+optional `onContinue(detail)` callback with the same payload:
+`sessionId`, `selectionVersion`, `selectionHash`, `scheduleHash`, and an exact
+root/mid/tip `schedule`. Findings may consume either notification. The Airfoil Sets
+module does not query, write, or navigate through Findings DOM; its only transition is
+the documented public notification, after which the shared Stage 1 shell opens
+Concepts.

@@ -23,10 +23,13 @@ Grades follow the repository protocol:
 
 WHAT STAGE 2 IS EXPECTED TO DO WITH IT
 --------------------------------------
-Take `geometry` as the starting point, `locks` as constraints it may not violate,
+Take `geometry` as the starting point, `airfoil_selection` as the exact approved
+root/mid/tip coordinate identity, `locks` as constraints it may not violate,
 `requirements` as the objectives, and treat `performance` as a prior to be replaced —
 not as truth. Anything graded `[D]`, and the three quantities flagged in
-`known_disagreements`, should be re-derived before they influence a decision.
+`known_disagreements`, should be re-derived before they influence a decision. The
+approved sections may be re-evaluated, but must not be silently replaced by generic
+thickness-scaled shapes.
 
 FORMAT
 ------

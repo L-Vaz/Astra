@@ -10,11 +10,11 @@ Foam-Agent's LangGraph CFD pipeline is the spine and is **not** modified — Ast
 
 | Where | What |
 |---|---|
-| `domain_packs/bwb/` | BWB parametric schema, brief intake and unit parsing, inverse sizing, analytic aero, concept variants and ranking |
-| `src/cockpit/` | browser cockpit — requirements explorer, concept cards, planform preview |
+| `domain_packs/bwb/` | BWB parametric schema, brief intake, inverse sizing, coordinated airfoil-set selection, analytic aero, concept variants and ranking |
+| `src/cockpit/` | browser cockpit — requirements, Airfoil Sets approval, concept cards, and exact-section loft/planform previews |
 | `src/services/` | design sessions, candidate lifecycle (build → promote → restore), geometry / mesh / aero stage services |
 | `verification/` | golden-path, revision, adversarial-gate and aero-golden checks |
-| `tests/` | the test suite — 697 collected in WSL, 671 in the Windows core |
+| `tests/` | WSL/service integration and fast domain regression suites, with a collection floor that rises with coverage |
 | `evaluation/` | an evaluation study of the inherited Foam-Agent pipeline: report, prompts, scripts, metrics and figures |
 
 Agent guidance for working in this repository lives in [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) — one document under two names, kept byte-identical by a test.
@@ -36,7 +36,8 @@ Stated plainly, because the numbers this tool prints are only as good as these b
 
 - **Aerodynamic sizing only.** No structural analysis, and general text-to-CAD is out of scope.
 - **The fast aero tier is a vortex-lattice method** (AeroSandbox / VSPAERO). VLM is linear and has **no stall model**, so it cannot validate a maximum-lift claim. Stall limits come from analytic caps, not from the VLM.
-- **CLmax is analytic**, not from an airfoil dataset — a 2D value scaled by a 3D factor and the cosine of quarter-chord sweep. Reynolds effects are not yet in it.
+- **Section evidence is table-backed, not a tunnel certification.** CLmax, profile drag, and moment come from the committed Reynolds-dependent NeuralFoil screen `[C]`; the whole-wing stall solve combines those section capabilities with Schrenk loading and a separately disclosed sweep patch. Missing exact experimental references weaken evidence but do not exclude a section.
+- **Airfoil names are an approval gate.** Requirements lead to three deterministic coordinated root/mid/tip schedules; one exact schedule must be approved before Concepts, and its coordinate hashes propagate through OpenVSP, promotion, and the Stage 2 handoff.
 - **Dihedral is identical across all five concepts.** It is a fixed value, not a design variable; a test documents this rather than letting the lens labels imply otherwise.
 - Known gaps, and the work queued against each, are tracked in [`docs/superpowers/plans/2026-07-25-stage1-hardening.md`](docs/superpowers/plans/2026-07-25-stage1-hardening.md). Items that do not exist yet are listed as capabilities and are deliberately left unchecked.
 
