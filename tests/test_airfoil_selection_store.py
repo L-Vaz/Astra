@@ -179,6 +179,11 @@ def test_selection_records_exact_names_hashes_and_ranking_provenance(planned_ses
     assert selection["recommendation_version"] == recommendation["version"]
     assert selection["recommendation_hash"] == recommendation["recommendation_hash"]
     assert selection["ranking_provenance"]["method"]
+    assert selection["ranking_provenance"]["leave_one_metric_out"] == (
+        chosen["leave_one_metric_out"]
+    )
+    assert selection["considered_schedules"] == recommendation["search"]["considered"]
+    assert selection["rejected_schedules"] == recommendation["search"]["rejected"]
+    assert selection["bound_sensitivity"] == recommendation["bound_sensitivity"]
     assert service.get_selection(planned_session)["selection_hash"] == selection[
         "selection_hash"]
-
