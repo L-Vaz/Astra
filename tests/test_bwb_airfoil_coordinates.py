@@ -65,4 +65,3 @@ def test_coordinate_reader_rejects_a_tampered_section_hash(tmp_path):
 
     with pytest.raises(ValueError, match="e474.*hash"):
         coords.load_archive(altered)
-

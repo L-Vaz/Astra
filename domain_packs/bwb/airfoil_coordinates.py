@@ -39,7 +39,6 @@ def write_archive_payload(payload: Mapping[str, Any], path: Path) -> Path:
             zipped.write(raw)
     return path
 
-
 def load_archive(path: Path = _ARCHIVE_PATH) -> Dict[str, Any]:
     """Load and validate provenance, polar parity, and every coordinate hash."""
     path = Path(path)
@@ -137,4 +136,3 @@ def write_dat(name: str, path: Path) -> Path:
     lines.extend(f"{float(x):.8f} {float(y):.8f}" for x, y in record["coordinates"])
     path.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
     return path
-

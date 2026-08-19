@@ -74,4 +74,3 @@ def test_openvsp_build_uses_exact_file_airfoils_and_reports_their_hashes(tmp_pat
     assert [entry["name"] for entry in sections] == ["e474", "e472", "s5010"]
     assert all(entry["sha256"] and entry["openvsp_type"] == "XS_FILE_AIRFOIL"
                for entry in sections)
-
