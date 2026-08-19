@@ -100,9 +100,9 @@ sessions/<id>/airfoil_selections/vN/selection.json
 
 Both use atomic replace under the session lock and an index pointing at the current version. They include schema version, created time, intake version/hash, requirements version/hash, plan version/hash, polar table hash, coordinate archive hash, algorithm/ranking provenance, all considered/rejected schedules with reasons, sensitivity, and content hash.
 
-Selection additionally contains recommendation version/hash, selected strategy, exact root/mid/tip names and coordinate hashes, selection version/hash, and idempotency identity. Re-selecting the same current recommendation and schedule returns the existing approval. A different approval creates the next immutable version.
+Selection additionally contains recommendation version/hash, selected strategy, exact root/mid/tip names and coordinate hashes, selection version/hash, and idempotency identity. Approval writes the chosen converged `MissionDerived` geometry as the next immutable plan version and records both `source_plan_version/hash` and `plan_version_created/hash`. Re-selecting the same current recommendation and schedule returns the existing approval and does not create another plan. A different approval creates the next selection and plan versions.
 
-An artifact is stale when any recorded intake, requirements, plan, recommendation, selection, polar table, or coordinate archive identity differs from current state. Intake, requirements, external plan, and selection writes mark dependent candidate batches stale. Previous artifacts remain readable for audit.
+An artifact is stale when any recorded intake, requirements, plan, recommendation, selection, polar table, or coordinate archive identity differs from current state. The plan created by an approval is explicitly linked as that recommendation's output, so it does not make its own cards stale; any later external plan does. Intake, requirements, external plan, and selection writes mark dependent candidate batches stale. Previous artifacts remain readable for audit. A replacement Airfoil Sets selection keeps the prior candidate gallery visible but stale for comparison; unrelated plan changes retain the existing behavior of hiding the orphaned batch.
 
 HTTP semantics:
 
@@ -132,7 +132,7 @@ Candidate generation has an explicit approval argument. It applies the exact app
 Implementation lives in `src/cockpit/static/stage1-airfoils.js` and `stage1-airfoils.css`. Shared shell changes are limited to:
 
 - `stage1.html`: stylesheet import and Airfoil screen/mount/modal containers;
-- `stage1.js`: module import, screen registration, and Requirements/Airfoils/Concepts navigation;
+- `stage1.js`: module import, screen registration, Requirements/Airfoils/Concepts navigation, and consumption of the dedicated exact-coordinate section provider;
 - `src/cockpit/server.py`: router import and registration only.
 
 No Findings element, module, route, DOM ID, or transition logic is edited or renamed. `stage1.css` remains unchanged unless a demonstrated incompatibility makes that impossible.
@@ -141,7 +141,7 @@ On Continue, the module dispatches:
 
 ```js
 window.dispatchEvent(new CustomEvent("astra:stage1-airfoil-continued", {
-  detail: { sessionId, selectionVersion, selectionHash }
+  detail: { sessionId, selectionVersion, selectionHash, scheduleHash, schedule }
 }));
 ```
 
@@ -218,4 +218,3 @@ The gate is complete only when:
 - UI and programmatic interfaces expose the same state and errors;
 - the selection identity reaches promotion and Stage 2;
 - the full requested verification evidence is recorded, or a concrete environmental blocker is named without claiming the blocked item passed.
-

@@ -91,6 +91,8 @@ Implement the contract in `docs/superpowers/plans/2026-08-19-airfoil-selection.m
 
 The selector is deterministic domain code. It derives local operating conditions, gates unavailable or out-of-envelope data, evaluates coordinated triples with existing drag/stall/trim/stability/geometry logic, Pareto-filters them, and produces three distinct strategies. Balanced minimizes worst normalized regret; Efficiency is drag-first; Low-speed/control is stall/control-first.
 
+The low-speed screen evaluates the actual mission speed. It never raises speed to the polar-table Reynolds floor: a requested station condition outside the committed envelope rejects that candidate, and failure to produce three feasible schedules is a `409` conflict. Approval writes the chosen converged parameters into a new immutable plan version. The approval records the recommendation's source plan and the plan it created so its own output remains current while any later external plan change is detected.
+
 Commit an exact coordinate archive generated from the same AeroSandbox library/version as the polar table. OpenVSP must use `XS_FILE_AIRFOIL` and `ReadFileAirfoil` for root/mid/tip. Recommendation and approval artifacts are immutable and versioned. Candidate generation explicitly requires a current approval, applies its schedule after every lens override, and propagates the selection version/hash into promotion and Stage 2.
 
 ## Predeclared proof
@@ -125,7 +127,7 @@ the approved schedule and its polar evidence. The following checks were run on
 
 | Check | Result |
 | --- | --- |
-| Full WSL suite: `/opt/conda/envs/FoamAgent/bin/python -m pytest tests/ -q -rx` | 870 collected; 856 passed, 5 named skips, 10 strict expected failures; 421.07 s |
+| Full WSL suite: `/opt/conda/envs/FoamAgent/bin/python -m pytest tests/ -q -rx` | 874 collected; 860 passed, 5 named skips, 10 strict expected failures; 360.75 s |
 | Environment doctor | PASS: 15 passed, 0 failed, 1 credential check skipped |
 | No-LLM golden | PASS: 21 passed, 0 failed, 2 simulation/evaluation phases skipped by `--no-llm` |
 | Exact-section VSPAERO smoke | PASS: 6 polar points; `e474/e472/s5010`; three `XS_FILE_AIRFOIL` curves; polar, lift-slope, and trim gates passed |
@@ -138,12 +140,15 @@ continuing; neither command consumed RAG and both completed successfully. Doctor
 FAISS path/import checks passed. This is an existing data-index warning, not evidence
 for or against the Airfoil Sets implementation.
 
-Interactive browser verification `[C]` exercised all three strategy cards, exact
-station details and graphs, keyboard station switching and close, approval, Continue,
-reload restoration, stale-card preservation, disabled Continue, recomputation, and a
-narrow viewport. It exposed top-bar overflow; the dedicated stylesheet fix is guarded
-by `test_airfoil_assets_are_responsive_and_do_not_touch_findings_dom`. No browser
-console error was observed.
+Interactive browser verification `[C]` exercised all three strategy cards; exact
+station outline/lift/drag graphs; Aerodynamics and Evidence & References tabs;
+keyboard tab switching, close, and focus restoration; approval; exact-coordinate
+Concepts generation; reload restoration; stale-card preservation and disabled
+Continue after an intake change; and a 390 px viewport. The measured document width
+equalled the viewport width. It also reproduced a cached `stage1.js?v=1` bundle still
+calling the obsolete direct-generate transition; shared-shell commit `e321f65` bumps
+the three Airfoil Sets assets to `v=2`, and the corrected browser run loaded those
+URLs with no console error.
 
 ## Shared-shell and public-interface inventory
 
@@ -154,6 +159,9 @@ Only these shared files changed:
 | `src/cockpit/server.py` | `19defac35e6da597ed9db844af9f5180a82c9779` | Two-line router import and registration only |
 | `src/cockpit/static/stage1.html` | `570475d1f0682c62632cdcf270100735e50b9c72` | Dedicated stylesheet import and Airfoil Sets screen/modal mount only |
 | `src/cockpit/static/stage1.js` | `570475d1f0682c62632cdcf270100735e50b9c72` | Module import, screen registration, and Requirements → Airfoil Sets → Concepts navigation only |
+| `src/cockpit/static/stage1.js` | `6830d0926eeb8545965a05e21513ba48c7a24f13` | Consume the dedicated exact-coordinate provider in the Concepts loft |
+| `src/cockpit/static/stage1.html` | `985a9524b377396963af6757f2c4280794a84fc0` | Rename the entry action to “Recommend airfoil sets” |
+| `src/cockpit/static/stage1.html`, `src/cockpit/static/stage1.js` | `e321f65f9716f65b2e6b9869edfff25c97837273` | Bump dedicated Airfoil Sets asset URLs to invalidate the demonstrated stale browser cache |
 
 `src/cockpit/static/stage1.css` is unchanged. No Findings file, selector, DOM ID,
 route, or transition was edited. The inherited CFD LangGraph is unchanged.
@@ -168,6 +176,8 @@ btn-airfoil-back  btn-airfoil-continue
 airfoil-modal  airfoil-modal-title  btn-airfoil-modal-close
 airfoil-outline  airfoil-lift-graph  airfoil-clmax  airfoil-drag-graph
 airfoil-detail-metrics  airfoil-evidence
+airfoil-detail-tabs  airfoil-tab-aerodynamics  airfoil-tab-evidence
+airfoil-panel-aerodynamics  airfoil-panel-evidence
 ```
 
 The dedicated router owns the four Airfoil Sets routes and shadows the two legacy
