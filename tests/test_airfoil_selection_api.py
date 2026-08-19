@@ -73,6 +73,12 @@ def test_four_endpoints_recommend_list_detail_and_select(api):
     assert selected.status_code == 200, selected.text
     assert selected.json()["schedule"] == strategy["schedule"]
 
+    restored = client.get(f"/api/stage1/airfoils?session={sid}")
+    assert restored.status_code == 200
+    assert restored.json()["selection"]["selection_hash"] == (
+        selected.json()["selection_hash"]
+    )
+
 
 def test_status_semantics_are_404_409_and_422(api):
     client, sid, _candidates, ds = api
