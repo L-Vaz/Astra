@@ -130,3 +130,34 @@ def test_malformed_bodies_use_fastapi_422(api):
     assert client.post("/api/stage1/airfoils/select", json={
         "session_id": sid, "schedule_hash": 42}).status_code == 422
 
+
+def test_stage2_handoff_requires_and_carries_current_selection(api):
+    client, sid, _candidates, ds = api
+    assert client.get(f"/api/handoff/{sid}").status_code == 409
+
+    rec = client.post(
+        "/api/stage1/airfoils/recommend", json={"session_id": sid}
+    ).json()
+    approval = client.post("/api/stage1/airfoils/select", json={
+        "session_id": sid,
+        "schedule_hash": rec["strategies"][0]["schedule_hash"],
+    }).json()
+    response = client.get(f"/api/handoff/{sid}")
+
+    assert response.status_code == 200, response.text
+    identity = response.json()["handoff"]["airfoil_selection"]
+    assert identity["version"] == approval["version"]
+    assert identity["selection_hash"] == approval["selection_hash"]
+    assert [row["name"] for row in identity["sections"]] == [
+        approval["schedule"][station] for station in ("root", "mid", "tip")
+    ]
+    assert all(row["openvsp_type"] == "XS_FILE_AIRFOIL"
+               for row in identity["sections"])
+
+    saved = ds.latest_requirements(sid)
+    ds.save_requirements(sid, {
+        **{key: value for key, value in saved.items()
+           if key not in ("created", "version")},
+        "span_max_m": 2.0,
+    })
+    assert client.get(f"/api/handoff/{sid}").status_code == 409
