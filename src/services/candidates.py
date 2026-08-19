@@ -19,9 +19,10 @@ it (S4-C3, S5-H11).
 What rollback does and does not preserve (the previous wording here — "rollback /
 versions keep working unchanged" — was false): promotion writes a normal geometry
 version, so the geometry line rolls back like any other stage. The CANDIDATE batch
-does not roll back with it. Moving the plan forward leaves the old batch visible but
-stale for comparison; moving the plan back restores the batch that belongs to that
-plan version, which is why the
+does not roll back with it. An external plan move hides the old batch; the one explicit
+exception is a replacement Airfoil Sets approval, which keeps the immediately prior
+gallery visible but stale for comparison. Moving the plan back restores the batch that
+belongs to that plan version, which is why the
 plan-version comparison above exists — it is returned as `stale` with a reason
 rather than presented as current.
 """
@@ -284,6 +285,28 @@ def _latest_stored_batch_meta(sid: str) -> Optional[Dict[str, Any]]:
         return json.load(f)
 
 
+def _selection_replaced_batch(sid: str, meta: Dict[str, Any]) -> bool:
+    """True only for the Airfoil Sets transition that promises stale comparison.
+
+    Ordinary plan moves retain the established candidate-lifecycle behavior: their
+    old directory is not listed.  A replacement selection is distinguishable because
+    it owns the current plan version and has a different immutable identity from the
+    stored batch.
+    """
+    from . import airfoil_selection
+    try:
+        selection = airfoil_selection.get_selection(sid, require_current=False)
+    except FileNotFoundError:
+        return False
+    return (
+        not selection.get("stale")
+        and selection.get("plan_version_created") == _plan_version(sid)
+        and meta.get("plan_version") != selection.get("plan_version_created")
+        and meta.get("selection_hash") is not None
+        and meta.get("selection_hash") != selection.get("selection_hash")
+    )
+
+
 def _staleness(sid: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Why (and whether) the stored batch no longer describes the current state.
 
@@ -334,7 +357,8 @@ def _is_stale(sid: str) -> bool:
 def list_candidates(sid: str) -> Dict[str, Any]:
     meta = _batch_meta(sid)
     if meta is None:
-        meta = _latest_stored_batch_meta(sid)
+        previous = _latest_stored_batch_meta(sid)
+        meta = previous if previous and _selection_replaced_batch(sid, previous) else None
     if meta is None:
         return {"plan_version": _plan_version(sid), "generated": None,
                 "candidates": [], "stale": False, "unreadable": []}
@@ -347,9 +371,11 @@ def list_candidates(sid: str) -> Dict[str, Any]:
     candidates, unreadable = [], []
     for k in meta.get("keys", []):
         try:
-            candidates.append(_load_candidate_at_plan(
-                sid, k, int(meta.get("plan_version"))
-            ))
+            plan_version = meta.get("plan_version")
+            candidates.append(
+                _load_candidate(sid, k) if plan_version is None
+                else _load_candidate_at_plan(sid, k, int(plan_version))
+            )
         except (CandidateError, json.JSONDecodeError, OSError):
             unreadable.append(k)
     return {"plan_version": meta.get("plan_version"),
