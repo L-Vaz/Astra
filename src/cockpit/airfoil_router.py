@@ -155,6 +155,8 @@ def generate_concepts(req: GenerateRequest) -> Dict[str, Any]:
         )
         return {
             "session_id": req.session_id,
+            "plan_version": approval["sources"]["plan_version"],
+            "intake_version": approval["sources"]["intake_version"],
             "selection_version": approval["version"],
             "selection_hash": approval["selection_hash"],
             "candidates": batch["candidates"],
