@@ -112,9 +112,10 @@ def test_airfoil_assets_are_responsive_and_do_not_touch_findings_dom():
 def test_shared_shell_only_mounts_registers_and_navigates_the_new_screen():
     html = _read(HTML)
     stage1 = _read(STAGE1_JS)
-    assert 'href="stage1-airfoils.css' in html
+    assert 'href="stage1-airfoils.css?v=2"' in html
+    assert 'src="stage1.js?v=2"' in html
     assert 'id="screen-airfoils"' in html
-    assert "stage1-airfoils.js" in stage1
+    assert "stage1-airfoils.js?v=2" in stage1
     assert "screen-airfoils" in stage1
     assert "createAirfoilSetsController" in stage1
     assert '<button id="btn-generate" class="primary">Recommend airfoil sets →</button>' in html

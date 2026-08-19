@@ -10,7 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as PLANFORM from './planform.js?v=atm1';
 import {
   createAirfoilSectionProvider, createAirfoilSetsController,
-} from './stage1-airfoils.js?v=1';
+} from './stage1-airfoils.js?v=2';
 
 let airfoilSetsController = null;
 const airfoilSectionProvider = createAirfoilSectionProvider();
