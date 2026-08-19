@@ -104,3 +104,11 @@ def test_shared_shell_only_mounts_registers_and_navigates_the_new_screen():
     assert "stage1-airfoils.js" in stage1
     assert "screen-airfoils" in stage1
     assert "createAirfoilSetsController" in stage1
+
+
+def test_requirements_section_row_hands_ownership_to_the_airfoil_gate():
+    from domain_packs.bwb.intake import default_intake
+
+    row = next(row for row in default_intake().rows if row.id == "airfoil")
+    assert row.value == "Chosen in Airfoil sets"
+    assert "Airfoil sets" in row.info
