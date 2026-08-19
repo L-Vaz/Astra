@@ -55,7 +55,7 @@ def _replace_params(params: BWBParams, **updates: Any) -> BWBParams:
 
 
 def _station_state(params: BWBParams, cruise_speed_ms: float, altitude_m: float,
-                   weight_n: float, launch: str) -> Dict[str, Dict[str, float]]:
+                   weight_n: float, launch: str) -> Dict[str, Dict[str, Any]]:
     atmosphere = atmosphere_at(altitude_m)
     base = estimate(params, atmosphere, cruise_speed_ms, weight_n, launch)
     requested_low = min(
@@ -85,8 +85,31 @@ def _station_state(params: BWBParams, cruise_speed_ms: float, altitude_m: float,
 
     cruise_cl, cruise = samples(cruise_speed_ms)
     low_cl, low = samples(evaluated_low)
-    output: Dict[str, Dict[str, float]] = {}
+    baseline_sections = {
+        "root": params.root_airfoil,
+        "mid": params.mid_airfoil,
+        "tip": params.tip_airfoil,
+    }
+    table_provenance = airfoils.provenance()
+    reynolds_grid = tuple(float(value) for value in table_provenance["re_grid"])
+    cl_ladder = tuple(float(value) for value in airfoils.cl_ladder())
+    output: Dict[str, Dict[str, Any]] = {}
     for name in ("root", "mid", "tip"):
+        section_name = baseline_sections[name]
+        cruise_aero = airfoils.section_at(
+            section_name, float(cruise[name].reynolds)
+        )
+        low_aero = airfoils.section_at(section_name, float(low[name].reynolds))
+        _cruise_cd, cruise_lift_flags = airfoils.section_cd(
+            section_name,
+            float(cruise_cl * cruise[name].cl_add + cruise[name].cl_basic),
+            float(cruise[name].reynolds),
+        )
+        _low_cd, low_lift_flags = airfoils.section_cd(
+            section_name,
+            float(low_cl * low[name].cl_add + low[name].cl_basic),
+            float(low[name].reynolds),
+        )
         output[name] = {
             "eta": float(cruise[name].eta),
             "chord_m": float(cruise[name].chord),
@@ -100,6 +123,31 @@ def _station_state(params: BWBParams, cruise_speed_ms: float, altitude_m: float,
             "requested_low_speed_ms": float(requested_low),
             "evaluated_low_speed_ms": float(evaluated_low),
             "polar_floor_bound": bool(evaluated_low > requested_low + 1e-12),
+            "baseline_section": section_name,
+            "thickness_ratio": float(cruise_aero.tc),
+            "cm0_cruise": float(cruise_aero.cm0),
+            "cm0_low_speed": float(low_aero.cm0),
+            "polar_bounds": {
+                "reynolds_min": min(reynolds_grid),
+                "reynolds_max": max(reynolds_grid),
+                "cl_min": min(cl_ladder),
+                "cl_max": max(cl_ladder),
+            },
+            "validity": {
+                "cruise_reynolds": not cruise_aero.out_of_range,
+                "low_speed_reynolds": not low_aero.out_of_range,
+                "cruise_lift": not cruise_lift_flags,
+                "low_speed_lift": (
+                    not low_lift_flags
+                    and float(low_cl * low[name].cl_add + low[name].cl_basic)
+                    <= low_aero.clmax
+                ),
+            },
+            "evidence": {
+                "grade": "C",
+                "source": "committed NeuralFoil polar screen and spanwise.stations",
+                "caveat": "model-derived operating state; not tunnel validation",
+            },
         }
     return output
 
@@ -229,17 +277,28 @@ def _coupled_evaluate(schedule: Mapping[str, str], params: BWBParams,
                 )
                 panel = estimate(current, atmosphere, cruise_speed_ms, weight_n, launch)
 
+        trim_burden = abs(panel.cm_trim_residual)
+        coupled_station_state = _station_state(
+            current, cruise_speed_ms, altitude_m, weight_n, launch
+        )
         history.append({
             "pass": pass_number,
             "schedule_hash": schedule_hash,
             "plan_hash": _hash(current.model_dump()),
+            "station_state_hash": _hash(coupled_station_state),
+            "trim_residual": trim_burden,
+            "trims_as_built": panel.trims_as_built,
         })
-        if len(history) >= 2 and history[-1]["schedule_hash"] == history[-2]["schedule_hash"]:
+        if (len(history) >= 2
+                and history[-1]["schedule_hash"] == history[-2]["schedule_hash"]
+                and panel.trims_as_built):
             converged = True
             break
 
     if not converged and max_passes > 1:
-        raise ValueError(f"schedule hash did not stabilize within {max_passes} passes")
+        raise ValueError(
+            f"schedule/trim state did not stabilize within {max_passes} passes"
+        )
     if not panel.cruise_feasible:
         raise ValueError("cruise condition is below whole-wing stall")
     if panel.cd_sections_span_clamped > 0.0:

@@ -67,6 +67,44 @@ def test_recommendation_is_deterministic_distinct_and_records_search_provenance(
     assert all("reason" in item for item in first["search"]["rejected"])
 
 
+def test_station_state_carries_section_conditions_bounds_and_evidence():
+    from domain_packs.bwb import airfoils
+
+    recommendation = _recommend()
+    expected_sections = {
+        "root": _params().root_airfoil,
+        "mid": _params().mid_airfoil,
+        "tip": _params().tip_airfoil,
+    }
+    for station, state in recommendation["station_state"].items():
+        assert state["baseline_section"] == expected_sections[station]
+        assert state["thickness_ratio"] == pytest.approx(
+            airfoils.tc_of(expected_sections[station])
+        )
+        assert {"reynolds_min", "reynolds_max", "cl_min", "cl_max"} <= set(
+            state["polar_bounds"]
+        )
+        assert {"cruise_reynolds", "low_speed_reynolds", "cruise_lift",
+                "low_speed_lift"} <= set(state["validity"])
+        assert state["evidence"]["grade"] == "C"
+
+
+def test_coupled_winners_stop_only_after_schedule_and_trim_are_stable():
+    from domain_packs.bwb.trim import CM_TRIM_TOLERANCE
+
+    recommendation = _recommend()
+
+    for strategy in recommendation["strategies"]:
+        history = strategy["convergence"]["passes"]
+        assert strategy["convergence"]["converged"] is True
+        assert len(history) <= 5
+        assert len(history) >= 2
+        assert history[-1]["schedule_hash"] == history[-2]["schedule_hash"]
+        assert history[-1]["trims_as_built"] is True
+        assert history[-1]["trim_residual"] <= CM_TRIM_TOLERANCE
+        assert history[-1]["station_state_hash"]
+
+
 def test_strategy_winners_are_members_of_the_pareto_front_and_close_sensitivity():
     recommendation = _recommend()
     front = {item["schedule_hash"] for item in recommendation["pareto_front"]}
@@ -119,4 +157,3 @@ def test_pareto_filter_removes_only_dominated_schedules():
 
     assert [item["schedule_hash"] for item in pareto(records)] == ["a", "c"]
     assert records == untouched
-
