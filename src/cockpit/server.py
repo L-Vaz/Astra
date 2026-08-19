@@ -57,8 +57,10 @@ from services.optimize import optimize as optimize_svc  # noqa: E402
 from domain_packs.bwb.design_space import DesignSpace  # noqa: E402
 from domain_packs.bwb import objective_presets as presets  # noqa: E402
 from domain_packs.bwb import intake as intake_pack  # noqa: E402
+from cockpit.airfoil_router import router as airfoil_router  # noqa: E402
 
 app = FastAPI(title="Astra Aero Design Cockpit")
+app.include_router(airfoil_router)
 
 
 @app.exception_handler(ds.SessionBusy)
