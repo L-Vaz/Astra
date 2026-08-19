@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra — Stage 1 · Plan</title>
 <link rel="stylesheet" href="stage1.css?v=1">
+<link rel="stylesheet" href="stage1-airfoils.css?v=1">
 <script type="importmap">
 {
   "imports": {
@@ -75,6 +76,42 @@
   </section>
 </main>
 
+<!-- ======================= Airfoil Sets screen ======================= -->
+<main id="screen-airfoils" class="hidden" aria-busy="false">
+  <nav class="airfoil-stepper" aria-label="Stage 1 workflow">
+    <span class="done">Requirements ✓</span><span aria-hidden="true">→</span>
+    <span class="active">Airfoil sets</span><span aria-hidden="true">→</span>
+    <span>Concepts</span>
+  </nav>
+
+  <section class="airfoil-intro">
+    <div>
+      <h1>Choose one coordinated airfoil set</h1>
+      <p>The approved root, mid, and tip names stay exact across every concept.</p>
+    </div>
+  </section>
+
+  <div id="airfoil-loading" class="hidden" role="status"></div>
+  <div id="airfoil-error" class="hidden" role="alert"></div>
+  <div id="airfoil-stale" class="hidden" role="status">
+    <span>Your requirements or plan changed. These prior cards remain for review,
+      but Continue is disabled until they are recomputed.</span>
+    <button id="btn-airfoil-recompute" class="secondary">Recompute sets</button>
+  </div>
+
+  <section id="airfoil-cards" class="airfoil-card-grid"
+    aria-label="Recommended coordinated airfoil sets"></section>
+  <section id="airfoil-loft-panel" class="card" aria-label="Selected airfoil loft preview">
+    <canvas id="airfoil-loft-canvas"></canvas>
+  </section>
+
+  <footer class="airfoil-actions">
+    <button id="btn-airfoil-back" class="secondary">← Requirements</button>
+    <span class="dim">Approve a set, then continue once.</span>
+    <button id="btn-airfoil-continue" class="primary" disabled>Continue to Concepts →</button>
+  </footer>
+</main>
+
 <!-- ======================= gallery screen ======================= -->
 <main id="screen-gallery" class="hidden">
   <div id="viewport">
@@ -119,6 +156,36 @@
     <button id="btn-stage2" class="primary">Take this design to Stage 2 →</button>
   </footer>
 </main>
+
+<div id="airfoil-modal" class="hidden" role="dialog" aria-modal="true"
+  aria-hidden="true" aria-labelledby="airfoil-modal-title">
+  <section class="airfoil-modal-card">
+    <header class="airfoil-modal-head">
+      <h2 id="airfoil-modal-title">Section evidence</h2>
+      <button id="btn-airfoil-modal-close" class="secondary" aria-label="Close section detail">Close</button>
+    </header>
+    <div class="airfoil-modal-grid">
+      <section class="airfoil-plot">
+        <h3>Exact coordinate outline</h3>
+        <canvas id="airfoil-outline"></canvas>
+      </section>
+      <section class="airfoil-plot">
+        <h3>Pre-stall lift preview</h3>
+        <canvas id="airfoil-lift-graph"></canvas>
+        <p id="airfoil-clmax" class="mono"></p>
+      </section>
+      <section class="airfoil-plot">
+        <h3>Profile drag ladder · CD vs CL</h3>
+        <canvas id="airfoil-drag-graph"></canvas>
+      </section>
+      <section class="airfoil-facts">
+        <h3>Condition and validity</h3>
+        <dl id="airfoil-detail-metrics"></dl>
+        <div id="airfoil-evidence"></div>
+      </section>
+    </div>
+  </section>
+</div>
 
 <div id="toast" class="hidden"></div>
 <script type="module" src="stage1.js?v=1"></script>

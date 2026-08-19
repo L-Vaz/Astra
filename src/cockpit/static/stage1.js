@@ -8,6 +8,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as PLANFORM from './planform.js?v=atm1';
+import { createAirfoilSetsController } from './stage1-airfoils.js?v=1';
+
+let airfoilSetsController = null;
 
 const S = {
   sid: null,
@@ -390,8 +393,20 @@ function busy(on, msg = 'working…') {
 
 function showScreen(name) {
   $('screen-req').classList.toggle('hidden', name !== 'req');
+  $('screen-airfoils').classList.toggle('hidden', name !== 'airfoils');
   $('screen-gallery').classList.toggle('hidden', name !== 'gallery');
   if (name === 'gallery') requestRender();
+}
+
+async function showAirfoilSets() {
+  showScreen('airfoils');
+  if (!airfoilSetsController) {
+    airfoilSetsController = createAirfoilSetsController({
+      THREE, api, sessionId: S.sid,
+      onContinue: () => generateConcepts(true),
+    });
+  }
+  await airfoilSetsController.load();
 }
 
 async function generateConcepts(regenerate) {
@@ -477,7 +492,8 @@ async function boot() {
       updateStaleChip();
     } catch (e) { toast(`parse failed: ${e.message}`); $('parse-note').textContent = ''; }
   });
-  $('btn-generate').addEventListener('click', () => generateConcepts(true));
+  $('btn-generate').addEventListener('click', showAirfoilSets);
+  $('btn-airfoil-back').addEventListener('click', () => showScreen('req'));
   $('btn-gallery').addEventListener('click', () => showScreen('gallery'));
   $('btn-back-req').addEventListener('click', () => showScreen('req'));
   $('btn-regen').addEventListener('click', () => generateConcepts(true));
