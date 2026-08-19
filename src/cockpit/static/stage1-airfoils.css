@@ -1,0 +1,90 @@
+/* Dedicated Airfoil Sets gate; inherits the Stage 1 colour tokens. */
+#screen-airfoils {
+  flex: 1; overflow-y: auto; width: min(1180px, 100%); margin: 0 auto;
+  padding: 16px; display: flex; flex-direction: column; gap: 14px;
+}
+.airfoil-stepper { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+.airfoil-stepper .active { color: var(--accent); font-weight: 700; }
+.airfoil-stepper .done { color: var(--ok); }
+.airfoil-intro { display: flex; gap: 18px; justify-content: space-between; align-items: end; }
+.airfoil-intro h1 { margin: 0; font-size: 24px; }
+.airfoil-intro p { margin: 4px 0 0; color: var(--dim); }
+.airfoil-card-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+}
+.airfoil-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; min-width: 0;
+}
+.airfoil-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.airfoil-card header { display: flex; justify-content: space-between; gap: 8px; }
+.airfoil-card h2 { font-size: 17px; margin: 0; }
+.airfoil-card .microlabel { margin: 0; }
+.airfoil-mission-badge {
+  align-self: start; border-radius: 999px; background: var(--ok-bg); color: var(--ok);
+  padding: 3px 8px; font-size: 11px; white-space: nowrap;
+}
+.airfoil-summary, .airfoil-ranking { color: var(--dim); font-size: 12px; }
+.airfoil-stations { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
+.airfoil-station {
+  display: grid; grid-template-columns: 46px 1fr; gap: 2px 8px; text-align: left;
+  color: var(--text); background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; cursor: pointer;
+}
+.airfoil-station:hover, .airfoil-station:focus { border-color: var(--accent); outline: none; }
+.airfoil-station > span { color: var(--dim); text-transform: capitalize; }
+.airfoil-station > small { grid-column: 2; color: var(--dim); }
+.airfoil-select { width: 100%; }
+#airfoil-loft-panel { min-height: 220px; overflow: hidden; padding: 0; }
+#airfoil-loft-canvas { width: 100%; height: 220px; display: block; }
+#airfoil-stale {
+  display: flex; align-items: center; gap: 12px; color: var(--warn);
+  background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 10px;
+  padding: 10px 14px;
+}
+#airfoil-stale span { flex: 1; }
+#airfoil-loading, #airfoil-error { border-radius: 8px; padding: 9px 12px; }
+#airfoil-loading { color: var(--accent); background: var(--accent-bg); }
+#airfoil-error { color: var(--bad); background: rgba(224, 92, 92, 0.12); }
+.airfoil-actions {
+  position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center;
+  padding: 12px; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  border-top: 1px solid var(--border); backdrop-filter: blur(8px);
+}
+.airfoil-actions .primary { margin-left: auto; }
+#airfoil-modal {
+  position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+  background: rgba(4, 7, 10, 0.78); padding: 18px;
+}
+.airfoil-modal-card {
+  width: min(960px, 100%); max-height: calc(100vh - 36px); overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px;
+}
+.airfoil-modal-head { display: flex; justify-content: space-between; align-items: center; }
+.airfoil-modal-head h2 { margin: 0; }
+.airfoil-modal-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.airfoil-plot, .airfoil-facts {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px;
+}
+.airfoil-plot canvas { width: 100%; height: 160px; }
+.airfoil-plot h3, .airfoil-facts h3 { margin: 0 0 6px; font-size: 13px; }
+#airfoil-detail-metrics { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; }
+#airfoil-detail-metrics dt { color: var(--dim); }
+#airfoil-detail-metrics dd { margin: 0; text-align: right; }
+#airfoil-evidence { overflow-wrap: anywhere; }
+#airfoil-evidence p { margin: 6px 0; }
+
+@media (max-width: 840px) {
+  .airfoil-card-grid { grid-template-columns: 1fr; }
+  .airfoil-modal-grid { grid-template-columns: 1fr; }
+  .airfoil-intro { align-items: start; flex-direction: column; }
+}
+@media (max-width: 520px) {
+  #screen-airfoils { padding: 10px; }
+  .airfoil-actions { flex-wrap: wrap; }
+  .airfoil-actions .primary { margin-left: 0; width: 100%; }
+  #airfoil-modal { padding: 0; }
+  .airfoil-modal-card { max-height: 100vh; border-radius: 0; }
+}

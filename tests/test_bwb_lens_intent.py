@@ -42,6 +42,9 @@ GRID = list(itertools.product(
     ("hand", "catapult", "runway"),
 ))
 
+AIRFOIL_APPROVAL = {"schedule": {
+    "root": "e474", "mid": "e472", "tip": "s5010"}}
+
 
 def _batch(mtow, speed, altitude, span_cap, launch):
     requirements = DesignRequirements(
@@ -60,7 +63,7 @@ def _batch(mtow, speed, altitude, span_cap, launch):
         s_ref_target_m2=solved.panel.s_ref_m2, required_cl=solved.panel.cl_cruise,
         reynolds_mac=solved.panel.reynolds_mac, params=solved.params,
         assumptions=list(solved.notes))
-    return V.generate_candidates(derived, requirements)
+    return V.generate_candidates(derived, AIRFOIL_APPROVAL, requirements)
 
 
 @pytest.fixture(scope="module")

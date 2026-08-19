@@ -171,9 +171,10 @@ _INFO = {
     "structure": "Material and build method. 3D-printed LW-PLA is denser than EPP "
                  "foam — raises the empty-mass fraction. Recorded — structures "
                  "sizing is a later stage.",
-    "airfoil": "Section family. Tailless BWBs need reflexed/neutral-moment sections; "
-               "thickness runs root 14% to tip 9%. Sets CLmax and cruise drag. "
-               "Recorded — section choice is applied at geometry.",
+    "airfoil": "The exact coordinated root, mid, and tip names are reviewed and "
+               "approved in Airfoil sets. That gate checks section evidence, drag, "
+               "stall, trim, stability, thickness progression, and geometry before "
+               "the same schedule is applied to every concept.",
     "wind": "Gust level to shrug off. Raises the weight on lateral stability in "
             "concept scoring. Recorded for the objective builder.",
     "wing_loading": "W/S — mass per wing area. Sizes the wing via S = mg/(q CL). "
@@ -185,10 +186,11 @@ _INFO = {
                     "sizing, not an input.",
     "cruise_cl": "Lift coefficient the wing must fly at in cruise: CL = W/(q S). "
                  "Kept below 0.75 to stay clear of stall.",
-    "clmax": "Peak 3D lift coefficient before stall. At this tier it is "
-             "1.30 × 0.90 × cos(sweep): it responds ONLY to planform sweep, not to "
-             "the airfoil row and not to Reynolds number (S7-CAP-4). Enters the "
-             "stall equation.",
+    "clmax": "Peak whole-wing lift coefficient before stall. This requirement "
+             "preview uses the sizing baseline's named sections, their Reynolds-"
+             "dependent table data, the spanwise demand/capability solve, and the "
+             "labelled sweep patch. Airfoil Sets recalculates it for each proposed "
+             "root/mid/tip schedule before Concepts.",
     "static_margin": "(x_np - x_cg)/MAC. Positive = nose settles back after a gust. "
                      "A FIXED TARGET of 8% MAC (engineering judgment, tailless BWB "
                      "practice) — nothing on this screen changes it.",
@@ -201,8 +203,8 @@ _INFO = {
 #
 # The old list was hand-kept and two of its entries were fiction: `static_margin`
 # claimed `wind` and `mission_type` as drivers while it is the hardcoded constant
-# STATIC_MARGIN_TARGET = 0.08, and `clmax` claimed `airfoil`, which moves nothing at
-# all (the airfoil row is inert — S3-E2).
+# STATIC_MARGIN_TARGET = 0.08, and `clmax` claimed the section-status row. Section
+# selection now belongs to the following Airfoil Sets gate, not this sizing solve.
 #
 # MEASURED_DRIVERS is the measured dependency set: perturb each editable row over a
 # grid of base intakes and record which derived numbers move.
@@ -262,10 +264,10 @@ _DRIVER_EFFECTS = {
         "payload": "heavier → higher cruise CL",
     },
     "clmax": {
-        # CLmax = CL_MAX_2D * CL_MAX_3D_FACTOR * cos(sweep) — it responds ONLY to
-        # planform sweep, which these rows move through the sizing solve. Notably NOT
-        # to the airfoil row, which the old chip claimed.
-        row: "changes the solved planform sweep, and CLmax scales with cos(sweep)"
+        # The following Airfoil Sets gate owns the named-section choice. Within this
+        # requirement preview, these rows move the solved planform, loading and
+        # Reynolds distribution used by the spanwise stall calculation.
+        row: "changes planform loading or Reynolds number in the CLmax solve"
         for row in _COMPUTING
     },
     "ld_est": {
@@ -324,8 +326,8 @@ def default_intake() -> Intake:
                   value="3D printed LW-PLA", origin="assumed",
                   source="your workshop", info=_INFO["structure"]),
         IntakeRow(id="airfoil", tier="vehicle", label="Sections",
-                  value="BWB blend, t/c 14% → 9%", origin="assumed",
-                  source="tailless typical", info=_INFO["airfoil"]),
+                  value="Chosen in Airfoil sets", origin="assumed",
+                  source="Airfoil sets gate", info=_INFO["airfoil"]),
         IntakeRow(id="wind", tier="vehicle", label="Wind tolerance",
                   value="≤ 8 m/s gusts", origin="assumed",
                   source="open-field typical", info=_INFO["wind"]),
@@ -1013,11 +1015,10 @@ def to_requirements(intake: Intake) -> DesignRequirements:
 # ambiguous brief, an overridden edit) and must survive.
 _RECOMPUTED_KINDS = {"clamped", "rejected", "unparsed"}
 
-# The six editable rows that measurably move a derived number. The other five
-# (mission_type, regulatory, structure, airfoil, wind)
-# change nothing at all — verified by perturbing each row and comparing all seven
-# derived values (S3-E2/E3). `test_bwb_disclosure.py` re-measures this on every run, so
-# the day one of them starts mattering the flag cannot stay wrong.
+# The six editable rows that measurably move a derived number on this screen. The
+# section-status row is owned by the following Airfoil Sets gate; the remaining rows
+# listed by the disclosure test do not affect this sizing solve. The test re-measures
+# this set on every run, so the flags cannot drift back into fiction.
 COMPUTING_ROWS = {"payload", "altitude", "launch", "span_max", "v_stall_max",
                   "mtow_cap"}
 

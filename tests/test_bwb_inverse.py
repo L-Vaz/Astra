@@ -21,6 +21,8 @@ from domain_packs.bwb.variants import generate_candidates
 
 
 REQ = dict(mtow_kg=5.0, cruise_speed_ms=25.0, cruise_altitude_m=100.0)
+AIRFOIL_APPROVAL = {"schedule": {
+    "root": "e474", "mid": "e472", "tip": "s5010"}}
 
 
 def _panel(req: DesignRequirements, params: BWBParams):
@@ -127,7 +129,7 @@ def test_variants_refactor_snapshot():
     wrapper must produce identical planforms for the default mission."""
     derived = derive(MissionSpec(payload_kg=1.5, cruise_speed_ms=25.0,
                                  cruise_altitude_m=100.0, launch="hand"))
-    cands = generate_candidates(derived)
+    cands = generate_candidates(derived, AIRFOIL_APPROVAL)
     assert [c.key for c in cands] == ["baseline", "max_range", "span_efficiency",
                                       "easy_launch", "control_margin"]
     for c in cands:

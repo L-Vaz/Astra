@@ -90,7 +90,11 @@ def batch(stage1_session, cand, monkeypatch):
     client, sid = stage1_session
     client.post("/api/requirements", json={
         "session_id": sid, "requirements": {"span_max_m": 2.4}, "persist": True})
-    listing = cand.generate(sid, regenerate=True)
+    from services import airfoil_selection
+    recommendation = airfoil_selection.recommend(sid)
+    approval = airfoil_selection.select(
+        sid, recommendation["strategies"][0]["schedule_hash"])
+    listing = cand.generate(sid, approval=approval, regenerate=True)
     return cand, sid, listing["candidates"][1]["key"], client
 
 
@@ -396,11 +400,13 @@ def test_candidate_derived_revalidates_the_atmosphere_invariant(batch):
 
 def test_mdo_winners_at_the_same_rank_do_not_collide(batch):
     cand, sid, key, _ = batch
+    from services import airfoil_selection
+    approval = airfoil_selection.get_selection(sid)
     record = cand._load_candidate(sid, key)
     winners = [{"params": record["params"], "rank": 1, "score": 1.0 + i,
                 "mdo": {}} for i in range(3)]
 
-    listing = cand.add_mdo_candidates(sid, winners)
+    listing = cand.add_mdo_candidates(sid, winners, approval=approval)
     keys = [c["key"] for c in listing["candidates"] if c["key"].startswith("mdo_")]
     assert len(keys) == 3
     assert len(set(keys)) == 3, f"MDO winners overwrote each other: {keys}"
@@ -463,8 +469,13 @@ def test_the_module_docstring_matches_rollback_behaviour(cand):
 
 def test_a_missing_mdo_score_does_not_lose_the_batch(batch):
     cand, sid, key, _ = batch
+    from services import airfoil_selection
+    approval = airfoil_selection.get_selection(sid)
     record = cand._load_candidate(sid, key)
-    listing = cand.add_mdo_candidates(sid, [{"params": record["params"], "rank": 1,
-                                             "mdo": {}}])
+    listing = cand.add_mdo_candidates(
+        sid,
+        [{"params": record["params"], "rank": 1, "mdo": {}}],
+        approval=approval,
+    )
     mdo = next(c for c in listing["candidates"] if c["key"].startswith("mdo_"))
     assert "score unavailable" in " ".join(mdo["provenance"])

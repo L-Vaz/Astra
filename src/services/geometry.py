@@ -31,10 +31,17 @@ class GeometryRejected(Exception):
 
 def apply_overrides(params: BWBParams, overrides: dict) -> BWBParams:
     """Apply a param delta and re-run full validation (ranges + cross-checks)."""
-    data = params.model_dump()
-    unknown = set(overrides) - set(data)
+    # Computed thickness fields are deliberately present in ``model_dump`` for the
+    # cockpit, but are not inputs.  Excluding them here also prevents a named section
+    # change from carrying the previous section's now-stale computed thickness into
+    # the validator.
+    allowed = set(type(params).model_fields)
+    unknown = set(overrides) - allowed
     if unknown:
         raise GeometryRejected(f"unknown geometry parameters: {sorted(unknown)}")
+    data = params.model_dump(exclude={
+        "root_thickness_pct", "mid_thickness_pct", "tip_thickness_pct",
+    })
     data.update(overrides)
     return BWBParams.model_validate(data)  # ValidationError -> caller reports reject
 

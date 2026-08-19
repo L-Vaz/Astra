@@ -615,6 +615,7 @@ from services import global_llm_service
 from services.intent import run_intent
 from services.geometry import GeometryRejected, apply_overrides, build_geometry as build_geometry_svc
 from services import design_session as ds
+from services import airfoil_selection as airfoil_selection_svc
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from domain_packs.bwb.schema import BWBParams, MissionDerived
@@ -639,6 +640,54 @@ class PlanDesignResponse(BaseModel):
     geometry_params: Dict[str, Any] = Field(description="Proposed BWB parameters (editable via build_geometry overrides)")
     assumptions: List[str] = Field(description="Every default/assumption made — review these")
     plan_dir: str
+
+
+class RecommendAirfoilSetsRequest(BaseModel):
+    """Compute deterministic root/mid/tip schedules for a design session."""
+
+    session_id: str
+
+
+class SelectAirfoilSetRequest(BaseModel):
+    """Approve one exact schedule from the current recommendation artifact."""
+
+    session_id: str
+    schedule_hash: str
+    recommendation_version: Optional[int] = None
+
+
+@mcp.tool(name="recommend_airfoil_sets")
+async def recommend_airfoil_sets_tool(
+    request: RecommendAirfoilSetsRequest, ctx: Context
+) -> Dict[str, Any]:
+    """Recommend Balanced, Efficiency, and Low-speed/control airfoil schedules.
+
+    Results are deterministic, immutable session artifacts.  Missing or stale
+    prerequisites fail closed in the same way as the cockpit API.
+    """
+    try:
+        await ctx.info(f"Recommending airfoil sets for {request.session_id}")
+        return airfoil_selection_svc.recommend(request.session_id)
+    except Exception as exc:
+        await ctx.error(f"recommend_airfoil_sets failed: {exc}")
+        raise
+
+
+@mcp.tool(name="select_airfoil_set")
+async def select_airfoil_set_tool(
+    request: SelectAirfoilSetRequest, ctx: Context
+) -> Dict[str, Any]:
+    """Approve exactly one current root/mid/tip airfoil schedule."""
+    try:
+        await ctx.info(f"Approving an airfoil set for {request.session_id}")
+        return airfoil_selection_svc.select(
+            request.session_id,
+            request.schedule_hash,
+            recommendation_version=request.recommendation_version,
+        )
+    except Exception as exc:
+        await ctx.error(f"select_airfoil_set failed: {exc}")
+        raise
 
 
 @mcp.tool(name="plan_design")
@@ -697,10 +746,11 @@ async def plan_design(request: PlanDesignRequest, ctx: Context) -> PlanDesignRes
 class BuildGeometryRequest(BaseModel):
     """Build (or rebuild) the parametric BWB geometry for a session."""
     session_id: str
-    overrides: Optional[Dict[str, float]] = Field(
+    overrides: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Geometry parameter deltas from user review, e.g. {'span_m': 1.8, "
-                    "'sweep_outer_deg': 28}. Applied on top of the latest geometry version "
+        description="Geometry parameter deltas from user review, including numeric "
+                    "dimensions or named root_airfoil/mid_airfoil/tip_airfoil sections. "
+                    "Applied on top of the latest geometry version "
                     "(or the plan's proposal if no geometry exists yet).")
 
 
@@ -1048,14 +1098,18 @@ async def optimize_around_wing(request: OptimizeAroundWingRequest, ctx: Context)
             seed=request.seed, maxiter=request.maxiter, popsize=request.popsize,
             top_n=request.top_n)
 
+        # The immutable approval is the source of section names for both the lens
+        # batch and every optimiser winner.
+        approval = airfoil_selection_svc.get_selection(request.session_id)
         # seed the lens batch (idempotent) so the navigator shows both, then write winners
         try:
-            cand_svc.generate(request.session_id)
+            cand_svc.generate(request.session_id, approval=approval)
         except Exception as e:  # lens generation is best-effort context, never fatal
             await ctx.info(f"(lens candidates not generated: {e})")
         winners = [w.model_dump() for w in result.top]
         if winners:
-            cand_svc.add_mdo_candidates(request.session_id, winners)
+            cand_svc.add_mdo_candidates(
+                request.session_id, winners, approval=approval)
 
         return {
             "session_id": request.session_id,

@@ -10,7 +10,7 @@ trade-off sentences against the baseline.
 Deterministic and closed-form throughout — no LLM, no solver. Candidates are
 *hypotheses*: VSPAERO screening (tier 1) and OpenFOAM (tier 2) judge them.
 """
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -508,7 +508,28 @@ def _drag_provenance(panel: AeroEstimate) -> List[str]:
     ]
 
 
+def _approved_sections(approval: Dict[str, Any]) -> Dict[str, str]:
+    if not isinstance(approval, dict):
+        raise ValueError("an airfoil approval is required")
+    schedule = approval.get("schedule")
+    if not isinstance(schedule, dict) or set(schedule) != {"root", "mid", "tip"}:
+        raise ValueError("airfoil approval must contain exact root/mid/tip names")
+    if not all(isinstance(schedule[key], str) and schedule[key] for key in schedule):
+        raise ValueError("approved airfoil names must be non-empty strings")
+    return schedule
+
+
+def _apply_approved_sections(params: BWBParams,
+                             schedule: Dict[str, str]) -> BWBParams:
+    raw = params.model_dump()
+    for field in ("root_thickness_pct", "mid_thickness_pct", "tip_thickness_pct"):
+        raw.pop(field, None)
+    raw.update({f"{station}_airfoil": name for station, name in schedule.items()})
+    return BWBParams.model_validate(raw)
+
+
 def generate_candidates(derived: MissionDerived,
+                        approval: Dict[str, Any],
                         requirements: Optional["DesignRequirements"] = None,
                         ) -> List[DesignCandidate]:
     """Baseline + one candidate per lens, each scored on the same panel.
@@ -516,6 +537,11 @@ def generate_candidates(derived: MissionDerived,
     `requirements` carries the user's vehicle constraints (span/stall caps)
     so every lens is sized inside the same box the stage-1 feasibility check
     used — without it, lenses would silently fall back to schema-wide caps."""
+    schedule = _approved_sections(approval)
+    approved_params = _apply_approved_sections(derived.params, schedule)
+    derived = MissionDerived.model_validate({
+        **derived.model_dump(), "params": approved_params.model_dump()
+    })
     atmosphere = derived.atmosphere
     v = derived.mission.cruise_speed_ms
     w = derived.weight_n
@@ -546,7 +572,10 @@ def generate_candidates(derived: MissionDerived,
     for lens in LENSES:
         notes: List[str] = []
         violations: List[CapViolation] = []
-        params, sizing = _size_wing(lens, derived, notes, span_cap, stall_cap,
+        approved_lens = lens.model_copy(update={
+            f"{station}_airfoil": name for station, name in schedule.items()
+        })
+        params, sizing = _size_wing(approved_lens, derived, notes, span_cap, stall_cap,
                                     violations)
         panel = estimate(params, atmosphere, v, w, launch)
         # Provenance is composed AFTER the panel exists, so every number it quotes is

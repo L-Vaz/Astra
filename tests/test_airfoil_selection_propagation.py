@@ -139,7 +139,9 @@ def test_promotion_manifest_carries_selection_identity(candidate_session, monkey
         manifest = json.load(stream)
     assert manifest["selection_version"] == approval["version"]
     assert manifest["selection_hash"] == approval["selection_hash"]
-    assert manifest["airfoil_sections"] == fake_builder(
-        promoted["report"]["params"], os.path.join(ds.session_dir(sid), "fixture")
-    ).airfoil_sections
-
+    assert manifest["airfoil_sections"] == [
+        {"station": station, "name": name,
+         "sha256": approval["coordinate_hashes"][station],
+         "openvsp_type": "XS_FILE_AIRFOIL"}
+        for station, name in approval["schedule"].items()
+    ]

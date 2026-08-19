@@ -6,7 +6,15 @@ from domain_packs.bwb.atmosphere import atmosphere_at
 from domain_packs.bwb.inverse import solve_requirements
 from domain_packs.bwb.requirements import DesignRequirements
 from domain_packs.bwb.schema import MissionDerived, MissionSpec
-from domain_packs.bwb.variants import generate_candidates
+from domain_packs.bwb.variants import generate_candidates as _generate_candidates
+
+
+AIRFOIL_APPROVAL = {"schedule": {
+    "root": "e474", "mid": "e472", "tip": "s5010"}}
+
+
+def generate_candidates(derived, requirements=None):
+    return _generate_candidates(derived, AIRFOIL_APPROVAL, requirements)
 
 
 def _derived(req: DesignRequirements) -> MissionDerived:

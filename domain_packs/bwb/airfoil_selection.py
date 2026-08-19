@@ -143,8 +143,6 @@ def _candidate_pool(station: str, state: Mapping[str, float], baseline_tc: float
         cd, drag_flags = airfoils.section_cd(
             name, float(state["cl_demand_cruise"]), float(state["reynolds_cruise"])
         )
-        if drag_flags:
-            reasons.append("cruise lift demand outside the sampled drag ladder")
         if float(state["cl_demand_low_speed"]) > low.clmax:
             reasons.append("low-speed section lift demand exceeds CLmax")
         if reasons:
@@ -158,7 +156,7 @@ def _candidate_pool(station: str, state: Mapping[str, float], baseline_tc: float
             "cm0": cruise.cm0,
             "clmax_cruise": cruise.clmax,
             "clmax_low_speed": low.clmax,
-            "cd_cruise": cd,
+            "cd_cruise": None if drag_flags else cd,
             "confidence": min(cruise.confidence, low.confidence),
             "coordinate_sha256": airfoil_coordinates.coordinate_sha256(name),
             "reference": ref,
@@ -174,7 +172,10 @@ def _candidate_pool(station: str, state: Mapping[str, float], baseline_tc: float
         )
 
     ranks = (
-        sorted(evaluated, key=lambda item: (item["cd_cruise"], item["name"])),
+        sorted(evaluated, key=lambda item: (
+            math.inf if item["cd_cruise"] is None else item["cd_cruise"],
+            item["name"],
+        )),
         sorted(evaluated, key=lambda item: (-item["clmax_low_speed"], item["name"])),
         sorted(evaluated, key=lambda item: (-item["cm0"], item["name"])),
         sorted(evaluated, key=lambda item: (item["evidence_weakness"], item["name"])),
@@ -241,6 +242,8 @@ def _coupled_evaluate(schedule: Mapping[str, str], params: BWBParams,
         raise ValueError(f"schedule hash did not stabilize within {max_passes} passes")
     if not panel.cruise_feasible:
         raise ValueError("cruise condition is below whole-wing stall")
+    if panel.cd_sections_span_clamped > 0.0:
+        raise ValueError("trimmed whole-wing profile drag uses clamped polar data")
     if not panel.trim_twist_reachable:
         raise ValueError("trim twist left the reachable schema range after resizing")
     if panel.static_margin_at_trim is None or panel.static_margin_at_trim <= 0.0:
@@ -399,7 +402,7 @@ def _recommend_cached(params_json: str, cruise_speed_ms: float, altitude_m: floa
             "params": stable.model_dump(),
             "objectives": {
                 "profile_drag": panel.cd_profile_sections,
-                "stall_control": (int(panel.stall_is_outboard), panel.v_stall_ms),
+                "stall_control": [int(panel.stall_is_outboard), panel.v_stall_ms],
                 "trim": convergence["trim_burden"],
                 "evidence": evidence,
             },

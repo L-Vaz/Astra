@@ -159,7 +159,25 @@ def _index_path(sid: str) -> str:
 # lifecycle
 # ---------------------------------------------------------------------------
 
-def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
+def _current_approval(sid: str, approval: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not approval:
+        raise CandidateError("a current airfoil approval is required")
+    from . import airfoil_selection
+    try:
+        current = airfoil_selection.get_selection(sid, require_current=True)
+    except airfoil_selection.AirfoilConflict as exc:
+        raise CandidateError(str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise CandidateError("a current airfoil approval is required") from exc
+    if (approval.get("version") != current.get("version")
+            or approval.get("selection_hash") != current.get("selection_hash")
+            or approval.get("schedule") != current.get("schedule")):
+        raise CandidateError("the supplied airfoil approval is stale or not current")
+    return current
+
+
+def generate(sid: str, *, approval: Optional[Dict[str, Any]] = None,
+             regenerate: bool = False) -> Dict[str, Any]:
     """Tier 0: create (or return) the candidate batch for the current plan.
 
     Regenerates when the REQUIREMENTS have moved as well as when the plan has (S4-C3).
@@ -167,6 +185,7 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
     change when a cap does — and the short-circuit below returned the old batch:
     saving span_max 3.0 -> 1.2 and calling generate() handed back four candidates
     violating the live cap."""
+    approval = _current_approval(sid, approval)
     derived = _plan_derived(sid)
     idx = _index_path(sid)
     if os.path.exists(idx) and not regenerate and not _is_stale(sid):
@@ -182,7 +201,7 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
         except Exception:
             requirements = None  # legacy payloads without the full field set
 
-    cands = generate_candidates(derived, requirements)
+    cands = generate_candidates(derived, approval, requirements)
     keys = []
     for c in cands:
         violations = [v.model_dump() for v in c.violations]
@@ -205,12 +224,22 @@ def generate(sid: str, regenerate: bool = False) -> Dict[str, Any]:
             # own hard cap reported success to the gallery (S4-C4).
             "evidence": {"equation": {"passed": not violations}},
             "artifacts": {},
+            "selection_version": approval["version"],
+            "selection_hash": approval["selection_hash"],
+            "schedule_hash": approval["schedule_hash"],
+            "airfoil_schedule": dict(approval["schedule"]),
+            "airfoil_coordinate_hashes": dict(approval["coordinate_hashes"]),
         }
         _save_candidate(sid, record)
         keys.append(c.key)
     ds.atomic_write_json(idx, {"plan_version": _plan_version(sid),
                                "requirements_version":
                                    ds._latest_requirements_version(sid),
+                               "intake_version":
+                                   approval["sources"]["intake_version"],
+                               "intake_hash": approval["sources"]["intake_hash"],
+                               "selection_version": approval["version"],
+                               "selection_hash": approval["selection_hash"],
                                "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
                                "keys": keys})
     return list_candidates(sid)
@@ -244,11 +273,27 @@ def _staleness(sid: str) -> Dict[str, Any]:
     if meta.get("plan_version") != current_plan:
         reasons.append(
             f"plan moved from v{meta.get('plan_version')} to v{current_plan}")
+    from . import airfoil_selection
+    try:
+        selection = airfoil_selection.get_selection(sid, require_current=False)
+    except FileNotFoundError:
+        selection = None
+    if selection is None:
+        reasons.append("airfoil selection is missing")
+    elif selection.get("stale"):
+        reasons.append("airfoil selection is stale")
+    elif (meta.get("selection_version") != selection.get("version")
+          or meta.get("selection_hash") != selection.get("selection_hash")):
+        reasons.append(
+            f"selection moved from v{meta.get('selection_version')} to "
+            f"v{selection.get('version')}")
     return {"stale": bool(reasons), "reasons": reasons,
             "requirements_version": meta.get("requirements_version"),
             "current_requirements_version": current_requirements,
             "batch_plan_version": meta.get("plan_version"),
-            "current_plan_version": current_plan}
+            "current_plan_version": current_plan,
+            "selection_version": meta.get("selection_version"),
+            "selection_hash": meta.get("selection_hash")}
 
 
 def _is_stale(sid: str) -> bool:
@@ -274,6 +319,8 @@ def list_candidates(sid: str) -> Dict[str, Any]:
             unreadable.append(k)
     return {"plan_version": meta.get("plan_version"),
             "generated": meta.get("generated"),
+            "selection_version": meta.get("selection_version"),
+            "selection_hash": meta.get("selection_hash"),
             "requirements_version": staleness.get("requirements_version"),
             "current_requirements_version":
                 staleness.get("current_requirements_version"),
@@ -523,6 +570,15 @@ def promote(sid: str, key: str, note: str = "",
         for name in os.listdir(staging):
             os.replace(os.path.join(staging, name), os.path.join(vdir, name))
         shutil.rmtree(staging, ignore_errors=True)
+        airfoil_sections = getattr(report, "airfoil_sections", None) or [
+            {
+                "station": station,
+                "name": name,
+                "sha256": record["airfoil_coordinate_hashes"][station],
+                "openvsp_type": "XS_FILE_AIRFOIL",
+            }
+            for station, name in record["airfoil_schedule"].items()
+        ]
         version = ds.record_version(sid, "geometry", {
             "source": "candidate",
             "candidate_key": key,
@@ -530,6 +586,11 @@ def promote(sid: str, key: str, note: str = "",
             "note": note or f"promoted candidate '{record['title']}'",
             "passed": report.all_gates_pass,
             "violations_overridden": violations,
+            "selection_version": record["selection_version"],
+            "selection_hash": record["selection_hash"],
+            "schedule_hash": record["schedule_hash"],
+            "airfoil_sections": [entry.model_dump() if hasattr(entry, "model_dump")
+                                  else entry for entry in airfoil_sections],
         })
 
     _transition(record, "promoted", "promote")
@@ -595,7 +656,8 @@ def stl_path(sid: str, key: str) -> str:
 # MDO winners (Slice 2): write optimiser results into the same candidate batch
 # ---------------------------------------------------------------------------
 
-def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any]:
+def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]], *,
+                       approval: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Write differential-evolution winners as tier-0 candidates (source='mdo').
 
     Each winner dict carries `params` (a BWBParams dump) and `mdo` (the score
@@ -606,6 +668,7 @@ def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any
     Re-running replaces any previous `mdo_*` records for the current plan; lens
     candidates in the batch are preserved. No OpenVSP here: geometry is built later,
     on demand, exactly as for lens candidates."""
+    approval = _current_approval(sid, approval)
     derived = _plan_derived(sid)
     idx_path = _index_path(sid)
 
@@ -623,7 +686,16 @@ def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any
 
     new_keys: List[str] = []
     for position, w in enumerate(winners, start=1):
-        params = BWBParams.model_validate(w["params"])
+        raw_params = dict(w["params"])
+        for computed in ("root_thickness_pct", "mid_thickness_pct",
+                         "tip_thickness_pct"):
+            raw_params.pop(computed, None)
+        raw_params.update({
+            "root_airfoil": approval["schedule"]["root"],
+            "mid_airfoil": approval["schedule"]["mid"],
+            "tip_airfoil": approval["schedule"]["tip"],
+        })
+        params = BWBParams.model_validate(raw_params)
         panel = estimate(params, derived.atmosphere,
                          derived.mission.cruise_speed_ms, derived.weight_n,
                          derived.mission.launch)
@@ -658,6 +730,11 @@ def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any
             "tradeoffs": [],
             "evidence": {"equation": {"passed": True}, "mdo": w.get("mdo", {})},
             "artifacts": {},
+            "selection_version": approval["version"],
+            "selection_hash": approval["selection_hash"],
+            "schedule_hash": approval["schedule_hash"],
+            "airfoil_schedule": dict(approval["schedule"]),
+            "airfoil_coordinate_hashes": dict(approval["coordinate_hashes"]),
         }
         _save_candidate(sid, record)
         new_keys.append(key)
@@ -665,6 +742,12 @@ def add_mdo_candidates(sid: str, winners: List[Dict[str, Any]]) -> Dict[str, Any
     ds.atomic_write_json(idx_path, {"plan_version": _plan_version(sid),
                                     "requirements_version":
                                         ds._latest_requirements_version(sid),
+                                    "intake_version":
+                                        approval["sources"]["intake_version"],
+                                    "intake_hash":
+                                        approval["sources"]["intake_hash"],
+                                    "selection_version": approval["version"],
+                                    "selection_hash": approval["selection_hash"],
                                     "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
                                     "keys": kept + new_keys})
     return list_candidates(sid)

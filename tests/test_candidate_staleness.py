@@ -43,11 +43,18 @@ def _seeded(client, sid, **requirements):
     return response
 
 
+def _approval(sid):
+    from services import airfoil_selection
+    recommendation = airfoil_selection.recommend(sid)
+    return airfoil_selection.select(
+        sid, recommendation["strategies"][0]["schedule_hash"])
+
+
 def test_batch_index_records_the_requirements_version(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, span_max_m=2.4)
-    cand.generate(sid, regenerate=True)
+    cand.generate(sid, approval=_approval(sid), regenerate=True)
 
     meta = _batch_index(ds, sid)
     assert meta["requirements_version"] == ds._latest_requirements_version(sid)
@@ -57,7 +64,7 @@ def test_requirements_change_marks_the_batch_stale(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, span_max_m=2.4)
-    cand.generate(sid, regenerate=True)
+    cand.generate(sid, approval=_approval(sid), regenerate=True)
     assert cand.list_candidates(sid)["stale"] is False
 
     _seeded(client, sid, span_max_m=1.2)
@@ -71,10 +78,10 @@ def test_generate_after_a_requirements_change_regenerates(stage1_session, servic
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, span_max_m=2.4)
-    cand.generate(sid, regenerate=True)
+    cand.generate(sid, approval=_approval(sid), regenerate=True)
 
     _seeded(client, sid, span_max_m=1.2)
-    batch = cand.generate(sid)          # NOT regenerate=True — this is the short-circuit
+    batch = cand.generate(sid, approval=_approval(sid))
     assert batch["stale"] is False
     for record in batch["candidates"]:
         assert record["params"]["span_m"] <= 1.2 + 1e-6, \
@@ -86,8 +93,9 @@ def test_an_unchanged_batch_is_not_regenerated(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, span_max_m=2.4)
-    first = cand.generate(sid, regenerate=True)
-    again = cand.generate(sid)
+    approval = _approval(sid)
+    first = cand.generate(sid, approval=approval, regenerate=True)
+    again = cand.generate(sid, approval=approval)
     assert again["generated"] == first["generated"]
 
 
@@ -98,7 +106,7 @@ def test_violating_candidate_is_flagged_and_not_silently_promotable(stage1_sessi
     # 20 kg on a 0.9 m span: the stall cap needs 2.569 m^2 of wing and the schema
     # allows 0.324 m^2 at that span. Nothing can satisfy it; everything must say so.
     _seeded(client, sid, mtow_kg=20.0, span_max_m=0.9, v_stall_max_ms=10.5)
-    batch = cand.generate(sid, regenerate=True)
+    batch = cand.generate(sid, approval=_approval(sid), regenerate=True)
 
     violating = [r for r in batch["candidates"] if r["violations"]]
     assert violating, "no candidate reported a violation for an impossible cap"
@@ -114,10 +122,10 @@ def test_the_baseline_is_capped_like_every_other_card(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, span_max_m=3.0)
-    cand.generate(sid, regenerate=True)
+    cand.generate(sid, approval=_approval(sid), regenerate=True)
 
     _seeded(client, sid, span_max_m=1.2)
-    batch = cand.generate(sid, regenerate=True)
+    batch = cand.generate(sid, approval=_approval(sid), regenerate=True)
     baseline = next(r for r in batch["candidates"] if r["is_baseline"])
     assert baseline["params"]["span_m"] <= 1.2 + 1e-6, \
         f"baseline span {baseline['params']['span_m']:.4f} ignores the 1.2 m cap"
@@ -128,7 +136,7 @@ def test_gallery_response_surfaces_violations(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, mtow_kg=20.0, span_max_m=0.9, v_stall_max_ms=10.5)
-    cand.generate(sid, regenerate=True)
+    cand.generate(sid, approval=_approval(sid), regenerate=True)
 
     response = client.get(f"/api/candidates/{sid}")
     assert response.status_code == 200, response.text
@@ -144,7 +152,7 @@ def test_promotion_override_requires_a_reason(stage1_session, services):
     cand, ds = services
     client, sid = stage1_session
     _seeded(client, sid, mtow_kg=20.0, span_max_m=0.9, v_stall_max_ms=10.5)
-    batch = cand.generate(sid, regenerate=True)
+    batch = cand.generate(sid, approval=_approval(sid), regenerate=True)
     key = next(r["key"] for r in batch["candidates"] if r["violations"])
 
     refused = client.post("/api/candidates/promote", json={

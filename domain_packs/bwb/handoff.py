@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from .aero_estimates import AeroEstimate
 from .airfoils import provenance as airfoil_provenance, table_sha256
+from .airfoil_coordinates import archive_sha256 as coordinate_archive_sha256
 from .atmosphere import atmosphere_at, atmosphere_provenance
 from .inverse import CapViolation, LockedValues
 from .requirements import DesignRequirements, RequirementStatus
@@ -87,6 +88,10 @@ class Stage1Handoff(BaseModel):
 
     performance: Dict[str, Any] = Field(
         description="The tier-0 panel. A PRIOR for Stage 2, not a target to match.")
+    airfoil_selection: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="The approved root/mid/tip file-airfoil identities and immutable "
+                    "selection hashes. Empty only for legacy handoffs.")
 
     evidence: List[Evidence] = Field(default_factory=list)
     known_disagreements: List[str] = Field(
@@ -189,7 +194,8 @@ def build_handoff(params: BWBParams, panel: AeroEstimate,
                   requirement_status: Optional[List[RequirementStatus]] = None,
                   locked: Optional[LockedValues] = None,
                   lock_violations: Optional[List[CapViolation]] = None,
-                  altitude_m: float = 0.0) -> Stage1Handoff:
+                  altitude_m: float = 0.0,
+                  airfoil_selection: Optional[Dict[str, Any]] = None) -> Stage1Handoff:
     """Assemble the artifact from one solved concept."""
     return Stage1Handoff(
         geometry=params,
@@ -205,10 +211,28 @@ def build_handoff(params: BWBParams, panel: AeroEstimate,
         locks=locked or LockedValues(),
         lock_violations=list(lock_violations or []),
         performance=panel.model_dump(),
+        airfoil_selection=(
+            {
+                "version": airfoil_selection["version"],
+                "selection_hash": airfoil_selection["selection_hash"],
+                "schedule_hash": airfoil_selection["schedule_hash"],
+                "sections": [
+                    {
+                        "station": station,
+                        "name": airfoil_selection["schedule"][station],
+                        "sha256": airfoil_selection["coordinate_hashes"][station],
+                        "openvsp_type": "XS_FILE_AIRFOIL",
+                    }
+                    for station in ("root", "mid", "tip")
+                ],
+            }
+            if airfoil_selection else {}
+        ),
         evidence=_evidence(params, panel),
         known_disagreements=list(KNOWN_DISAGREEMENTS),
         provenance={
             "airfoil_table_sha256": table_sha256(),
+            "airfoil_coordinate_archive_sha256": coordinate_archive_sha256(),
             "airfoil_table": {
                 k: airfoil_provenance().get(k)
                 for k in ("sections", "re_grid", "cl_ladder", "neuralfoil",
