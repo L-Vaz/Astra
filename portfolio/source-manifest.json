@@ -100,6 +100,38 @@
       "evidence_grade": "C",
       "reproduction": "python verification/verify_golden.py",
       "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "cockpit_overview",
+      "source": "portfolio/assets/ui/cockpit-overview.png",
+      "output": "portfolio/assets/ui/cockpit-overview.png",
+      "kind": "ui_capture",
+      "case_label": "Existing Astra design session 44d2e8b0",
+      "caption": "Astra cockpit showing requirement controls, authoritative geometry, and first-principles result explanations.",
+      "evidence_grade": "C",
+      "reproduction": "ASTRA_SESSIONS_DIR=/mnt/e/AI_projects/Astra/runs/design_sessions python -m src.cockpit.server --host 0.0.0.0 --port 8765; open http://127.0.0.1:8765/?session=44d2e8b0",
+      "capture_url": "http://127.0.0.1:8765/?session=44d2e8b0",
+      "session_id": "44d2e8b0",
+      "viewport": "1280x720",
+      "device_pixel_ratio": 1.25,
+      "captured_at": "2026-08-23T13:14:10.3172732Z",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "cockpit_analysis",
+      "source": "portfolio/assets/ui/cockpit-candidate-analysis.png",
+      "output": "portfolio/assets/ui/cockpit-candidate-analysis.png",
+      "kind": "ui_capture",
+      "case_label": "Existing Astra design session 44d2e8b0 candidate browser",
+      "caption": "Astra cockpit comparing an existing candidate against the applied geometry without running a solver.",
+      "evidence_grade": "C",
+      "reproduction": "Open the existing candidate browser from http://127.0.0.1:8765/?session=44d2e8b0 without invoking Apply, Optimize, Verify, Screen, or Promote",
+      "capture_url": "http://127.0.0.1:8765/?session=44d2e8b0",
+      "session_id": "44d2e8b0",
+      "viewport": "1280x720",
+      "device_pixel_ratio": 1.25,
+      "captured_at": "2026-08-23T13:14:10.3172732Z",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
     }
   ]
 }

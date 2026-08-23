@@ -32,7 +32,8 @@ def main() -> None:
             raise FileNotFoundError(source)
 
         output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, output)
+        if source != output:
+            shutil.copy2(source, output)
         with Image.open(output) as image:
             image.verify()
         copied.append(output.relative_to(ROOT).as_posix())

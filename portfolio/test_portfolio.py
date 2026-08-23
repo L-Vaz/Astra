@@ -21,6 +21,8 @@ REQUIRED_SOURCE_IDS = {
     "velocity_slice",
     "residual_history",
     "force_history",
+    "cockpit_overview",
+    "cockpit_analysis",
 }
 
 
@@ -46,6 +48,12 @@ class PortfolioContractTests(unittest.TestCase):
             self.assertTrue(entry["caption"].strip())
             with Image.open(output) as image:
                 image.verify()
+
+            if entry["kind"] == "ui_capture":
+                self.assertEqual(entry["session_id"], "44d2e8b0")
+                self.assertEqual(entry["viewport"], "1280x720")
+                self.assertTrue(entry["capture_url"].startswith("http://127.0.0.1:8765/"))
+                self.assertTrue(entry["captured_at"].endswith("Z"))
 
 
 if __name__ == "__main__":
