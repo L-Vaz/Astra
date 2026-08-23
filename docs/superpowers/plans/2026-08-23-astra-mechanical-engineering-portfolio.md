@@ -4,9 +4,9 @@
 
 **Goal:** Build a polished ten-page technical-cinematic Astra portfolio as an editable PowerPoint and application-ready PDF for Lindon Vaz.
 
-**Architecture:** A source-backed content and provenance layer feeds a deterministic PptxGenJS presentation builder. Existing Astra geometry, mesh, CFD, verification, and cockpit artifacts are copied or captured into a portable asset bundle; PowerPoint exports the generated deck to PDF; standalone QA scripts validate content, provenance, page count, links, and rendered output.
+**Architecture:** A source-backed content and provenance layer feeds a deterministic `@oai/artifact-tool` presentation builder in a temporary build directory. Existing Astra geometry, mesh, CFD, verification, and cockpit artifacts are copied or captured into a portable asset bundle; PowerPoint exports the generated deck to PDF; standalone QA scripts validate content, provenance, page count, links, and rendered output.
 
-**Tech Stack:** PptxGenJS and Sharp from the bundled Node.js runtime; Python with Pillow, pypdf, and PyMuPDF from the bundled document runtime; local Astra cockpit; Microsoft PowerPoint PDF export.
+**Tech Stack:** `@oai/artifact-tool` from the bundled Node.js runtime; Python with Pillow, pypdf, and PyMuPDF from the bundled document runtime; local Astra cockpit; Microsoft PowerPoint PDF export.
 
 **Spec:** `docs/superpowers/specs/2026-08-23-astra-mechanical-engineering-portfolio-design.md`
 
@@ -18,9 +18,10 @@
 - `portfolio/claim-ledger.json` — claim-to-source mapping and evidence grade.
 - `portfolio/prepare_assets.py` — lossless source-to-portable-asset copier and
   raster validation.
-- `portfolio/theme.js` — colour, typography, page chrome, evidence chips, and
-  source-footer helpers.
-- `portfolio/build_portfolio.js` — page-specific PptxGenJS composition only.
+- `tmp/portfolio-build/build_portfolio.mjs` — temporary page-specific
+  `@oai/artifact-tool` authoring module; not a deliverable.
+- `tmp/portfolio-build/source-notes.txt` — temporary source/provenance notes
+  copied into slide speaker-note source blocks.
 - `portfolio/export_pdf.ps1` — reproducible PowerPoint-to-PDF conversion.
 - `portfolio/render_pdf.py` — temporary page renders and QA contact sheet.
 - `portfolio/test_portfolio.py` — standalone contract and artifact tests that
@@ -43,6 +44,8 @@
 - Explicitly separate inherited Foam-Agent capabilities from Astra contributions.
 - Do not claim structural, aeroelastic, propulsion, battery, manufacturing, or flight-test validation.
 - Generated slides must contain no unfinished identity tokens, invented telemetry, unsupported performance claims, or unrelated solver imagery.
+- Use ASCII hyphens in final PDF text; avoid non-breaking and typographic dash glyphs that can render inconsistently.
+- Put a `[Sources]` block in the speaker notes of every slide.
 
 ---
 
@@ -301,14 +304,16 @@ git commit -m "docs: define Astra portfolio narrative"
 ### Task 4: Build the editable technical-cinematic PowerPoint
 
 **Files:**
-- Create: `portfolio/theme.js`
-- Create: `portfolio/build_portfolio.js`
+- Create: `tmp/portfolio-build/source-notes.txt`
+- Create: `tmp/portfolio-build/build_portfolio.mjs`
+- Create: `tmp/portfolio-build/rendered/slide-01.png` through `slide-10.png`
+- Create: `tmp/portfolio-build/rendered/deck-montage.webp`
 - Create: `portfolio/astra-mechanical-engineering-portfolio.pptx`
 - Modify: `portfolio/test_portfolio.py`
 
 **Interfaces:**
 - Consumes: `content.json`, `claim-ledger.json`, `source-manifest.json`, and prepared PNG assets.
-- Produces: a deterministic 16:9 ten-slide PowerPoint at `portfolio/astra-mechanical-engineering-portfolio.pptx`.
+- Produces: a deterministic 1280x720 ten-slide PowerPoint at `portfolio/astra-mechanical-engineering-portfolio.pptx`, plus temporary full-slide renders and a montage.
 
 - [ ] **Step 1: Add the presentation-output test**
 
@@ -321,64 +326,55 @@ the archive contains image relationships, and the strings `Lindon Vaz`,
 
 Expected: FAIL because the PowerPoint has not been generated.
 
-- [ ] **Step 3: Implement the shared theme and layout helpers**
+- [ ] **Step 3: Create the supported artifact-tool build environment**
 
-`theme.js` must export:
+Set command-scoped runtime paths exactly as returned by
+`codex_app__load_workspace_dependencies`, create `tmp/portfolio-build`, and
+create a Windows junction from `tmp/portfolio-build/node_modules` to the
+bundled Node package directory. Set:
 
-```javascript
-const COLORS = {
-  navy: "101923", cyan: "54D1E2", amber: "E6B958",
-  white: "EFF7F8", muted: "AEBCC2", panel: "14222E", line: "2D4353"
-};
-const PAGE = { width: 13.333, height: 7.5 };
-function addPageChrome(pptx, slide, number, section) {
-  slide.background = { color: COLORS.navy };
-  slide.addShape(pptx.ShapeType.line, {
-    x: 0.34, y: 0.45, w: 0, h: 6.55,
-    line: { color: COLORS.cyan, width: 1.5 }
-  });
-  slide.addText(section.toUpperCase(), {
-    x: 0.55, y: 0.28, w: 5.2, h: 0.22,
-    fontFace: "Aptos", fontSize: 7, bold: true,
-    color: COLORS.cyan, charSpacing: 1.4, margin: 0
-  });
-  slide.addText(String(number).padStart(2, "0"), {
-    x: 12.35, y: 7.05, w: 0.45, h: 0.18,
-    fontFace: "Aptos", fontSize: 7, color: COLORS.muted,
-    align: "right", margin: 0
-  });
-}
-function addEvidenceChip(pptx, slide, text, tone, x, y, w) {
-  const color = tone === "open" ? COLORS.amber : COLORS.cyan;
-  slide.addShape(pptx.ShapeType.roundRect, {
-    x, y, w, h: 0.24,
-    fill: { color, transparency: 80 }, line: { color, width: 0.7 }
-  });
-  slide.addText(text.toUpperCase(), {
-    x: x + 0.06, y: y + 0.055, w: w - 0.12, h: 0.1,
-    fontFace: "Aptos", fontSize: 6.5, bold: true,
-    color, margin: 0, align: "center"
-  });
-}
-function addSourceFooter(slide, sourceText) {
-  slide.addText(sourceText, {
-    x: 0.55, y: 7.03, w: 10.9, h: 0.18,
-    fontFace: "Aptos", fontSize: 6.5, color: COLORS.muted,
-    margin: 0
-  });
-}
-module.exports = { COLORS, PAGE, addPageChrome, addEvidenceChip, addSourceFooter };
+```powershell
+$env:SKILL_DIR='C:\Users\asus\.codex\plugins\cache\openai-primary-runtime\presentations\26.819.11345\skills\presentations'
+$env:TMP_DIR='E:\AI_projects\Astra\.worktrees\portfolio\tmp\portfolio-build'
+$env:FINAL_PPTX='E:\AI_projects\Astra\.worktrees\portfolio\portfolio\astra-mechanical-engineering-portfolio.pptx'
+$env:RUNTIME_NODE='C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+$env:RUNTIME_NODE_MODULES='C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
+$env:RUNTIME_BIN_DIR='C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\override'
 ```
 
-Use Aptos for body copy and Aptos Display for titles. Titles must remain at
-least 24 pt, body copy at least 11 pt, and captions at least 9 pt. Use native
-PowerPoint shapes for workflow arrows, callouts, evidence chips, and the
-attribution table.
+Write `source-notes.txt` with the repository source paths and case labels used
+on each page.
 
-- [ ] **Step 4: Implement the ten page layouts**
+- [ ] **Step 4: Mark the PowerPoint authoring operation once**
 
-`build_portfolio.js` must read the three JSON inputs, set `LAYOUT_WIDE`, embed
-document metadata, and generate these compositions:
+Immediately before creating the deck, run exactly once:
+
+```powershell
+& $env:RUNTIME_NODE "$env:SKILL_DIR\container_tools\mark_artifact_operation_started.mjs" --operation-kind create --expected-output-count 1 --output-format pptx
+```
+
+- [ ] **Step 5: Implement the artifact-tool deck**
+
+Create an ES module that imports `Presentation` and `PresentationFile` from
+`@oai/artifact-tool`, creates a 1280x720 presentation, reads the three JSON
+inputs, embeds local images as byte-backed PNG assets, and saves the editable
+deck to `$env:FINAL_PPTX`.
+
+Use Aptos for body text and Aptos Display for titles. Use at least 67 px on the
+cover, 48 px for slide titles, 32 px for subheads, 22 px for body text, and
+12 px for source footers. Keep the visual hierarchy flat: actual engineering
+images dominate; rules, labels, and connectors support the evidence but do not
+turn pages into dashboard-style card grids. Use native shapes only for the
+single six-stage workflow, simple annotation leaders, dividers, and attribution
+table structure.
+
+For every slide, set a speaker-notes block beginning with `[Sources]` and list
+the exact repository sources and external inherited-project link used on that
+slide.
+
+- [ ] **Step 6: Implement the ten page layouts**
+
+The authoring module must generate these compositions:
 
 1. Full-bleed dark cover with geometry hero, cyan glow frame, thesis, author,
    discipline, LinkedIn, and GitHub.
@@ -393,37 +389,41 @@ document metadata, and generate these compositions:
 6. Surface mesh hero with two farfield-slice details and boundary/gate labels.
 7. Pressure field and velocity slice side by side with a source-case caption
    and restrained interpretation.
-8. Residual and force-history charts with verdict logic, evidence chips, and a
+8. Residual and force-history charts with verdict logic, evidence labels, and a
    visible `what this proves / what this does not prove` block.
-9. Four capability cards, three engineering lessons, and next-experiment note.
-10. Attribution, toolchain, evidence sources, limitations, QR/link area,
+9. One flat split composition: demonstrated capabilities on the left,
+   engineering lessons and the next experiment on the right.
+10. Attribution, toolchain, evidence sources, limitations, project-link area,
     LinkedIn, and GitHub.
 
-- [ ] **Step 5: Add deterministic build diagnostics**
+- [ ] **Step 7: Export previews and diagnostics**
 
 Before writing the deck, verify all referenced assets exist and all page asset
-IDs/claim IDs resolve. During layout, track every element rectangle and throw
-when an element exceeds the 13.333×7.5 page bounds. Print a page-by-page asset
-and claim summary after generation.
+IDs/claim IDs resolve. Export every slide as a full-size PNG, export every slide
+layout as JSON, create a deck montage, and write them under
+`tmp/portfolio-build/rendered/`. Print a page-by-page asset and claim summary.
 
-- [ ] **Step 6: Generate the PowerPoint**
+- [ ] **Step 8: Generate and structurally test the PowerPoint**
 
 Run:
 
 ```powershell
-$env:NODE_PATH='C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
-& 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' portfolio/build_portfolio.js
+& $env:RUNTIME_NODE "$env:TMP_DIR\build_portfolio.mjs"
+& 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' "$env:SKILL_DIR\container_tools\slides_test.py" $env:FINAL_PPTX
 ```
 
-Expected: ten page summaries, no missing assets or out-of-bounds elements, and
-the `.pptx` file is written.
+Expected: ten page summaries, no missing assets, no
+out-of-bounds content, and the `.pptx` file is written.
 
-- [ ] **Step 7: Run the artifact test and commit**
+- [ ] **Step 9: Inspect every rendered slide and commit**
 
-Expected: PASS, including the ten-slide and embedded-image checks.
+Inspect the montage for narrative flow, then inspect every slide PNG at full
+resolution. Fix all unintended overlap, clipping, wrapping, inconsistent
+footers, illegible captions, and image-crop problems. Regenerate and rerun the
+artifact test until clean.
 
 ```powershell
-git add portfolio/theme.js portfolio/build_portfolio.js portfolio/astra-mechanical-engineering-portfolio.pptx portfolio/test_portfolio.py
+git add portfolio/astra-mechanical-engineering-portfolio.pptx portfolio/test_portfolio.py
 git commit -m "feat: build Astra engineering portfolio deck"
 ```
 
@@ -464,6 +464,12 @@ COM with the window hidden, open the deck read-only, call `SaveAs` with PDF
 format constant `32`, close the presentation, quit PowerPoint, release COM objects in a
 `finally` block, and fail if the output is missing.
 
+Immediately before the first PDF export, mark the PDF operation exactly once:
+
+```powershell
+& $env:RUNTIME_NODE 'C:\Users\asus\.codex\plugins\cache\openai-primary-runtime\pdf\26.819.11345\skills\pdf\container_tools\mark_artifact_operation_started.mjs' --operation-kind create --expected-output-count 1 --output-format pdf
+```
+
 Run:
 
 ```powershell
@@ -503,8 +509,7 @@ selected visuals after a later hero run.
 
 ```powershell
 & 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' portfolio/prepare_assets.py
-$env:NODE_PATH='C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
-& 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' portfolio/build_portfolio.js
+& $env:RUNTIME_NODE "$env:TMP_DIR\build_portfolio.mjs"
 powershell -ExecutionPolicy Bypass -File portfolio/export_pdf.ps1
 & 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' portfolio/test_portfolio.py
 & 'C:\Users\asus\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' portfolio/render_pdf.py
@@ -517,7 +522,7 @@ ten legible pages, and `git diff --check` reports no whitespace errors.
 - [ ] **Step 8: Commit the application-ready package**
 
 ```powershell
-git add portfolio/export_pdf.ps1 portfolio/render_pdf.py portfolio/README.md portfolio/astra-mechanical-engineering-portfolio.pdf portfolio/astra-mechanical-engineering-portfolio.pptx portfolio/build_portfolio.js portfolio/theme.js portfolio/content.json portfolio/claim-ledger.json portfolio/source-manifest.json portfolio/prepare_assets.py portfolio/test_portfolio.py portfolio/assets
+git add portfolio/export_pdf.ps1 portfolio/render_pdf.py portfolio/README.md portfolio/astra-mechanical-engineering-portfolio.pdf portfolio/astra-mechanical-engineering-portfolio.pptx portfolio/content.json portfolio/claim-ledger.json portfolio/source-manifest.json portfolio/prepare_assets.py portfolio/test_portfolio.py portfolio/assets
 git commit -m "feat: deliver Astra mechanical engineering portfolio"
 ```
 
