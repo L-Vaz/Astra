@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "evidence_policy": "Every image is copied from a named Astra verification artifact; data and axes are unchanged.",
+  "assets": [
+    {
+      "id": "geometry_iso",
+      "source": "reports/verification-2026-07-10/img/iso.png",
+      "output": "portfolio/assets/geometry/iso.png",
+      "kind": "geometry_render",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Isometric OpenVSP render of the generated blended-wing-body geometry.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "geometry_top",
+      "source": "reports/verification-2026-07-10/img/top.png",
+      "output": "portfolio/assets/geometry/top.png",
+      "kind": "geometry_render",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Top view of the generated BWB planform.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "mesh_surface",
+      "source": "reports/verification-2026-07-10/img/mesh_aircraft_surface.png",
+      "output": "portfolio/assets/mesh/surface.png",
+      "kind": "mesh_render",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Aircraft surface triangulation used directly as the volume-mesh boundary.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "mesh_slice_y",
+      "source": "reports/verification-2026-07-10/img/mesh_slice_y.png",
+      "output": "portfolio/assets/mesh/slice-y.png",
+      "kind": "mesh_render",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Symmetry-plane mesh slice showing refinement around the aircraft.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "mesh_slice_z",
+      "source": "reports/verification-2026-07-10/img/mesh_slice_z.png",
+      "output": "portfolio/assets/mesh/slice-z.png",
+      "kind": "mesh_render",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Planform-plane mesh slice showing the farfield and local refinement.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "surface_pressure",
+      "source": "reports/verification-2026-07-10/img/surface_pressure.png",
+      "output": "portfolio/assets/cfd/surface-pressure.png",
+      "kind": "cfd_field",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Surface-pressure field from the named OpenFOAM verification case.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "velocity_slice",
+      "source": "reports/verification-2026-07-10/img/U_slice_y.png",
+      "output": "portfolio/assets/cfd/velocity-slice.png",
+      "kind": "cfd_field",
+      "case_label": "Astra V1 golden BWB verification case",
+      "caption": "Velocity-magnitude slice through the symmetry plane of the verification case.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "residual_history",
+      "source": "reports/verification-2026-07-10/img/residuals.png",
+      "output": "portfolio/assets/verification/residuals.png",
+      "kind": "solver_history",
+      "case_label": "Astra V1 golden BWB verification case plus documented restart",
+      "caption": "Residual history; spikes correspond to the documented restart and post-processing recompute.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    },
+    {
+      "id": "force_history",
+      "source": "reports/verification-2026-07-10/img/force_coeffs.png",
+      "output": "portfolio/assets/verification/force-coefficients.png",
+      "kind": "solver_history",
+      "case_label": "Astra V1 golden BWB verification case post-processing window",
+      "caption": "Post-processed aerodynamic force-coefficient history for the named verification case.",
+      "evidence_grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "allowed_edits": ["crop", "scale", "presentation_frame"]
+    }
+  ]
+}
