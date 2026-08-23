@@ -1,4 +1,5 @@
 # Project
+.worktrees/
 # CLAUDE.md is tracked, not ignored: it is the repo's single agent-guidance file and a
 # fresh clone needs it. tests/test_suite_integrity.py keeps it byte-identical to AGENTS.md.
 .claude/settings.local.json
