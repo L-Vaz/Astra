@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "claims": [
+    {
+      "id": "project_definition",
+      "text": "Astra is a conversational, reviewable BWB design loop from mission intent through geometry, aero, mesh, CFD and verdict.",
+      "source": "README.md#astra",
+      "grade": "C",
+      "use_on_pages": [1, 2]
+    },
+    {
+      "id": "inherited_foundation",
+      "text": "Foam-Agent provides the inherited LangGraph CFD spine, RAG, case generation, execution, review and visualization workflow.",
+      "source": "README.md#foam-agent",
+      "grade": "C",
+      "use_on_pages": [2, 10]
+    },
+    {
+      "id": "astra_extension",
+      "text": "Astra adds the BWB domain pack, cockpit, design sessions, geometry, fast aero, deterministic meshing and result-quality gates.",
+      "source": "README.md#what-astra-adds",
+      "grade": "C",
+      "use_on_pages": [2, 10]
+    },
+    {
+      "id": "scope_boundary",
+      "text": "The present project is aerodynamics-first conceptual design and excludes structural, propulsion, manufacturing and flight validation.",
+      "source": "README.md#scope-and-limits",
+      "grade": "C",
+      "use_on_pages": [2, 10]
+    },
+    {
+      "id": "stage_workflow",
+      "text": "The design loop stages are mission, geometry, fast aero, mesh, CFD and evaluation.",
+      "source": "docs/agent-guidance/bwb-design-loop.md",
+      "grade": "C",
+      "use_on_pages": [3]
+    },
+    {
+      "id": "version_invalidation",
+      "text": "Upstream revisions preserve version history and invalidate downstream results until rerun.",
+      "source": "src/services/design_session.py",
+      "grade": "C",
+      "use_on_pages": [3]
+    },
+    {
+      "id": "result_verdict",
+      "text": "Evaluation combines convergence, plausibility, mission and visualization checks rather than trusting a clean solver exit.",
+      "source": "src/services/evaluate.py",
+      "grade": "C",
+      "use_on_pages": [3, 9]
+    },
+    {
+      "id": "requirement_separation",
+      "text": "Stage 1 distinguishes typed values, values in force and the bound that forced a change.",
+      "source": "docs/decisions/0002-close-the-stage-1-requirement-set.md",
+      "grade": "C",
+      "use_on_pages": [4]
+    },
+    {
+      "id": "golden_mission_inputs",
+      "text": "The golden verification brief records a 2 kg payload at 25 m/s cruise and 100 m altitude.",
+      "source": "reports/verification-2026-07-10/report.md#4-physics-results-golden-design",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [4]
+    },
+    {
+      "id": "golden_sized_geometry",
+      "text": "The recorded golden concept has 0.952 m2 reference area, 2.29 m span and aspect ratio 5.5.",
+      "source": "reports/verification-2026-07-10/report.md#4-physics-results-golden-design",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [4]
+    },
+    {
+      "id": "cockpit_authority",
+      "text": "The cockpit uses an instant browser preview while server-side validation and OpenVSP output remain authoritative.",
+      "source": "src/cockpit/static/cockpit.js",
+      "grade": "C",
+      "use_on_pages": [5]
+    },
+    {
+      "id": "preview_evidence_split",
+      "text": "The cockpit labels instant estimates separately from VSPAERO and CFD evidence.",
+      "source": "src/cockpit/static/index.html",
+      "grade": "C",
+      "use_on_pages": [5]
+    },
+    {
+      "id": "candidate_lifecycle",
+      "text": "Existing candidate designs can be browsed, screened and promoted through an explicit lifecycle.",
+      "source": "src/services/candidates.py",
+      "grade": "C",
+      "use_on_pages": [5]
+    },
+    {
+      "id": "direct_stl_mesh",
+      "text": "The verified meshing path retains the watertight OpenVSP STL triangles as the aircraft boundary.",
+      "source": "reports/verification-2026-07-10/report.md#run-4",
+      "grade": "C",
+      "use_on_pages": [6]
+    },
+    {
+      "id": "deterministic_mesh",
+      "text": "The farfield mesher uses deterministic Delaunay tetrahedralization and rejects zero-cell output.",
+      "source": "domain_packs/bwb/gmsh_farfield.py",
+      "grade": "C",
+      "use_on_pages": [6]
+    },
+    {
+      "id": "patch_classification",
+      "text": "Wall and symmetry patch types are fixed deterministically before case writing.",
+      "source": "src/services/mesh.py",
+      "grade": "C",
+      "use_on_pages": [6]
+    },
+    {
+      "id": "mesh_quality_change",
+      "text": "Netgen optimization reduced average non-orthogonality from 22.6 to 17.9 and maximum skewness from 2.6 to 1.5.",
+      "source": "reports/verification-2026-07-10/report.md#run-8",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [6]
+    },
+    {
+      "id": "pressure_field_observation",
+      "text": "The verification report identifies the surface-pressure distribution and leading-edge suction region in the rendered case.",
+      "source": "reports/verification-2026-07-10/report.md#cfd-results-converged-komegasst-solution--100-iteration-restart",
+      "grade": "C",
+      "use_on_pages": [7]
+    },
+    {
+      "id": "velocity_field_observation",
+      "text": "The verification report identifies stagnation, acceleration over the body and the wake in the symmetry-plane velocity slice.",
+      "source": "reports/verification-2026-07-10/report.md#cfd-results-converged-komegasst-solution--100-iteration-restart",
+      "grade": "C",
+      "use_on_pages": [7]
+    },
+    {
+      "id": "residual_band",
+      "text": "The completed verification case reached residual levels in the 1e-5 to 1e-6 range.",
+      "source": "reports/verification-2026-07-10/report.md#4-physics-results-golden-design",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [8]
+    },
+    {
+      "id": "coarse_lift_gap",
+      "text": "The coarse CFD lift coefficient was 0.065 against a required 0.181.",
+      "source": "reports/verification-2026-07-10/report.md#4-physics-results-golden-design",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [8]
+    },
+    {
+      "id": "near_wall_limit",
+      "text": "The recorded coarse result had near-wall resolution of approximately y+ 900 and was treated as under-resolved.",
+      "source": "reports/verification-2026-07-10/report.md#run-10",
+      "grade": "C",
+      "reproduction": "python verification/verify_golden.py",
+      "use_on_pages": [8]
+    },
+    {
+      "id": "revise_design_verdict",
+      "text": "The evaluator routed the completed case to revise-design rather than reporting a false pass.",
+      "source": "reports/verification-2026-07-10/report.md#run-10",
+      "grade": "C",
+      "use_on_pages": [8]
+    },
+    {
+      "id": "deterministic_fallbacks",
+      "text": "Probabilistic routing and generated configuration are backed by deterministic validation, fallbacks and gates.",
+      "source": "AGENTS.md#must-preserve",
+      "grade": "C",
+      "use_on_pages": [9]
+    },
+    {
+      "id": "mesh_quality_lesson",
+      "text": "A controlled laminar comparison on the same geometry identified the mesh as the divergence source in the documented verification campaign.",
+      "source": "reports/verification-2026-07-10/report.md#run-8",
+      "grade": "C",
+      "use_on_pages": [9]
+    },
+    {
+      "id": "next_mesh_experiment",
+      "text": "A controlled coarse, medium and fine mesh study is the next experiment for reducing the largest aerodynamic uncertainty.",
+      "source": "reports/verification-2026-07-10/report.md#7-open-items",
+      "grade": "D",
+      "sensitivity": "Compare lift, force stability and near-wall resolution across mesh tiers.",
+      "falsified_by": "Refinement does not narrow the model disagreement or improve the near-wall evidence.",
+      "use_on_pages": [9]
+    }
+  ]
+}

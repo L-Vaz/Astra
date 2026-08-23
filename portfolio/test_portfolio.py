@@ -10,6 +10,8 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 PORTFOLIO = ROOT / "portfolio"
 MANIFEST = PORTFOLIO / "source-manifest.json"
+CONTENT = PORTFOLIO / "content.json"
+CLAIMS = PORTFOLIO / "claim-ledger.json"
 
 REQUIRED_SOURCE_IDS = {
     "geometry_iso",
@@ -54,6 +56,47 @@ class PortfolioContractTests(unittest.TestCase):
                 self.assertEqual(entry["viewport"], "1280x720")
                 self.assertTrue(entry["capture_url"].startswith("http://127.0.0.1:8765/"))
                 self.assertTrue(entry["captured_at"].endswith("Z"))
+
+    def test_content_and_claims_are_complete(self) -> None:
+        self.assertTrue(CONTENT.is_file(), "content.json is missing")
+        self.assertTrue(CLAIMS.is_file(), "claim-ledger.json is missing")
+
+        content = json.loads(CONTENT.read_text(encoding="utf-8"))
+        claims = json.loads(CLAIMS.read_text(encoding="utf-8"))["claims"]
+        sources = json.loads(MANIFEST.read_text(encoding="utf-8"))["assets"]
+        claims_by_id = {claim["id"]: claim for claim in claims}
+        sources_by_id = {source["id"]: source for source in sources}
+
+        self.assertEqual(content["author"]["name"], "Lindon Vaz")
+        self.assertEqual(
+            content["author"]["linkedin"],
+            "https://www.linkedin.com/in/lindon-vaz-",
+        )
+        self.assertEqual(content["author"]["github"], "https://github.com/L-Vaz/Astra")
+        self.assertNotIn("email", content["author"])
+        self.assertEqual(len(content["pages"]), 10)
+        self.assertEqual([page["number"] for page in content["pages"]], list(range(1, 11)))
+
+        serialized = json.dumps(content, ensure_ascii=False)
+        for token in ("YOUR NAME", "EMAIL", "LINKEDIN", "PROJECT LINK", "lorem"):
+            self.assertNotIn(token, serialized)
+        for dash in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015"):
+            self.assertNotIn(dash, serialized, "use ASCII hyphens in audience-facing copy")
+
+        for page in content["pages"]:
+            self.assertTrue(page["title"].strip())
+            self.assertTrue(page["message"].strip())
+            self.assertTrue(page["sources"])
+            for claim_id in page.get("claim_ids", []):
+                self.assertIn(claim_id, claims_by_id, f"page {page['number']}: {claim_id}")
+            for asset_id in page.get("asset_ids", []):
+                self.assertIn(asset_id, sources_by_id, f"page {page['number']}: {asset_id}")
+
+        self.assertEqual(len(claims_by_id), len(claims), "claim IDs must be unique")
+        for claim in claims:
+            self.assertIn(claim["grade"], {"A", "B", "C", "D"})
+            self.assertTrue(claim["source"].strip())
+            self.assertTrue(claim["use_on_pages"])
 
 
 if __name__ == "__main__":

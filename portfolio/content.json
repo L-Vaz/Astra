@@ -1,0 +1,187 @@
+{
+  "document_title": "Astra - Mechanical Engineering Portfolio",
+  "author": {
+    "name": "Lindon Vaz",
+    "discipline": "Mechanical Design and CAE",
+    "linkedin": "https://www.linkedin.com/in/lindon-vaz-",
+    "github": "https://github.com/L-Vaz/Astra"
+  },
+  "theme": {
+    "direction": "technical cinematic",
+    "background": "#101923",
+    "analysis_accent": "#54D1E2",
+    "evidence_accent": "#E6B958",
+    "text": "#EFF7F8"
+  },
+  "pages": [
+    {
+      "number": 1,
+      "section": "Mechanical Engineering Portfolio",
+      "title": "ASTRA",
+      "message": "Mission intent -> parametric geometry -> mesh -> CFD evidence.",
+      "subtitle": "A reviewable blended-wing-body drone design workflow built around explicit assumptions, deterministic gates and honest result quality.",
+      "asset_ids": ["geometry_iso"],
+      "claim_ids": ["project_definition"],
+      "sources": ["README.md", "reports/verification-2026-07-10/report.md"]
+    },
+    {
+      "number": 2,
+      "section": "Challenge and Ownership",
+      "title": "A mission brief becomes a reviewable engineering problem",
+      "message": "Astra connects requirements, geometry and simulation without hiding the assumptions between them.",
+      "challenge": "Concept design often fragments the requirement, CAD model and analysis case. Astra keeps those stages linked, versioned and inspectable.",
+      "inherited": [
+        "LangGraph CFD workflow",
+        "Case planning, input writing and execution",
+        "Review and correction loop",
+        "RAG-backed OpenFOAM configuration",
+        "Post-processing and visualization foundation"
+      ],
+      "astra": [
+        "BWB requirement schema and inverse sizing",
+        "Parametric OpenVSP geometry",
+        "Concept candidates and cockpit",
+        "VSPAERO screening and deterministic Gmsh farfield",
+        "Versioned sessions, gates and result-quality verdict"
+      ],
+      "scope_note": "Aerodynamics-first conceptual design. Structures, propulsion, manufacturing and flight validation remain outside the present scope.",
+      "asset_ids": ["geometry_top"],
+      "claim_ids": ["project_definition", "inherited_foundation", "astra_extension", "scope_boundary"],
+      "sources": ["README.md", "src/main.py", "src/mcp/fastmcp_server.py"]
+    },
+    {
+      "number": 3,
+      "section": "Design System",
+      "title": "One traceable loop links intent to evidence",
+      "message": "Every stage creates an artifact, applies a gate and invalidates downstream evidence when the design changes.",
+      "stages": [
+        {"name": "MISSION", "artifact": "Structured requirements", "gate": "Units and assumption disclosure"},
+        {"name": "GEOMETRY", "artifact": "OpenVSP model and STL", "gate": "Ranges, cross-checks and watertightness"},
+        {"name": "FAST AERO", "artifact": "VSPAERO sweep", "gate": "Trim and plausibility"},
+        {"name": "MESH", "artifact": "Gmsh farfield", "gate": "Cells, patches and checkMesh"},
+        {"name": "CFD", "artifact": "OpenFOAM case", "gate": "Execution and monitored histories"},
+        {"name": "VERDICT", "artifact": "Quality report", "gate": "Convergence, plausibility and mission"}
+      ],
+      "version_note": "Upstream revisions preserve history but invalidate downstream results until those stages are rerun.",
+      "asset_ids": [],
+      "claim_ids": ["stage_workflow", "version_invalidation", "result_verdict"],
+      "sources": ["docs/agent-guidance/bwb-design-loop.md", "src/services/design_session.py"]
+    },
+    {
+      "number": 4,
+      "section": "Requirement-Driven Design",
+      "title": "The concept is sized from forces, not styling",
+      "message": "Steady level flight requires lift to balance weight; the requirement solver closes the planform around that physical constraint.",
+      "equation": "L = W;  q = 0.5 rho V^2;  S = W / (q CL)",
+      "metrics": [
+        {"label": "Mission payload", "value": "2 kg [C]", "claim_id": "golden_mission_inputs"},
+        {"label": "Cruise condition", "value": "25 m/s at 100 m [C]", "claim_id": "golden_mission_inputs"},
+        {"label": "Reference area", "value": "0.952 m2 [C]", "claim_id": "golden_sized_geometry"},
+        {"label": "Span / aspect ratio", "value": "2.29 m / 5.5 [C]", "claim_id": "golden_sized_geometry"}
+      ],
+      "decision": "The interface distinguishes the value requested, the value in force and the bound that forced any change. Constraint closure remains visible instead of silently rewriting the brief.",
+      "asset_ids": ["geometry_top"],
+      "claim_ids": ["requirement_separation", "golden_mission_inputs", "golden_sized_geometry"],
+      "sources": ["reports/verification-2026-07-10/report.md#4-physics-results-golden-design", "docs/decisions/0002-close-the-stage-1-requirement-set.md"]
+    },
+    {
+      "number": 5,
+      "section": "Parametric Geometry and Cockpit",
+      "title": "Design variables stay connected to their consequences",
+      "message": "The cockpit exposes geometry, constraints and first-principles explanations while server-side validation remains authoritative.",
+      "callouts": [
+        "Requirement controls show targets, achieved values and active bounds.",
+        "The WebGL planform is an instant preview; Apply rebuilds the authoritative OpenVSP model.",
+        "Existing candidates can be compared without overwriting the accepted geometry.",
+        "Equation estimates remain labelled separately from VSPAERO and CFD evidence."
+      ],
+      "asset_ids": ["cockpit_overview", "cockpit_analysis"],
+      "claim_ids": ["cockpit_authority", "preview_evidence_split", "candidate_lifecycle"],
+      "sources": ["src/cockpit/static/cockpit.js", "src/cockpit/server.py", "docs/agent-guidance/task-maps.md#11-cockpit-ui-requirements-first-explorer"]
+    },
+    {
+      "number": 6,
+      "section": "Mesh Generation",
+      "title": "Deterministic mesh gates protect the solver handoff",
+      "message": "The validated OpenVSP surface is retained as the boundary while the farfield volume and patch types are generated and checked deterministically.",
+      "method": [
+        "Use the watertight STL triangles directly as the aircraft boundary.",
+        "Generate the farfield with deterministic Delaunay tetrahedralization.",
+        "Classify aircraft walls and the symmetry plane before case writing.",
+        "Stop on zero cells, conversion failure or a failed mesh-quality gate."
+      ],
+      "measured_change": "Netgen optimization reduced average non-orthogonality from 22.6 to 17.9 and maximum skewness from 2.6 to 1.5 [C].",
+      "asset_ids": ["mesh_surface", "mesh_slice_y", "mesh_slice_z"],
+      "claim_ids": ["direct_stl_mesh", "deterministic_mesh", "patch_classification", "mesh_quality_change"],
+      "sources": ["reports/verification-2026-07-10/report.md#run-8", "domain_packs/bwb/gmsh_farfield.py", "src/services/bwb_mesh.py"]
+    },
+    {
+      "number": 7,
+      "section": "CFD Evidence",
+      "title": "Flow fields make the result physically inspectable",
+      "message": "Pressure and velocity images are presented as evidence from the named verification case, not as generic simulation decoration.",
+      "pressure_note": "The surface field shows the pressure distribution over the BWB, including the leading-edge suction region [C].",
+      "velocity_note": "The symmetry-plane slice shows stagnation, acceleration over the body and the downstream wake [C].",
+      "asset_ids": ["surface_pressure", "velocity_slice"],
+      "claim_ids": ["pressure_field_observation", "velocity_field_observation"],
+      "sources": ["reports/verification-2026-07-10/report.md#cfd-results-converged-komegasst-solution--100-iteration-restart"]
+    },
+    {
+      "number": 8,
+      "section": "Verification",
+      "title": "A clean solver exit is not the engineering verdict",
+      "message": "Astra combines convergence, force history, plausibility and the mission target before accepting a result.",
+      "observations": [
+        "The completed verification case reached residual levels in the 1e-5 to 1e-6 range [C].",
+        "The coarse CFD lift coefficient was 0.065 against a required 0.181 [C].",
+        "Near-wall resolution was approximately y+ 900 [C], so the lift result was treated as under-resolved.",
+        "The workflow routed the case to revise-design instead of reporting a false success [C]."
+      ],
+      "proves": "The case ran, the monitored solution settled, the fields can be inspected and the quality gate identified a mission-level disagreement.",
+      "does_not_prove": "The coarse result is not a validated final aerodynamic performance prediction and does not close mesh independence.",
+      "asset_ids": ["residual_history", "force_history"],
+      "claim_ids": ["residual_band", "coarse_lift_gap", "near_wall_limit", "revise_design_verdict"],
+      "sources": ["reports/verification-2026-07-10/report.md#4-physics-results-golden-design", "src/services/evaluate.py"]
+    },
+    {
+      "number": 9,
+      "section": "Engineering Outcomes",
+      "title": "The project demonstrates judgement as well as automation",
+      "message": "The strongest outcome is a workflow that exposes uncertainty, records decisions and refuses unsupported certainty.",
+      "capabilities": [
+        "Requirement decomposition and parametric sizing",
+        "CAD-to-mesh workflow integration",
+        "Multi-fidelity aerodynamic analysis",
+        "Verification gates and failure diagnosis",
+        "Technical UI and engineering communication"
+      ],
+      "lessons": [
+        "A successful process exit does not establish valid physics.",
+        "Probabilistic steps need deterministic validators and fallbacks.",
+        "Mesh quality can dominate solver behaviour and result credibility."
+      ],
+      "next_experiment": "Next experiment [D]: run controlled coarse, medium and fine mesh tiers, then compare force stability, lift and near-wall resolution. The hypothesis is falsified if refinement does not narrow the model disagreement or improve the near-wall evidence.",
+      "asset_ids": ["mesh_surface"],
+      "claim_ids": ["result_verdict", "deterministic_fallbacks", "mesh_quality_lesson", "next_mesh_experiment"],
+      "sources": ["reports/verification-2026-07-10/report.md#6-key-lessons-worth-remembering-for-phase-3", "docs/decisions/README.md"]
+    },
+    {
+      "number": 10,
+      "section": "Evidence and Limits",
+      "title": "Astra is a transparent extension, not a black-box claim",
+      "message": "The portfolio separates inherited infrastructure, authored engineering work, measured evidence and unresolved limitations.",
+      "toolchain": ["Python", "OpenVSP", "VSPAERO", "Gmsh", "OpenFOAM v10", "FastAPI", "three.js", "LangGraph"],
+      "limits": [
+        "Aerodynamics-first conceptual design only",
+        "No structural, propulsion or manufacturing validation",
+        "No flight-test evidence",
+        "VLM does not model stall; stall limits are analytic",
+        "The displayed CFD result remains a coarse verification case"
+      ],
+      "attribution": "Astra extends the open-source Foam-Agent CFD foundation. The inherited graph remains the CFD spine; the BWB design loop, cockpit, design-session lifecycle and physical-quality gates are the Astra extension.",
+      "asset_ids": ["geometry_iso"],
+      "claim_ids": ["inherited_foundation", "astra_extension", "scope_boundary"],
+      "sources": ["README.md", "https://github.com/csml-rpi/Foam-Agent", "https://github.com/L-Vaz/Astra"]
+    }
+  ]
+}
