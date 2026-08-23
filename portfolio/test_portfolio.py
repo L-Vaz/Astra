@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+import zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -12,6 +13,7 @@ PORTFOLIO = ROOT / "portfolio"
 MANIFEST = PORTFOLIO / "source-manifest.json"
 CONTENT = PORTFOLIO / "content.json"
 CLAIMS = PORTFOLIO / "claim-ledger.json"
+PPTX = PORTFOLIO / "astra-mechanical-engineering-portfolio.pptx"
 
 REQUIRED_SOURCE_IDS = {
     "geometry_iso",
@@ -97,6 +99,26 @@ class PortfolioContractTests(unittest.TestCase):
             self.assertIn(claim["grade"], {"A", "B", "C", "D"})
             self.assertTrue(claim["source"].strip())
             self.assertTrue(claim["use_on_pages"])
+
+    def test_powerpoint_is_editable_and_complete(self) -> None:
+        self.assertTrue(PPTX.is_file(), "PowerPoint deliverable is missing")
+        with zipfile.ZipFile(PPTX) as archive:
+            names = archive.namelist()
+            self.assertIn("ppt/presentation.xml", names)
+            slides = [
+                name
+                for name in names
+                if name.startswith("ppt/slides/slide")
+                and name.endswith(".xml")
+                and "/_rels/" not in name
+            ]
+            self.assertEqual(len(slides), 10)
+            self.assertTrue(any(name.startswith("ppt/media/") for name in names))
+            slide_text = " ".join(
+                archive.read(name).decode("utf-8", errors="ignore") for name in slides
+            )
+            for expected in ("Lindon Vaz", "ASTRA", "Foam-Agent"):
+                self.assertIn(expected, slide_text)
 
 
 if __name__ == "__main__":

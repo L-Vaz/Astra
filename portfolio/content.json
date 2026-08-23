@@ -20,7 +20,7 @@
       "title": "ASTRA",
       "message": "Mission intent -> parametric geometry -> mesh -> CFD evidence.",
       "subtitle": "A reviewable blended-wing-body drone design workflow built around explicit assumptions, deterministic gates and honest result quality.",
-      "asset_ids": ["geometry_iso"],
+      "asset_ids": ["cockpit_analysis"],
       "claim_ids": ["project_definition"],
       "sources": ["README.md", "reports/verification-2026-07-10/report.md"]
     },
@@ -95,7 +95,7 @@
         "Existing candidates can be compared without overwriting the accepted geometry.",
         "Equation estimates remain labelled separately from VSPAERO and CFD evidence."
       ],
-      "asset_ids": ["cockpit_overview", "cockpit_analysis"],
+      "asset_ids": ["cockpit_overview"],
       "claim_ids": ["cockpit_authority", "preview_evidence_split", "candidate_lifecycle"],
       "sources": ["src/cockpit/static/cockpit.js", "src/cockpit/server.py", "docs/agent-guidance/task-maps.md#11-cockpit-ui-requirements-first-explorer"]
     },
@@ -161,7 +161,7 @@
         "Mesh quality can dominate solver behaviour and result credibility."
       ],
       "next_experiment": "Next experiment [D]: run controlled coarse, medium and fine mesh tiers, then compare force stability, lift and near-wall resolution. The hypothesis is falsified if refinement does not narrow the model disagreement or improve the near-wall evidence.",
-      "asset_ids": ["mesh_surface"],
+      "asset_ids": [],
       "claim_ids": ["result_verdict", "deterministic_fallbacks", "mesh_quality_lesson", "next_mesh_experiment"],
       "sources": ["reports/verification-2026-07-10/report.md#6-key-lessons-worth-remembering-for-phase-3", "docs/decisions/README.md"]
     },
@@ -179,7 +179,7 @@
         "The displayed CFD result remains a coarse verification case"
       ],
       "attribution": "Astra extends the open-source Foam-Agent CFD foundation. The inherited graph remains the CFD spine; the BWB design loop, cockpit, design-session lifecycle and physical-quality gates are the Astra extension.",
-      "asset_ids": ["geometry_iso"],
+      "asset_ids": [],
       "claim_ids": ["inherited_foundation", "astra_extension", "scope_boundary"],
       "sources": ["README.md", "https://github.com/csml-rpi/Foam-Agent", "https://github.com/L-Vaz/Astra"]
     }
