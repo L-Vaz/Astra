@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 from PIL import Image
+from pypdf import PdfReader
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ MANIFEST = PORTFOLIO / "source-manifest.json"
 CONTENT = PORTFOLIO / "content.json"
 CLAIMS = PORTFOLIO / "claim-ledger.json"
 PPTX = PORTFOLIO / "astra-mechanical-engineering-portfolio.pptx"
+PDF = PORTFOLIO / "astra-mechanical-engineering-portfolio.pdf"
 
 REQUIRED_SOURCE_IDS = {
     "geometry_iso",
@@ -114,11 +116,47 @@ class PortfolioContractTests(unittest.TestCase):
             ]
             self.assertEqual(len(slides), 10)
             self.assertTrue(any(name.startswith("ppt/media/") for name in names))
+            notes = [
+                name
+                for name in names
+                if name.startswith("ppt/notesSlides/notesSlide")
+                and name.endswith(".xml")
+                and "/_rels/" not in name
+            ]
+            self.assertEqual(len(notes), 10)
+            for note in notes:
+                self.assertIn("[Sources]", archive.read(note).decode("utf-8", errors="ignore"))
             slide_text = " ".join(
                 archive.read(name).decode("utf-8", errors="ignore") for name in slides
             )
             for expected in ("Lindon Vaz", "ASTRA", "Foam-Agent"):
                 self.assertIn(expected, slide_text)
+
+    def test_pdf_is_application_ready(self) -> None:
+        self.assertTrue(PDF.is_file(), "PDF deliverable is missing")
+        reader = PdfReader(PDF)
+        self.assertEqual(len(reader.pages), 10)
+        for page in reader.pages:
+            self.assertGreater(float(page.mediabox.width), float(page.mediabox.height))
+        extracted = " ".join(page.extract_text() or "" for page in reader.pages)
+        for expected in (
+            "Lindon Vaz",
+            "ASTRA",
+            "Foam-Agent",
+            "linkedin.com/in/lindon-vaz-",
+            "github.com/L-Vaz/Astra",
+        ):
+            self.assertIn(expected, extracted)
+        for placeholder in ("your@email", "example.com", "TODO", "PLACEHOLDER"):
+            self.assertNotIn(placeholder, extracted)
+        link_targets = {
+            annotation.get_object().get("/A", {}).get("/URI")
+            for page in reader.pages
+            for annotation in (page.get("/Annots") or [])
+            if annotation.get_object().get("/Subtype") == "/Link"
+        }
+        self.assertIn("https://www.linkedin.com/in/lindon-vaz-", link_targets)
+        self.assertIn("https://github.com/L-Vaz/Astra", link_targets)
 
 
 if __name__ == "__main__":
